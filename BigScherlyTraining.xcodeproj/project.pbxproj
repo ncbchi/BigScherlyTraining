@@ -6,13 +6,194 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A50F8B81301454C7004ED65A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50F8B80301454C7004ED65A /* SettingsView.swift */; };
+		A52E98F93001CCDE002EFD8C /* Supplements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98F83001CCDE002EFD8C /* Supplements.swift */; };
+		A52E98FB3001CCF3002EFD8C /* SupplementEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */; };
+		A52E98FD3001CCFC002EFD8C /* SupplementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */; };
+		A555A8803007DABA0026B8B9 /* AwardCelebrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */; };
+		A555A8823007DAC10026B8B9 /* PRCelebrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */; };
+		A555A88630082C930026B8B9 /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A88530082C930026B8B9 /* HealthKitManager.swift */; };
+		A585FB8D300865DF008E8BE1 /* WatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A585FB8C300865DF008E8BE1 /* WatchBridge.swift */; };
+		A585FBB030086679008E8BE1 /* BigScherlyWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A585FBCA3008678A008E8BE1 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBC93008678A008E8BE1 /* WidgetKit.framework */; };
+		A585FBCC3008678A008E8BE1 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBCB3008678A008E8BE1 /* SwiftUI.framework */; };
+		A585FBD73008678B008E8BE1 /* BSTComplicationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A5976FB32FF82FC20088A450 /* bell.caf in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB12FF82FC20088A450 /* bell.caf */; };
+		A5976FB42FF82FC20088A450 /* bell.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB22FF82FC20088A450 /* bell.mp3 */; };
+		A5AB68902FF8CE9C004396CD /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68862FF8CE9C004396CD /* LoginView.swift */; };
+		A5AB68912FF8CE9C004396CD /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68852FF8CE9C004396CD /* HistoryView.swift */; };
+		A5AB68922FF8CE9C004396CD /* ShareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB688A2FF8CE9C004396CD /* ShareView.swift */; };
+		A5AB68932FF8CE9C004396CD /* ProgressScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68882FF8CE9C004396CD /* ProgressScreens.swift */; };
+		A5AB68942FF8CE9C004396CD /* MetallicText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB687D2FF8CE9C004396CD /* MetallicText.swift */; };
+		A5AB68952FF8CE9C004396CD /* InlineRestButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB687C2FF8CE9C004396CD /* InlineRestButton.swift */; };
+		A5AB68962FF8CE9C004396CD /* RestTimerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB687F2FF8CE9C004396CD /* RestTimerEngine.swift */; };
+		A5AB68972FF8CE9C004396CD /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB688E2FF8CE9C004396CD /* Theme.swift */; };
+		A5AB68982FF8CE9C004396CD /* NavTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB687E2FF8CE9C004396CD /* NavTray.swift */; };
+		A5AB68992FF8CE9C004396CD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68832FF8CE9C004396CD /* ChatView.swift */; };
+		A5AB689A2FF8CE9C004396CD /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB688B2FF8CE9C004396CD /* SplashView.swift */; };
+		A5AB689B2FF8CE9C004396CD /* MacrosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68872FF8CE9C004396CD /* MacrosView.swift */; };
+		A5AB689C2FF8CE9C004396CD /* WorkoutsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB688C2FF8CE9C004396CD /* WorkoutsView.swift */; };
+		A5AB689D2FF8CE9C004396CD /* ExerciseHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */; };
+		A5AB689E2FF8CE9C004396CD /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68812FF8CE9C004396CD /* Models.swift */; };
+		A5AB689F2FF8CE9C004396CD /* SetPasswordView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68892FF8CE9C004396CD /* SetPasswordView.swift */; };
+		A5AB68A02FF8CE9C004396CD /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68842FF8CE9C004396CD /* DashboardView.swift */; };
+		A5B90C0C300FF81F0081F533 /* TrainerShareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */; };
+		A5B90C0E3010266B0081F533 /* AuthedAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B90C0D3010266B0081F533 /* AuthedAsyncImage.swift */; };
+		A5B90C10301026D20081F533 /* FullScreenPhotoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */; };
+		A5D04AB8300EED4B0051D2DF /* CheckInFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */; };
+		A5D3C0352FFC4A6100F53A37 /* VideoCompressor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */; };
+		FF2000000000000000000000 /* Awards.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000000000000000000000 /* Awards.swift */; };
+		FF2000100000000000000000 /* TrainerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000100000000000000000 /* TrainerModels.swift */; };
+		FF2000300000000000000000 /* AwardEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000300000000000000000 /* AwardEngine.swift */; };
+		FF2000500000000000000000 /* ProgressEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000500000000000000000 /* ProgressEngine.swift */; };
+		FF2000600000000000000000 /* SocialShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000600000000000000000 /* SocialShare.swift */; };
+		FF2000700000000000000000 /* AwardsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000700000000000000000 /* AwardsView.swift */; };
+		FF2000800000000000000000 /* TrainerClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000800000000000000000 /* TrainerClientView.swift */; };
+		FF2000900000000000000000 /* TrainerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000900000000000000000 /* TrainerSections.swift */; };
+		FF2001000000000000000000 /* TrainerShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1001000000000000000000 /* TrainerShell.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A585FB9F30086678008E8BE1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A585FB9130086678008E8BE1;
+			remoteInfo = "BigScherlyWatch Watch App";
+		};
+		A585FBA930086679008E8BE1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A585FB9130086678008E8BE1;
+			remoteInfo = "BigScherlyWatch Watch App";
+		};
+		A585FBAE30086679008E8BE1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A585FB9130086678008E8BE1;
+			remoteInfo = "BigScherlyWatch Watch App";
+		};
+		A585FBD53008678B008E8BE1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A585FBC63008678A008E8BE1;
+			remoteInfo = BSTComplicationExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A585FBB430086679008E8BE1 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolder = Product;
+			files = (
+				A585FBB030086679008E8BE1 /* BigScherlyWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+		};
+		A585FBDC3008678B008E8BE1 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				A585FBD73008678B008E8BE1 /* BSTComplicationExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* BigScherlyTraining.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BigScherlyTraining.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A50F8B80301454C7004ED65A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A52E98F83001CCDE002EFD8C /* Supplements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Supplements.swift; sourceTree = "<group>"; };
+		A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupplementEngine.swift; sourceTree = "<group>"; };
+		A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupplementsView.swift; sourceTree = "<group>"; };
+		A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwardCelebrationView.swift; sourceTree = "<group>"; };
+		A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRCelebrationView.swift; sourceTree = "<group>"; };
+		A555A88530082C930026B8B9 /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
+		A585FB8C300865DF008E8BE1 /* WatchBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchBridge.swift; sourceTree = "<group>"; };
+		A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "BigScherlyWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BSTComplicationExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A585FBC93008678A008E8BE1 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		A585FBCB3008678A008E8BE1 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		A5976FB12FF82FC20088A450 /* bell.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = bell.caf; sourceTree = "<group>"; };
+		A5976FB22FF82FC20088A450 /* bell.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = bell.mp3; sourceTree = "<group>"; };
+		A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseHistoryView.swift; sourceTree = "<group>"; };
+		A5AB687C2FF8CE9C004396CD /* InlineRestButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineRestButton.swift; sourceTree = "<group>"; };
+		A5AB687D2FF8CE9C004396CD /* MetallicText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetallicText.swift; sourceTree = "<group>"; };
+		A5AB687E2FF8CE9C004396CD /* NavTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavTray.swift; sourceTree = "<group>"; };
+		A5AB687F2FF8CE9C004396CD /* RestTimerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestTimerEngine.swift; sourceTree = "<group>"; };
+		A5AB68812FF8CE9C004396CD /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A5AB68832FF8CE9C004396CD /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		A5AB68842FF8CE9C004396CD /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A5AB68852FF8CE9C004396CD /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		A5AB68862FF8CE9C004396CD /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		A5AB68872FF8CE9C004396CD /* MacrosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacrosView.swift; sourceTree = "<group>"; };
+		A5AB68882FF8CE9C004396CD /* ProgressScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressScreens.swift; sourceTree = "<group>"; };
+		A5AB68892FF8CE9C004396CD /* SetPasswordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetPasswordView.swift; sourceTree = "<group>"; };
+		A5AB688A2FF8CE9C004396CD /* ShareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareView.swift; sourceTree = "<group>"; };
+		A5AB688B2FF8CE9C004396CD /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
+		A5AB688C2FF8CE9C004396CD /* WorkoutsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutsView.swift; sourceTree = "<group>"; };
+		A5AB688E2FF8CE9C004396CD /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A5B356D33015759500FD7182 /* BigScherlyWatch Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "BigScherlyWatch Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B356D43015759500FD7182 /* BigScherlyWatch Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "BigScherlyWatch Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerShareView.swift; sourceTree = "<group>"; };
+		A5B90C0D3010266B0081F533 /* AuthedAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthedAsyncImage.swift; sourceTree = "<group>"; };
+		A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullScreenPhotoView.swift; sourceTree = "<group>"; };
+		A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckInFlow.swift; sourceTree = "<group>"; };
+		A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressor.swift; sourceTree = "<group>"; };
+		FF1000000000000000000000 /* Awards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Awards.swift; sourceTree = "<group>"; };
+		FF1000100000000000000000 /* TrainerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerModels.swift; sourceTree = "<group>"; };
+		FF1000300000000000000000 /* AwardEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwardEngine.swift; sourceTree = "<group>"; };
+		FF1000500000000000000000 /* ProgressEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressEngine.swift; sourceTree = "<group>"; };
+		FF1000600000000000000000 /* SocialShare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialShare.swift; sourceTree = "<group>"; };
+		FF1000700000000000000000 /* AwardsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwardsView.swift; sourceTree = "<group>"; };
+		FF1000800000000000000000 /* TrainerClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerClientView.swift; sourceTree = "<group>"; };
+		FF1000900000000000000000 /* TrainerSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerSections.swift; sourceTree = "<group>"; };
+		FF1001000000000000000000 /* TrainerShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerShell.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A50F8B84301458C8004ED65A /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 000000000000000100000000 /* BigScherlyTraining */;
+		};
+		A585FBD83008678B008E8BE1 /* Exceptions for "BSTComplication" folder in "BSTComplicationExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				BSTComplicationExtension,
+				Info.plist,
+			);
+			target = A585FBC63008678A008E8BE1 /* BSTComplicationExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		000000000000000000000010 /* BigScherlyTraining */ = {
+		A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "BigScherlyWatch Watch App";
+			sourceTree = "<group>";
+		};
+		A585FBCD3008678A008E8BE1 /* BSTComplication */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A585FBD83008678B008E8BE1 /* Exceptions for "BSTComplication" folder in "BSTComplicationExtension" target */,
+			);
+			path = BSTComplication;
+			sourceTree = "<group>";
+		};
+		A5976F962FF829630088A450 /* BigScherlyTraining */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A50F8B84301458C8004ED65A /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */,
+			);
 			path = BigScherlyTraining;
 			sourceTree = "<group>";
 		};
@@ -24,14 +205,45 @@
 			files = (
 			);
 		};
+		A585FB8F30086678008E8BE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		A585FB9B30086678008E8BE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		A585FBA530086679008E8BE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		A585FBC43008678A008E8BE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				A585FBCC3008678A008E8BE1 /* SwiftUI.framework in Frameworks */,
+				A585FBCA3008678A008E8BE1 /* WidgetKit.framework in Frameworks */,
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000010 /* BigScherlyTraining */,
+				A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */,
+				A585FBCD3008678A008E8BE1 /* BSTComplication */,
+				A585FBC83008678A008E8BE1 /* Frameworks */,
 				000000000000000000000020 /* Products */,
+				A5976F962FF829630088A450 /* BigScherlyTraining */,
+				A5976FB12FF82FC20088A450 /* bell.caf */,
+				A5976FB22FF82FC20088A450 /* bell.mp3 */,
+				A5AB68802FF8CE9C004396CD /* Components */,
+				A5AB68822FF8CE9C004396CD /* Models */,
+				A5AB688D2FF8CE9C004396CD /* Screens */,
+				A5AB688F2FF8CE9C004396CD /* Theme */,
 			);
 			sourceTree = "<group>";
 		};
@@ -39,8 +251,88 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* BigScherlyTraining.app */,
+				A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */,
+				A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */,
+				A5B356D33015759500FD7182 /* BigScherlyWatch Watch AppTests.xctest */,
+				A5B356D43015759500FD7182 /* BigScherlyWatch Watch AppUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A585FBC83008678A008E8BE1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A585FBC93008678A008E8BE1 /* WidgetKit.framework */,
+				A585FBCB3008678A008E8BE1 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A5AB68802FF8CE9C004396CD /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */,
+				FF1000300000000000000000 /* AwardEngine.swift */,
+				FF1000500000000000000000 /* ProgressEngine.swift */,
+				FF1000600000000000000000 /* SocialShare.swift */,
+				A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */,
+				A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */,
+				A585FB8C300865DF008E8BE1 /* WatchBridge.swift */,
+				A5B90C0D3010266B0081F533 /* AuthedAsyncImage.swift */,
+				A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */,
+				A555A88530082C930026B8B9 /* HealthKitManager.swift */,
+				A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */,
+				A5AB687C2FF8CE9C004396CD /* InlineRestButton.swift */,
+				A5AB687D2FF8CE9C004396CD /* MetallicText.swift */,
+				A5AB687E2FF8CE9C004396CD /* NavTray.swift */,
+				A5AB687F2FF8CE9C004396CD /* RestTimerEngine.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		A5AB68822FF8CE9C004396CD /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				FF1000000000000000000000 /* Awards.swift */,
+				FF1000100000000000000000 /* TrainerModels.swift */,
+				A52E98F83001CCDE002EFD8C /* Supplements.swift */,
+				A5AB68812FF8CE9C004396CD /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A5AB688D2FF8CE9C004396CD /* Screens */ = {
+			isa = PBXGroup;
+			children = (
+				FF1000700000000000000000 /* AwardsView.swift */,
+				A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */,
+				FF1000800000000000000000 /* TrainerClientView.swift */,
+				FF1000900000000000000000 /* TrainerSections.swift */,
+				FF1001000000000000000000 /* TrainerShell.swift */,
+				A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */,
+				A5AB68832FF8CE9C004396CD /* ChatView.swift */,
+				A5AB68842FF8CE9C004396CD /* DashboardView.swift */,
+				A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */,
+				A5AB68852FF8CE9C004396CD /* HistoryView.swift */,
+				A5AB68862FF8CE9C004396CD /* LoginView.swift */,
+				A5AB68872FF8CE9C004396CD /* MacrosView.swift */,
+				A50F8B80301454C7004ED65A /* SettingsView.swift */,
+				A5AB68882FF8CE9C004396CD /* ProgressScreens.swift */,
+				A5AB68892FF8CE9C004396CD /* SetPasswordView.swift */,
+				A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */,
+				A5AB688A2FF8CE9C004396CD /* ShareView.swift */,
+				A5AB688B2FF8CE9C004396CD /* SplashView.swift */,
+				A5AB688C2FF8CE9C004396CD /* WorkoutsView.swift */,
+			);
+			path = Screens;
+			sourceTree = "<group>";
+		};
+		A5AB688F2FF8CE9C004396CD /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				A5AB688E2FF8CE9C004396CD /* Theme.swift */,
+			);
+			path = Theme;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -53,16 +345,96 @@
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
+				A585FBB430086679008E8BE1 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
+			dependencies = (
+				A585FBAF30086679008E8BE1 /* PBXTargetDependency */,
+			);
 			fileSystemSynchronizedGroups = (
-				000000000000000000000010 /* BigScherlyTraining */,
+				A5976F962FF829630088A450 /* BigScherlyTraining */,
 			);
 			name = BigScherlyTraining;
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* BigScherlyTraining.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A585FB9130086678008E8BE1 /* BigScherlyWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A585FBB130086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch App" */;
+			buildPhases = (
+				A585FB8E30086678008E8BE1 /* Sources */,
+				A585FB8F30086678008E8BE1 /* Frameworks */,
+				A585FB9030086678008E8BE1 /* Resources */,
+				A585FBDC3008678B008E8BE1 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A585FBD63008678B008E8BE1 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */,
+			);
+			name = "BigScherlyWatch Watch App";
+			productName = "BigScherlyWatch Watch App";
+			productReference = A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A585FB9D30086678008E8BE1 /* BigScherlyWatch Watch AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A585FBB530086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch AppTests" */;
+			buildPhases = (
+				A585FB9A30086678008E8BE1 /* Sources */,
+				A585FB9B30086678008E8BE1 /* Frameworks */,
+				A585FB9C30086678008E8BE1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A585FBA030086678008E8BE1 /* PBXTargetDependency */,
+			);
+			name = "BigScherlyWatch Watch AppTests";
+			productName = "BigScherlyWatch Watch AppTests";
+			productReference = A5B356D33015759500FD7182 /* BigScherlyWatch Watch AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A585FBA730086679008E8BE1 /* BigScherlyWatch Watch AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A585FBB830086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */;
+			buildPhases = (
+				A585FBA430086679008E8BE1 /* Sources */,
+				A585FBA530086679008E8BE1 /* Frameworks */,
+				A585FBA630086679008E8BE1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A585FBAA30086679008E8BE1 /* PBXTargetDependency */,
+			);
+			name = "BigScherlyWatch Watch AppUITests";
+			productName = "BigScherlyWatch Watch AppUITests";
+			productReference = A5B356D43015759500FD7182 /* BigScherlyWatch Watch AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		A585FBC63008678A008E8BE1 /* BSTComplicationExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A585FBD93008678B008E8BE1 /* Build configuration list for PBXNativeTarget "BSTComplicationExtension" */;
+			buildPhases = (
+				A585FBC33008678A008E8BE1 /* Sources */,
+				A585FBC43008678A008E8BE1 /* Frameworks */,
+				A585FBC53008678A008E8BE1 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				A585FBCD3008678A008E8BE1 /* BSTComplication */,
+			);
+			name = BSTComplicationExtension;
+			productName = BSTComplicationExtension;
+			productReference = A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -71,11 +443,25 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2630;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					A585FB9130086678008E8BE1 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					A585FB9D30086678008E8BE1 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A585FB9130086678008E8BE1;
+					};
+					A585FBA730086679008E8BE1 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A585FB9130086678008E8BE1;
+					};
+					A585FBC63008678A008E8BE1 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -94,12 +480,38 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* BigScherlyTraining */,
+				A585FB9130086678008E8BE1 /* BigScherlyWatch Watch App */,
+				A585FB9D30086678008E8BE1 /* BigScherlyWatch Watch AppTests */,
+				A585FBA730086679008E8BE1 /* BigScherlyWatch Watch AppUITests */,
+				A585FBC63008678A008E8BE1 /* BSTComplicationExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				A5976FB32FF82FC20088A450 /* bell.caf in Resources */,
+				A5976FB42FF82FC20088A450 /* bell.mp3 in Resources */,
+			);
+		};
+		A585FB9030086678008E8BE1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FB9C30086678008E8BE1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FBA630086679008E8BE1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FBC53008678A008E8BE1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -110,9 +522,91 @@
 		000000000000000120000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				FF2000000000000000000000 /* Awards.swift in Sources */,
+				A5B90C0E3010266B0081F533 /* AuthedAsyncImage.swift in Sources */,
+				FF2000100000000000000000 /* TrainerModels.swift in Sources */,
+				FF2000300000000000000000 /* AwardEngine.swift in Sources */,
+				FF2000500000000000000000 /* ProgressEngine.swift in Sources */,
+				FF2000600000000000000000 /* SocialShare.swift in Sources */,
+				FF2000700000000000000000 /* AwardsView.swift in Sources */,
+				FF2000800000000000000000 /* TrainerClientView.swift in Sources */,
+				A585FB8D300865DF008E8BE1 /* WatchBridge.swift in Sources */,
+				FF2000900000000000000000 /* TrainerSections.swift in Sources */,
+				A5D04AB8300EED4B0051D2DF /* CheckInFlow.swift in Sources */,
+				FF2001000000000000000000 /* TrainerShell.swift in Sources */,
+				A5AB68902FF8CE9C004396CD /* LoginView.swift in Sources */,
+				A5AB68912FF8CE9C004396CD /* HistoryView.swift in Sources */,
+				A5AB68922FF8CE9C004396CD /* ShareView.swift in Sources */,
+				A5B90C0C300FF81F0081F533 /* TrainerShareView.swift in Sources */,
+				A5B90C10301026D20081F533 /* FullScreenPhotoView.swift in Sources */,
+				A5AB68932FF8CE9C004396CD /* ProgressScreens.swift in Sources */,
+				A52E98F93001CCDE002EFD8C /* Supplements.swift in Sources */,
+				A5AB68942FF8CE9C004396CD /* MetallicText.swift in Sources */,
+				A52E98FD3001CCFC002EFD8C /* SupplementsView.swift in Sources */,
+				A5AB68952FF8CE9C004396CD /* InlineRestButton.swift in Sources */,
+				A555A88630082C930026B8B9 /* HealthKitManager.swift in Sources */,
+				A5AB68962FF8CE9C004396CD /* RestTimerEngine.swift in Sources */,
+				A5AB68972FF8CE9C004396CD /* Theme.swift in Sources */,
+				A5AB68982FF8CE9C004396CD /* NavTray.swift in Sources */,
+				A5AB68992FF8CE9C004396CD /* ChatView.swift in Sources */,
+				A5AB689A2FF8CE9C004396CD /* SplashView.swift in Sources */,
+				A5AB689B2FF8CE9C004396CD /* MacrosView.swift in Sources */,
+				A50F8B81301454C7004ED65A /* SettingsView.swift in Sources */,
+				A52E98FB3001CCF3002EFD8C /* SupplementEngine.swift in Sources */,
+				A5AB689C2FF8CE9C004396CD /* WorkoutsView.swift in Sources */,
+				A5AB689D2FF8CE9C004396CD /* ExerciseHistoryView.swift in Sources */,
+				A5AB689E2FF8CE9C004396CD /* Models.swift in Sources */,
+				A5D3C0352FFC4A6100F53A37 /* VideoCompressor.swift in Sources */,
+				A5AB689F2FF8CE9C004396CD /* SetPasswordView.swift in Sources */,
+				A5AB68A02FF8CE9C004396CD /* DashboardView.swift in Sources */,
+				A555A8803007DABA0026B8B9 /* AwardCelebrationView.swift in Sources */,
+				A555A8823007DAC10026B8B9 /* PRCelebrationView.swift in Sources */,
+			);
+		};
+		A585FB8E30086678008E8BE1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FB9A30086678008E8BE1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FBA430086679008E8BE1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A585FBC33008678A008E8BE1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
 			);
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A585FBA030086678008E8BE1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A585FB9130086678008E8BE1 /* BigScherlyWatch Watch App */;
+			targetProxy = A585FB9F30086678008E8BE1 /* PBXContainerItemProxy */;
+		};
+		A585FBAA30086679008E8BE1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A585FB9130086678008E8BE1 /* BigScherlyWatch Watch App */;
+			targetProxy = A585FBA930086679008E8BE1 /* PBXContainerItemProxy */;
+		};
+		A585FBAF30086679008E8BE1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A585FB9130086678008E8BE1 /* BigScherlyWatch Watch App */;
+			targetProxy = A585FBAE30086679008E8BE1 /* PBXContainerItemProxy */;
+		};
+		A585FBD63008678B008E8BE1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A585FBC63008678A008E8BE1 /* BSTComplicationExtension */;
+			targetProxy = A585FBD53008678B008E8BE1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "BigScherlyTraining" */ = {
@@ -250,28 +744,41 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "BigScherlyTraining" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = BigScherlyTraining/BigScherlyTraining.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BigScherlyTraining/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Big Scherly Training";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Big Scherly Training reads your heart rate, active energy, and body weight from Apple Health so it can show what your body did during each workout and share that with your coach.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "";
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "";
+				"INFOPLIST_KEY_WKCompanionAppBundleIdentifier[sdk=*]" = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "devplaceholder.$(PROJECT_UNIQUE_VALUE:identifier).$(PRODUCT_NAME:identifier)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -283,34 +790,47 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+				a = "";
 			};
 			name = Debug;
 		};
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "BigScherlyTraining" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = BigScherlyTraining/BigScherlyTraining.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BigScherlyTraining/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Big Scherly Training";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Big Scherly Training reads your heart rate, active energy, and body weight from Apple Health so it can show what your body did during each workout and share that with your coach.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "";
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "devplaceholder.$(PROJECT_UNIQUE_VALUE:identifier).$(PRODUCT_NAME:identifier)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -322,6 +842,243 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+				a = "";
+			};
+			name = Release;
+		};
+		A585FBB230086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch App" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "BigScherlyWatch Watch App/BigScherlyWatch Watch App.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWatch;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		A585FBB330086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch App" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "BigScherlyWatch Watch App/BigScherlyWatch Watch App.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWatch;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		A585FBB630086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch AppTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp.bstcomplication;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BigScherlyWatch Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BigScherlyWatch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		A585FBB730086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch AppTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp.bstcomplication;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BigScherlyWatch Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BigScherlyWatch Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
+		A585FBB930086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nicholasbowen.bigscherlytraining.watchkitapp.BigScherlyWatch-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "BigScherlyWatch Watch App";
+			};
+			name = Debug;
+		};
+		A585FBBA30086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nicholasbowen.bigscherlytraining.watchkitapp.BigScherlyWatch-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "BigScherlyWatch Watch App";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A585FBDA3008678B008E8BE1 /* Debug configuration for PBXNativeTarget "BSTComplicationExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BSTComplication/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BSTComplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp.bstcomplication;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				asdXZC = "";
+			};
+			name = Debug;
+		};
+		A585FBDB3008678B008E8BE1 /* Release configuration for PBXNativeTarget "BSTComplicationExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BSTComplication/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BSTComplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.watchkitapp.bstcomplication;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				asdXZC = "";
 			};
 			name = Release;
 		};
@@ -341,6 +1098,38 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "BigScherlyTraining" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "BigScherlyTraining" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A585FBB130086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A585FBB230086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch App" */,
+				A585FBB330086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch App" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A585FBB530086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A585FBB630086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch AppTests" */,
+				A585FBB730086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch AppTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A585FBB830086679008E8BE1 /* Build configuration list for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A585FBB930086679008E8BE1 /* Debug configuration for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */,
+				A585FBBA30086679008E8BE1 /* Release configuration for PBXNativeTarget "BigScherlyWatch Watch AppUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A585FBD93008678B008E8BE1 /* Build configuration list for PBXNativeTarget "BSTComplicationExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A585FBDA3008678B008E8BE1 /* Debug configuration for PBXNativeTarget "BSTComplicationExtension" */,
+				A585FBDB3008678B008E8BE1 /* Release configuration for PBXNativeTarget "BSTComplicationExtension" */,
 			);
 			defaultConfigurationName = Release;
 		};

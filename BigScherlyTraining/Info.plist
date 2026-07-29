@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>instagram-stories</string>
+		<string>facebook-stories</string>
+		<string>instagram</string>
+		<string>fb</string>
+	</array>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Big Scherly Training reads your heart rate, active energy, and body weight from Apple Health so it can show what your body did during each workout and share that with your coach.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Big Scherly Training does not write data to Apple Health. This permission is requested only because the app links the HealthKit framework to read your workout and heart rate data.</string>
+</dict>
+</plist>
