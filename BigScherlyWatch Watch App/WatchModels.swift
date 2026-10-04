@@ -13,6 +13,7 @@ struct WatchExercise: Codable, Identifiable {
     var name: String
     var restSeconds: Int
     var sets: [WatchSet]
+    var pauseTarget: Double? = nil      // seconds — tap the wrist when the bottom pause reaches it
 }
 struct WatchSet: Codable, Identifiable {
     var id: String

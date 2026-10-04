@@ -1,5 +1,7 @@
 import SwiftUI
 import Combine
+import Charts
+import UIKit
 
 // MARK: - Workout session (in progress)
 // The screen clients spend the most time on. Top to bottom:
@@ -21,18 +23,26 @@ struct WorkoutSessionView: View {
     @State private var editingSetId: String? = nil
     @State private var confirmFinish = false
     @State private var showWatchStarting = false
+    @State private var cardHidden = false          // the live card scrolled away: pin its status bar
 
     private var workout: Workout? { store.workouts.first { $0.id == workoutId } }
-    private var restEnd: Date? { live.restEnd }
-    private var restTotal: Int { live.restTotal }
 
     var body: some View {
         NavigationStack {
             if let w = workout {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        header(w)
-                        if restEnd != nil { restCard(w) }
+                        titleRow(w)
+                        // Phase 3: the live card — status bar over a full metric window.
+                        VStack(spacing: 10) {
+                            LiveCard(workout: w) { editNext(w, proxy) }
+                            LiveSetCard(workout: w) { editNext(w, proxy) }      // next set · rest · lifting · log
+                        }
+                        .id("liveCard")
+                        .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).maxY < 70 } action: { hidden in
+                            withAnimation(.easeOut(duration: 0.2)) { cardHidden = hidden }
+                        }
                         ForEach(Array(w.exercises.enumerated()), id: \.element.id) { i, ex in
                             ExerciseSessionCard(
                                 workoutId: w.id, exercise: ex, index: i, total: w.exercises.count,
@@ -48,6 +58,24 @@ struct WorkoutSessionView: View {
                     .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 30)
                 }
                 .background(Brand.bg.ignoresSafeArea())
+                // Scrolled past the card: its status bar stays pinned. Tap it to scroll back up.
+                .overlay(alignment: .top) {
+                    if cardHidden {
+                        VStack(spacing: 0) {
+                            LiveStatusBar(workout: w)
+                            Rectangle().fill(Brand.line).frame(height: 1)
+                            LiveSetCard(workout: w, compact: true) { editNext(w, proxy) }
+                        }
+                            .background(RoundedRectangle(cornerRadius: 18).fill(Brand.card))
+                            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Brand.line, lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
+                            .padding(.horizontal, 16).padding(.top, 4)
+                            .contentShape(Rectangle())
+                            .onTapGesture { withAnimation(.spring(response: 0.4)) { proxy.scrollTo("liveCard", anchor: .top) } }
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                }
                 .scrollDismissesKeyboard(.interactively)
                 .keyboardDoneButton()
                 .toolbar {
@@ -100,24 +128,20 @@ struct WorkoutSessionView: View {
 
     // MARK: Header
 
-    private func header(_ w: Workout) -> some View {
-        let sets = w.exercises.flatMap { $0.sets }
-        let done = sets.filter { $0.loggedReps != nil }.count
-        let first = sets.compactMap { $0.loggedAt }.min()
-        return VStack(alignment: .leading, spacing: 10) {
-            Text(w.title).font(BrandFont.display(36)).foregroundColor(Brand.text).lineLimit(2).minimumScaleFactor(0.7)
-            HStack {
-                Text("\(done) of \(sets.count) sets").font(BrandFont.body(12, .bold)).foregroundColor(Brand.text)
-                Spacer()
-                if let first {
-                    Text(first, style: .timer).font(BrandFont.body(12, .semibold)).monospacedDigit().foregroundColor(Brand.mute)
-                    Text("elapsed").font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                } else {
-                    Text("Log your first set to start the clock").font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                }
-            }
-            DSProgressBar(fraction: sets.isEmpty ? 0 : Double(done) / Double(sets.count))
-            watchRow
+    private func titleRow(_ w: Workout) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(w.title).font(BrandFont.display(30)).foregroundColor(Brand.text).lineLimit(2).minimumScaleFactor(0.7)
+            if !live.watchConnected { watchRow }
+        }
+    }
+
+    /// The status bar's Edit: open the next set's exercise and scroll to it.
+    private func editNext(_ w: Workout, _ proxy: ScrollViewProxy) {
+        guard let nx = nextSet(w) else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            openExercises.insert(nx.0.id)
+            editingSetId = nx.1.id
+            proxy.scrollTo(nx.0.id, anchor: .top)
         }
     }
 
@@ -139,52 +163,7 @@ struct WorkoutSessionView: View {
         }
     }
 
-    // MARK: Rest
-
-    private func restCard(_ w: Workout) -> some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
-            let remaining = max(0, Int(ceil((restEnd ?? ctx.date).timeIntervalSince(ctx.date))))
-            let frac = restTotal > 0 ? Double(remaining) / Double(restTotal) : 0
-            let next = nextSet(w)
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle().stroke(Brand.text.opacity(0.08), lineWidth: 10)
-                    Circle().trim(from: 0, to: frac)
-                        .stroke(remaining == 0 ? Brand.text : Brand.voltLine, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 0.5), value: frac)
-                    VStack(spacing: 0) {
-                        Text(remaining == 0 ? "GO" : String(format: "%d:%02d", remaining / 60, remaining % 60))
-                            .font(BrandFont.display(30)).foregroundColor(Brand.text).monospacedDigit()
-                        Text("OF \(restTotal / 60):\(String(format: "%02d", restTotal % 60))")
-                            .font(BrandFont.body(9, .bold)).tracking(1).foregroundColor(Brand.mute)
-                    }
-                }
-                .frame(width: 120, height: 120)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(remaining == 0 ? "REST'S OVER" : "RESTING").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
-                    if let nx = next {
-                        Text("Next up").font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                        Text("\(nx.0.name) · Set \(nx.2)").font(BrandFont.body(15, .bold)).foregroundColor(Brand.text).lineLimit(2)
-                        Text("\(nx.1.targetReps) × \(nx.1.targetWeight > 0 ? StatsUnits.weightText(nx.1.targetWeight) : "BW")")
-                            .font(BrandFont.body(14, .bold)).foregroundColor(Brand.voltText)
-                    }
-                    HStack(spacing: 8) {
-                        Button("+30s") { addRest(30) }.buttonStyle(DSButtonStyle(kind: .secondary, fullWidth: false))
-                        Button(remaining == 0 ? "Close" : "Skip") { endRest() }.buttonStyle(DSButtonStyle(kind: .primary, fullWidth: false))
-                    }
-                    .padding(.top, 6)
-                }
-                Spacer(minLength: 0)
-            }
-            .onChange(of: remaining) { _, r in
-                if r == 0 { RestTimerEngine.shared.fireForegroundBell() }
-            }
-        }
-        .card(padding: 16)
-        .transition(.move(edge: .top).combined(with: .opacity))
-    }
+    // MARK: Rest (the live card's status bar shows it now)
 
     private func addRest(_ s: Int) { live.addRest(s) }
 
@@ -664,5 +643,1263 @@ final class WorkoutNoteStore: ObservableObject {
     func reset() {
         notes = [:]
         UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MARK: - Phase 3 · The live card (kept in this file so no project step is needed)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// MARK: - Pause targets (the Watch pause buzz and the Pause metric)
+
+/// The bottom pause an exercise asks for. Your own setting (per exercise) wins; otherwise
+/// it's read from the programme: "2-sec pause", "pause 2 s", "paused (2s)", or tempo "3-2-1-0".
+enum PauseTarget {
+    static let overridesKey = "bst_pause_targets"     // [exercise name: seconds]; 0 = off
+    static let buzzKey = "bst_pause_buzz"
+
+    /// Settings ▸ Apple Watch ▸ Pause buzz (on unless turned off).
+    static var buzzOn: Bool { UserDefaults.standard.object(forKey: buzzKey) as? Bool ?? true }
+
+    static func fromProgram(_ ex: Exercise) -> Double? {
+        let text = [ex.name, ex.description, ex.coachNotes, ex.formInstructions].joined(separator: " ").lowercased()
+        let patterns = [
+            #"(\d+(?:\.\d+)?)\s*-?\s*(?:s|sec|secs|second|seconds|count)\b[^.\n]{0,12}?\bpause"#,
+            #"\bpause[sd]?\b[^.\n\d]{0,15}?(\d+(?:\.\d+)?)\s*-?\s*(?:s|sec|secs|second|seconds|count)\b"#,
+            #"\btempo[:\s]*\(?\s*(?:\d|x)\s*[-–/]\s*(\d+(?:\.\d+)?)\s*[-–/]\s*(?:\d|x)"#,
+        ]
+        for p in patterns {
+            if let v = firstNumber(p, in: text), v > 0, v <= 10 { return v }
+        }
+        return nil
+    }
+
+    private static func firstNumber(_ pattern: String, in text: String) -> Double? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        return Double(text[r])
+    }
+
+    static func override(_ ex: Exercise) -> Double? {
+        (UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: Double])?[ex.name]
+    }
+
+    /// nil = follow the programme; 0 = off; otherwise seconds.
+    static func setOverride(_ seconds: Double?, for ex: Exercise) {
+        var d = (UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: Double]) ?? [:]
+        d[ex.name] = seconds
+        UserDefaults.standard.set(d, forKey: overridesKey)
+    }
+
+    static func target(_ ex: Exercise) -> Double? {
+        if let o = override(ex) { return o > 0 ? o : nil }
+        return fromProgram(ex)
+    }
+
+    /// What the Watch is sent: nothing when the pause buzz is off.
+    static func forWatch(_ ex: Exercise) -> Double? { buzzOn ? target(ex) : nil }
+
+    static func text(_ s: Double) -> String { s == s.rounded() ? "\(Int(s)) s" : String(format: "%.1f s", s) }
+}
+
+// MARK: - The nine metrics
+
+enum LiveMetric: String, CaseIterable, Identifiable {
+    case notes, heartRate, speed, tempo, pause, depth, trend, session, sets
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .notes: return "Coach notes"
+        case .heartRate: return "Heart rate"
+        case .speed: return "Bar speed"
+        case .tempo: return "Tempo"
+        case .pause: return "Pause"
+        case .depth: return "Depth"
+        case .trend: return "Trend"
+        case .session: return "Session"
+        case .sets: return "Sets"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .notes: return "sparkles"
+        case .heartRate: return "heart.fill"
+        case .speed: return "gauge.with.dots.needle.67percent"
+        case .tempo: return "metronome.fill"
+        case .pause: return "pause.fill"
+        case .depth: return "arrow.down.to.line"
+        case .trend: return "chart.line.uptrend.xyaxis"
+        case .session: return "sum"
+        case .sets: return "list.bullet"
+        }
+    }
+}
+
+// MARK: - Coach notes
+
+struct CoachNote: Identifiable {
+    enum Kind: Int { case pr = 0, fix = 1, info = 2, good = 3 }
+    let id = UUID()
+    let kind: Kind
+    let icon: String
+    let title: String
+    let detail: String
+
+    var color: Color {
+        switch kind {
+        case .pr, .good: return Brand.voltLine
+        case .fix: return Color(hex: 0xF2A03D)
+        case .info: return Color(hex: 0x3D9BE0)
+        }
+    }
+}
+
+/// Tips after each set, from what the Watch saw and what you logged. Most useful first.
+enum CoachNotes {
+    static func epley(_ w: Double, _ r: Int) -> Double { r <= 1 ? w : w * (1 + Double(r) / 30) }
+
+    static func speedLoss(_ v: [Double]) -> Double? {
+        guard v.count >= 2, let best = v.prefix(2).max(), best > 0, let last = v.last else { return nil }
+        return max(0, (best - last) / best * 100)
+    }
+
+    static func make(exercise ex: Exercise, set: ExerciseSet, motion: SetMotion?,
+                     pauseTarget: Double?, workouts: [Workout]) -> [CoachNote] {
+        var out: [CoachNote] = []
+        let reps = motion?.reps ?? []
+        let fmt = { (v: Double) in String(format: "%.1f s", v) }
+
+        // A new estimated PR
+        if let r = set.loggedReps, let w = set.loggedWeight, r > 0, w > 0 {
+            let e = epley(w, r)
+            let when = set.loggedAt ?? Date()
+            let prev = workouts.flatMap { $0.exercises }.filter { $0.name == ex.name }.flatMap { $0.sets }
+                .filter { $0.id != set.id && ($0.loggedAt ?? .distantPast) < when }
+                .compactMap { s -> Double? in
+                    guard let r = s.loggedReps, let w = s.loggedWeight, r > 0, w > 0 else { return nil }
+                    return epley(w, r)
+                }
+                .max()
+            if let prev, e > prev + 0.5 {
+                out.append(CoachNote(kind: .pr, icon: "trophy.fill", title: "New estimated PR · \(StatsUnits.weightText(e))",
+                                     detail: "Up \(StatsUnits.weightText(e - prev)) on your best."))
+            }
+        }
+
+        if !reps.isEmpty {
+            // Pause against the target
+            let pauses = reps.compactMap { $0.bottomPauseSec }
+            if let t = pauseTarget, !pauses.isEmpty {
+                let avg = pauses.reduce(0, +) / Double(pauses.count)
+                if avg < t - 0.25 {
+                    let buzz = PauseTarget.buzzOn ? " Your Watch taps you at \(PauseTarget.text(t))." : ""
+                    out.append(CoachNote(kind: .fix, icon: "pause.fill", title: "Pause \(fmt(avg)) — target \(PauseTarget.text(t))",
+                                         detail: "Hold the bottom longer.\(buzz)"))
+                } else if pauses.count >= 3, let f = pauses.first, let l = pauses.last, f - l >= 0.4 {
+                    out.append(CoachNote(kind: .fix, icon: "pause.fill", title: "Your pause got shorter each rep",
+                                         detail: "\(fmt(f)) on rep 1, \(fmt(l)) by the last."))
+                } else {
+                    out.append(CoachNote(kind: .good, icon: "checkmark", title: "Pauses on target",
+                                         detail: "Averaged \(fmt(avg)) against \(PauseTarget.text(t))."))
+                }
+            }
+
+            // Lowering too fast
+            let ecc = reps.compactMap { $0.eccentricSec }
+            if ecc.count >= 2 {
+                let avg = ecc.reduce(0, +) / Double(ecc.count)
+                if avg < 0.9 {
+                    out.append(CoachNote(kind: .fix, icon: "arrow.down", title: "Lowering was fast (\(fmt(avg)))",
+                                         detail: "Control the descent — aim for about 2 s down."))
+                }
+            }
+
+            // A grinding rep
+            if let g = reps.last(where: { $0.isGrind }) {
+                out.append(CoachNote(kind: .fix, icon: "tortoise.fill", title: "Rep \(g.index) was a grind",
+                                     detail: "That's close to your limit for this weight."))
+            }
+
+            // Depth consistency
+            let travel = reps.map { $0.travelM }
+            if travel.count >= 3 {
+                let med = travel.sorted()[travel.count / 2]
+                if let shallow = reps.first(where: { med - $0.travelM >= 0.03 && $0.travelM < med * 0.9 }) {
+                    out.append(CoachNote(kind: .fix, icon: "arrow.down.to.line",
+                                         title: "Rep \(shallow.index) was \(StatsUnits.depthText(med - shallow.travelM)) shallower",
+                                         detail: "Hit the same depth every rep."))
+                } else if (travel.max() ?? 0) - (travel.min() ?? 0) <= 0.02 {
+                    out.append(CoachNote(kind: .good, icon: "checkmark", title: "Depth stayed even",
+                                         detail: "Every rep within \(StatsUnits.depthText(0.02))."))
+                }
+            }
+
+            // Speed loss, and an effort check against the RPE you logged
+            if let loss = speedLoss(reps.map { $0.meanVelocity }) {
+                let next = set.loggedWeight.map { StatsUnits.weightText($0) } ?? "the same weight"
+                if loss >= 30 {
+                    out.append(CoachNote(kind: .info, icon: "gauge.with.dots.needle.33percent", title: "Speed dropped \(Int(loss))%",
+                                         detail: "Close to your limit — keep \(next) next set and take the full rest."))
+                } else if loss >= 15 {
+                    out.append(CoachNote(kind: .info, icon: "gauge.with.dots.needle.50percent", title: "Speed dropped \(Int(loss))%",
+                                         detail: "A solid working set."))
+                } else if reps.count >= 3 {
+                    let small = UserDefaults.standard.string(forKey: "bst_weight_step") == "small"
+                    let step = StatsUnits.isKg ? (small ? "1.25 kg" : "2.5 kg") : (small ? "2.5 lb" : "5 lb")
+                    out.append(CoachNote(kind: .good, icon: "gauge.with.dots.needle.67percent", title: "Speed held (−\(Int(loss))%)",
+                                         detail: "Room to add \(step) next set if it felt easy."))
+                }
+                if let rpe = set.rpe {
+                    if rpe <= 7, loss >= 30 {
+                        out.append(CoachNote(kind: .fix, icon: "exclamationmark.triangle.fill",
+                                             title: "RPE \(rpe.rpeText), but speed dropped like a 9",
+                                             detail: "That set may have been harder than it felt."))
+                    } else if rpe >= 9, loss < 12 {
+                        out.append(CoachNote(kind: .info, icon: "battery.75percent", title: "RPE \(rpe.rpeText), but speed barely dropped",
+                                             detail: "You may have more in the tank."))
+                    }
+                }
+            }
+        }
+        return Array(out.sorted { $0.kind.rawValue < $1.kind.rawValue }.prefix(3))
+    }
+}
+
+// MARK: - Shared lookups
+
+enum LiveCardData {
+    static func nextSet(_ w: Workout) -> (Exercise, ExerciseSet, Int)? {
+        for ex in w.exercises {
+            if let i = ex.sets.firstIndex(where: { $0.loggedReps == nil }) { return (ex, ex.sets[i], i + 1) }
+        }
+        return nil
+    }
+
+    static func lastLogged(_ w: Workout) -> (Exercise, ExerciseSet, Int)? {
+        var best: (Exercise, ExerciseSet, Int, Date)? = nil
+        for ex in w.exercises {
+            for (i, s) in ex.sets.enumerated() where s.loggedReps != nil {
+                let at = s.loggedAt ?? .distantPast
+                if best == nil || at > best!.3 { best = (ex, s, i + 1, at) }
+            }
+        }
+        return best.map { ($0.0, $0.1, $0.2) }
+    }
+
+    static func weightFor(_ ex: Exercise, _ set: ExerciseSet) -> Double {
+        ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? set.targetWeight
+    }
+
+    static func setText(reps: Int, weightLb: Double) -> String {
+        "\(reps) × \(weightLb > 0 ? StatsUnits.weightText(weightLb) : "BW")"
+    }
+}
+
+// MARK: - Status bar (thin: clock, sets, Watch, heart rate)
+
+struct LiveStatusBar: View {
+    let workout: Workout
+    @ObservedObject private var live = LiveSessionController.shared
+
+    var body: some View {
+        let _ = live.revision
+        let all = workout.exercises.flatMap { $0.sets }
+        HStack(spacing: 6) {
+            Circle().fill(live.watchConnected ? Brand.danger : Brand.mute.opacity(0.5)).frame(width: 7, height: 7)
+            Text(live.sessionStart(workout), style: .timer)
+                .font(BrandFont.body(12, .heavy)).monospacedDigit().foregroundColor(Brand.text)
+            Text("· \(all.filter { $0.loggedReps != nil }.count)/\(all.count) sets").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
+            Spacer(minLength: 4)
+            if live.watchConnected {
+                Image(systemName: "applewatch").font(.system(size: 11, weight: .semibold)).foregroundColor(Brand.voltText)
+            }
+            TimelineView(.periodic(from: .now, by: 5)) { _ in
+                if let bpm = live.currentHeartRate {
+                    HStack(spacing: 4) {
+                        Image(systemName: "heart.fill").font(.system(size: 10)).foregroundColor(Brand.danger)
+                        Text("\(bpm)").font(BrandFont.body(12, .heavy)).monospacedDigit().foregroundColor(Brand.text)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - The set card (its own card, under the live card) — the Lock Screen card's button scheme
+
+struct LiveSetCard: View {
+    let workout: Workout
+    var compact = false                 // one slim row, for the bar pinned at the top when you scroll
+    var onEdit: () -> Void = {}
+
+    @ObservedObject private var live = LiveSessionController.shared
+    @ObservedObject private var watch = WatchBridge.shared
+
+    private var tileSize: CGSize { compact ? CGSize(width: 66, height: 44) : CGSize(width: 118, height: 86) }
+
+    var body: some View {
+        let _ = live.revision
+        let next = LiveCardData.nextSet(workout)
+        Group {
+            switch live.stage {
+            case .resting: TimelineView(.periodic(from: .now, by: 0.25)) { ctx in resting(next, now: ctx.date) }
+            case .lifting: if live.setAwaitingLog { logging(next) } else { lifting(next) }
+            case .ready: ready(next)
+            case .done: finished
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, compact ? 9 : 14)
+        .frame(maxWidth: .infinity)
+        .background {
+            if !compact {
+                RoundedRectangle(cornerRadius: 22).fill(Brand.card)
+                    .overlay(RoundedRectangle(cornerRadius: 22).stroke(Brand.line, lineWidth: 1))
+                    .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
+            }
+        }
+    }
+
+    private func setOf(_ n: (Exercise, ExerciseSet, Int)?) -> String {
+        guard let n else { return "" }
+        return "SET \(n.2) OF \(n.0.sets.count)"
+    }
+
+    // MARK: Stages
+
+    private func ready(_ next: (Exercise, ExerciseSet, Int)?) -> some View {
+        row(tile: {
+                Button { live.startSet() } label: {
+                    filledTile(icon: "play.fill", label: compact ? nil : "Start set \(next?.2 ?? 1)")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Start set \(next?.2 ?? 1)")
+            },
+            title: next?.0.name ?? "", kicker: setOf(next), kickerColor: Brand.mute,
+            value: next.map { LiveCardData.setText(reps: $0.1.targetReps, weightLb: $0.1.targetWeight) } ?? "",
+            valueColor: Brand.voltText) {
+            if live.watchConnected {
+                Text("or just lift — your Watch starts it").font(BrandFont.body(10, .semibold)).foregroundColor(Brand.mute)
+            }
+        }
+    }
+
+    private func resting(_ next: (Exercise, ExerciseSet, Int)?, now: Date) -> some View {
+        let end = live.restEnd ?? now
+        let left = max(0, end.timeIntervalSince(now))
+        let remaining = Int(ceil(left))
+        let frac = live.restTotal > 0 ? min(1, left / Double(live.restTotal)) : 0
+        let clock = String(format: "%d:%02d", remaining / 60, remaining % 60)
+        return row(tile: { restTile(frac: frac, clock: clock) },
+                   title: next?.0.name ?? "", kicker: "UP NEXT · " + setOf(next), kickerColor: Brand.mute,
+                   value: next.map { LiveCardData.setText(reps: $0.1.targetReps, weightLb: $0.1.targetWeight) } ?? "",
+                   valueColor: Brand.voltText) {
+            pill("+30s", filled: false) { live.addRest(30) }
+            pill("Skip", filled: true) { withAnimation(.spring(response: 0.4)) { live.endRest() } }
+        }
+        .onChange(of: remaining) { _, r in
+            if r == 0 && !compact { RestTimerEngine.shared.fireForegroundBell() }   // once: the card, not the pinned bar
+        }
+    }
+
+    private func lifting(_ next: (Exercise, ExerciseSet, Int)?) -> some View {
+        let reps = watch.liveReps
+        let target = max(next?.1.targetReps ?? reps.count, 1)
+        let loss = CoachNotes.speedLoss(reps)
+        return row(tile: { liftTile(set: next?.2 ?? 1) },
+                   title: next?.0.name ?? "", kicker: setOf(next) + " · LIFTING", kickerColor: Brand.danger,
+                   value: reps.isEmpty ? "Waiting for rep 1" : "Rep \(reps.count) of \(target)",
+                   valueColor: Brand.text) {
+            if let loss, reps.count >= 2 {
+                Text("Speed −\(Int(loss))%").font(BrandFont.body(11, .heavy))
+                    .foregroundColor(loss >= 20 ? Color(hex: 0xF2A03D) : Brand.text)
+                    .padding(.horizontal, 10).frame(height: 26)
+                    .overlay(Capsule().stroke(Brand.line, lineWidth: 1))
+            }
+        }
+        .animation(.spring(response: 0.4), value: reps.count)
+    }
+
+    private func logging(_ next: (Exercise, ExerciseSet, Int)?) -> some View {
+        let reps = watch.lastDetection?.reps ?? next?.1.targetReps ?? 0
+        let weight = next.map { LiveCardData.weightFor($0.0, $0.1) } ?? 0
+        let v = watch.lastDetection?.meanVelocity ?? 0
+        return row(tile: {
+                Button {
+                    guard let nx = next else { return }
+                    withAnimation(.spring(response: 0.4)) {
+                        _ = live.log(workoutId: workout.id, exerciseId: nx.0.id, setId: nx.1.id, reps: reps, weight: weight, rpe: nil)
+                    }
+                } label: { filledTile(icon: "checkmark", label: compact ? nil : "Log set") }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Log set")
+            },
+            title: next?.0.name ?? "", kicker: "SET \(next?.2 ?? 0) DONE · FROM YOUR WATCH", kickerColor: Brand.mute,
+            value: LiveCardData.setText(reps: reps, weightLb: weight) + (v > 0 ? String(format: " · %.2f m/s", v) : ""),
+            valueColor: Brand.text) {
+            pill("Edit", filled: false) { onEdit() }
+        }
+    }
+
+    private var finished: some View {
+        row(tile: {
+                RoundedRectangle(cornerRadius: 16).fill(Brand.text.opacity(0.05))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.voltLine, lineWidth: 1.5))
+                    .overlay(Image(systemName: "checkmark.seal.fill").font(.system(size: compact ? 18 : 28)).foregroundColor(Brand.voltText))
+            },
+            title: "All sets logged", kicker: "NICE WORK", kickerColor: Brand.mute,
+            value: "Finish below", valueColor: Brand.text) { EmptyView() }
+    }
+
+    // MARK: Building blocks
+
+    /// The Lock Screen card's tile on the left; the words right-aligned on the right.
+    private func row<T: View, A: View>(@ViewBuilder tile: () -> T, title: String, kicker: String, kickerColor: Color,
+                                       value: String, valueColor: Color, @ViewBuilder accessory: () -> A) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            tile().frame(width: tileSize.width, height: tileSize.height)
+            Spacer(minLength: 6)
+            VStack(alignment: .trailing, spacing: compact ? 1 : 3) {
+                Text(title).font(BrandFont.body(compact ? 13 : 16, .heavy)).foregroundColor(Brand.text)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                Text(kicker).font(BrandFont.body(compact ? 8 : 9, .heavy)).tracking(1.1).foregroundColor(kickerColor)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                Text(value).font(.system(size: compact ? 14 : 20, weight: .heavy, design: .rounded))
+                    .foregroundColor(valueColor).lineLimit(1).minimumScaleFactor(0.7)
+                    .contentTransition(.numericText())
+                if !compact {
+                    HStack(spacing: 6) { accessory() }.padding(.top, 5)
+                }
+            }
+            .multilineTextAlignment(.trailing)
+        }
+    }
+
+    /// Filled accent tile: ▶ Start set, ✓ Log set.
+    private func filledTile(icon: String, label: String?) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: compact ? 16 : 24, weight: .heavy))
+            if let label { Text(label).font(.system(size: 13, weight: .heavy)) }
+        }
+        .foregroundColor(Brand.onVolt)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: compact ? 12 : 16).fill(Brand.volt))
+        .contentShape(Rectangle())
+    }
+
+    /// Rest: a dark tile whose thick accent border drains clockwise from the top centre.
+    private func restTile(frac: Double, clock: String) -> some View {
+        let r: CGFloat = compact ? 12 : 16
+        let w: CGFloat = compact ? 4 : 6
+        return ZStack {
+            RoundedRectangle(cornerRadius: r).fill(Brand.text.opacity(0.05))
+            TopCentreRoundedRect(radius: r).stroke(Brand.text.opacity(0.10), lineWidth: w).padding(w / 2)
+            TopCentreRoundedRect(radius: r).trim(from: 1 - frac, to: 1)
+                .stroke(Brand.voltLine, style: StrokeStyle(lineWidth: w, lineCap: .round))
+                .padding(w / 2)
+                .animation(.linear(duration: 0.25), value: frac)
+            VStack(spacing: 0) {
+                if !compact { Text("REST").font(BrandFont.body(8, .heavy)).tracking(1.2).foregroundColor(Brand.mute) }
+                Text(clock).font(.system(size: compact ? 15 : 28, weight: .heavy, design: .rounded))
+                    .monospacedDigit().foregroundColor(Brand.text)
+                    .contentTransition(.numericText())
+            }
+        }
+    }
+
+    /// Lifting: a dark tile with a thin accent border and the set timer.
+    private func liftTile(set: Int) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: compact ? 12 : 16).fill(Brand.text.opacity(0.05))
+            RoundedRectangle(cornerRadius: compact ? 12 : 16).stroke(Brand.voltLine, lineWidth: 1.5)
+            VStack(spacing: 1) {
+                if !compact {
+                    Text("SET \(set) · LIFTING").font(BrandFont.body(7.5, .heavy)).tracking(0.8).foregroundColor(Brand.voltText)
+                }
+                if let since = live.liftingSince {
+                    Text(since, style: .timer).font(.system(size: compact ? 15 : 28, weight: .heavy, design: .rounded))
+                        .monospacedDigit().foregroundColor(Brand.text)
+                }
+            }
+        }
+    }
+
+    private func pill(_ t: String, filled: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(t).font(BrandFont.body(12, .heavy))
+                .foregroundColor(filled ? Brand.onVolt : Brand.text)
+                .padding(.horizontal, 12).frame(height: 28)
+                .background(Capsule().fill(filled ? Brand.volt : Color.clear))
+                .overlay(Capsule().stroke(filled ? Color.clear : Brand.line, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A rounded rectangle whose outline starts and ends at the top centre, going clockwise —
+/// so trimming it drains the border the way the Lock Screen card's rest button does.
+private struct TopCentreRoundedRect: Shape {
+    var radius: CGFloat
+    func path(in r: CGRect) -> Path {
+        let rad = min(radius, r.width / 2, r.height / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: r.midX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - rad, y: r.minY))
+        p.addArc(center: CGPoint(x: r.maxX - rad, y: r.minY + rad), radius: rad, startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - rad))
+        p.addArc(center: CGPoint(x: r.maxX - rad, y: r.maxY - rad), radius: rad, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        p.addLine(to: CGPoint(x: r.minX + rad, y: r.maxY))
+        p.addArc(center: CGPoint(x: r.minX + rad, y: r.maxY - rad), radius: rad, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + rad))
+        p.addArc(center: CGPoint(x: r.minX + rad, y: r.minY + rad), radius: rad, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        p.closeSubpath()
+        return p
+    }
+}
+
+// MARK: - The card
+
+struct LiveCard: View {
+    let workout: Workout
+    var onEdit: () -> Void = {}
+
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var live = LiveSessionController.shared
+    @ObservedObject private var watch = WatchBridge.shared
+    @AppStorage("bst_live_windows") private var windowCount = 1      // 1–4 (the side dots)
+    @AppStorage("bst_live_metrics") private var metricsRaw = "heartRate,speed,tempo,pause"
+    @State private var autoNotes = false     // a set just finished: the top window shows its notes
+
+    /// One full window; two split it in half (same height); three and four add half windows below.
+    static let windowHeight: CGFloat = 284
+    static let maxWindows = 4
+    private static let half: CGFloat = 131
+
+    /// One metric per window, all different (a metric open in one window isn't offered in another).
+    private var metrics: [LiveMetric] {
+        var m: [LiveMetric] = []
+        for raw in metricsRaw.split(separator: ",") {
+            if let x = LiveMetric(rawValue: String(raw)), !m.contains(x) { m.append(x) }
+        }
+        for x in LiveMetric.allCases where m.count < Self.maxWindows && !m.contains(x) { m.append(x) }
+        return Array(m.prefix(Self.maxWindows))
+    }
+    private var windows: Int { min(max(windowCount, 1), Self.maxWindows) }
+    private var lifting: Bool { live.stage == .lifting && !live.setAwaitingLog }
+
+    /// After a set, coach notes take over the top window — unless another window already shows them.
+    private var notesTakeover: Bool { autoNotes && !metrics.prefix(windows).contains(.notes) }
+    private func shown(_ i: Int) -> LiveMetric { i == 0 && notesTakeover ? .notes : metrics[i] }
+
+    /// A window's choices: every metric not open in another window.
+    private func options(_ i: Int) -> [LiveMetric] {
+        let others = Set((0..<windows).filter { $0 != i }.map { shown($0) })
+        return LiveMetric.allCases.filter { !others.contains($0) }
+    }
+
+    private func setMetric(_ i: Int, _ m: LiveMetric) {
+        var all = metrics
+        if let j = all.firstIndex(of: m), j != i { all.swapAt(i, j) } else { all[i] = m }
+        metricsRaw = all.map(\.rawValue).joined(separator: ",")
+        if i == 0 { autoNotes = false }
+    }
+
+    private func step(_ i: Int, _ delta: Int) {
+        let opts = options(i)
+        guard !opts.isEmpty else { return }
+        let at = opts.firstIndex(of: shown(i)) ?? 0
+        setMetric(i, opts[(at + delta + opts.count) % opts.count])
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    var body: some View {
+        let _ = live.revision
+        VStack(spacing: 0) {
+            LiveStatusBar(workout: workout)
+            Rectangle().fill(Brand.line).frame(height: 1)
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 0) {
+                    if windows == 1 {
+                        pane(0, compact: false).frame(height: Self.windowHeight)
+                        dotsRow(0)
+                    } else {
+                        dotsRow(0)
+                        pane(0, compact: true).frame(height: Self.half - 1)
+                        divider
+                        pane(1, compact: true).frame(height: Self.half)
+                        dotsRow(1)
+                        ForEach(2..<windows, id: \.self) { i in
+                            divider
+                            pane(i, compact: true).frame(height: Self.half)
+                            dotsRow(i)
+                        }
+                    }
+                }
+                .padding(.bottom, 6)
+                sideDots
+                    .frame(height: Self.windowHeight + (windows == 1 ? 0 : 22))   // centred on the first window
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 22).fill(Brand.card))
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Brand.line, lineWidth: 1))
+        .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
+        // A set finished (the Watch saw it end, or you logged it): show its coach notes.
+        .onChange(of: LiveCardData.lastLogged(workout)?.1.id) { _, new in if new != nil { autoNotes = true } }
+        .onChange(of: live.setAwaitingLog) { _, waiting in if waiting { autoNotes = true } }
+        // The next set started: back to the metric you picked.
+        .onChange(of: lifting) { _, now in if now { autoNotes = false } }
+    }
+
+    private var divider: some View {
+        Rectangle().fill(Brand.line).frame(height: 1).padding(.horizontal, 14)
+    }
+
+    // MARK: Dots
+
+    /// This window's dots — only the metrics not open in another window.
+    private func dotsRow(_ i: Int) -> some View {
+        let cur = shown(i)
+        return HStack(spacing: 0) {
+            ForEach(options(i)) { m in
+                Button { withAnimation(.easeOut(duration: 0.15)) { setMetric(i, m) } } label: {
+                    Capsule().fill(m == cur ? Brand.voltLine : Brand.mute.opacity(0.45))
+                        .frame(width: m == cur ? 16 : 6, height: 6)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(m.title)
+                .accessibilityAddTraits(m == cur ? .isSelected : [])
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Four dots down the side: how many windows (tap the third for three, and so on).
+    private var sideDots: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<Self.maxWindows, id: \.self) { k in
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { windowCount = k + 1 }
+                    UISelectionFeedbackGenerator().selectionChanged()
+                } label: {
+                    Group {
+                        if k < windows { Capsule().fill(Brand.voltLine).frame(width: 6, height: 12) }
+                        else { Circle().fill(Brand.mute.opacity(0.45)).frame(width: 6, height: 6) }
+                    }
+                    .frame(width: 26, height: 19)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(k == 0 ? "One window" : "\(k + 1) windows")
+                .accessibilityAddTraits(k + 1 == windows ? .isSelected : [])
+            }
+        }
+    }
+
+    // MARK: A window (swipe left or right to change its metric)
+
+    private func pane(_ i: Int, compact: Bool) -> some View {
+        metricView(shown(i), compact: compact)
+            .padding(.leading, 14).padding(.trailing, 30).padding(.vertical, compact ? 6 : 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+            .contentShape(Rectangle())
+            .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { v in     // the page still scrolls
+                guard abs(v.translation.width) > 40, abs(v.translation.width) > abs(v.translation.height) else { return }
+                withAnimation(.easeOut(duration: 0.15)) { step(i, v.translation.width < 0 ? 1 : -1) }
+            })
+    }
+
+    @ViewBuilder private func metricView(_ m: LiveMetric, compact: Bool) -> some View {
+        let ctx = context
+        switch m {
+        case .notes: NotesMetric(ctx: ctx, compact: compact)
+        case .heartRate:
+            TimelineView(.periodic(from: .now, by: 5)) { _ in       // keeps moving between Watch readings
+                HeartMetric(samples: live.heartSamples, now: live.currentHeartRate, maxHR: live.heartMax, compact: compact)
+            }
+        case .speed: SpeedMetric(ctx: ctx, compact: compact)
+        case .tempo: TempoMetric(ctx: ctx, compact: compact)
+        case .pause: PauseMetric(ctx: ctx, compact: compact)
+        case .depth: DepthMetric(ctx: ctx, compact: compact)
+        case .trend: TrendMetric(ctx: ctx, workouts: store.workouts, compact: compact)
+        case .session: SessionMetric(workout: workout, samples: live.heartSamples, start: live.sessionStart(workout), compact: compact)
+        case .sets: SetsMetric(ctx: ctx, workout: workout, compact: compact)
+        }
+    }
+
+    /// Before your first set of an exercise here: your last session's last set of it.
+    private func lastTime(_ ex: Exercise) -> (Workout, Exercise, ExerciseSet, Int)? {
+        for pw in store.workouts.filter({ $0.id != workout.id && $0.date <= workout.date }).sorted(by: { $0.date > $1.date }) {
+            if let pex = pw.exercises.first(where: { $0.name == ex.name }),
+               let i = pex.sets.lastIndex(where: { $0.loggedReps != nil }) {
+                return (pw, pex, pex.sets[i], i)
+            }
+        }
+        return nil
+    }
+
+    /// What the metrics describe: the set in progress (live), the set you just did, or —
+    /// before you've done one of this exercise today — your last session's set.
+    private var context: LiveMetricContext {
+        let last = live.lastSetMotion(workout)
+        let logged = LiveCardData.lastLogged(workout)
+        let next = LiveCardData.nextSet(workout)
+        let exercise: Exercise? = (lifting || logged == nil) ? (next?.0 ?? logged?.0) : logged?.0
+        var motion = (last != nil && last?.0.id == exercise?.id) ? last?.3 : nil
+        var lastTimeDate: Date? = nil
+        var notes: [CoachNote] = []
+        var notesMotion: SetMotion? = nil
+        var notesLabel = ""
+        if let l = logged {
+            notesMotion = (last?.1.id == l.1.id) ? last?.3 : nil
+            notes = CoachNotes.make(exercise: l.0, set: l.1, motion: notesMotion, pauseTarget: PauseTarget.target(l.0), workouts: store.workouts)
+            notesLabel = "\(l.0.name) · Set \(l.2)"
+        }
+        if motion == nil || logged == nil, let ex = exercise, let prev = lastTime(ex) {
+            let pm = live.setMotion(prev.0, prev.1, prev.2, index: prev.3)
+            if motion == nil, let pm { motion = pm; lastTimeDate = prev.0.date }
+            if logged == nil {
+                notesMotion = pm
+                notes = CoachNotes.make(exercise: prev.1, set: prev.2, motion: pm, pauseTarget: PauseTarget.target(prev.1), workouts: store.workouts)
+                notesLabel = "Last time · " + prev.0.date.formatted(.dateTime.month(.abbreviated).day())
+            }
+        }
+        return LiveMetricContext(exercise: exercise, motion: motion,
+                                 liveReps: lifting ? watch.liveRepMotions : nil,
+                                 lastTime: lastTimeDate, notes: notes, notesMotion: notesMotion, notesLabel: notesLabel)
+    }
+}
+
+struct LiveMetricContext {
+    let exercise: Exercise?            // the exercise the metrics are about
+    let motion: SetMotion?             // its most recent set with Watch data (or last session's)
+    let liveReps: [RepMotion]?         // the set in progress, rep by rep (nil when not lifting)
+    let lastTime: Date?                // set when `motion` is from a previous session
+    let notes: [CoachNote]
+    let notesMotion: SetMotion?
+    let notesLabel: String
+
+    var isLive: Bool { liveReps != nil }
+    /// The reps the charts show: live ones while lifting, otherwise the latest set's.
+    var reps: [RepMotion] { liveReps ?? motion?.reps ?? [] }
+    /// "LIVE", "LAST TIME · SEP 29", or the exercise.
+    var badge: String {
+        if isLive { return "LIVE" }
+        if let d = lastTime { return "LAST TIME · " + d.formatted(.dateTime.month(.abbreviated).day()).uppercased() }
+        return exercise?.name ?? ""
+    }
+}
+
+// MARK: - Metric building blocks
+
+private struct MetricHeader: View {
+    let metric: LiveMetric
+    var right: String = ""
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: metric.icon).font(.system(size: 11, weight: .bold)).foregroundColor(Brand.voltText)
+            Text(metric.title.uppercased()).font(BrandFont.body(10, .heavy)).tracking(1.3).foregroundColor(Brand.mute)
+            Spacer(minLength: 4)
+            if !right.isEmpty {
+                Text(right).font(BrandFont.body(10, .bold)).foregroundColor(Brand.mute).lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct EmptyMetric: View {
+    let metric: LiveMetric
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MetricHeader(metric: metric)
+            Spacer(minLength: 0)
+            Text(text).font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private let axisFont = Font.system(size: 9, weight: .semibold)
+private let orange = Color(hex: 0xF2A03D)
+private let blue = Color(hex: 0x3D9BE0)
+
+private extension View {
+    /// Axes on every chart: labelled values on both, light grid lines.
+    func liveAxes(x: String, y: String) -> some View {
+        self
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                    AxisGridLine().foregroundStyle(Brand.line)
+                    AxisValueLabel().font(axisFont).foregroundStyle(Brand.mute)
+                }
+            }
+            .chartXAxisLabel(position: .bottom, alignment: .trailing) {
+                Text(x).font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute)
+            }
+            .chartYAxisLabel(position: .leading, alignment: .top) {
+                Text(y).font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute)
+            }
+    }
+
+    /// A rep-number x axis (1, 2, 3…).
+    func repAxis() -> some View {
+        self.chartXAxis {
+            AxisMarks { _ in
+                AxisTick().foregroundStyle(Brand.line)
+                AxisValueLabel().font(axisFont).foregroundStyle(Brand.mute)
+            }
+        }
+    }
+}
+
+// MARK: Heart rate
+
+private struct HeartMetric: View {
+    let samples: [(Date, Int)]
+    let now: Int?
+    let maxHR: Int
+    let compact: Bool
+
+    private struct Pt: Identifiable { let id: Double; let x: Double; let bpm: Int }
+
+    var body: some View {
+        let cutoff = Date().addingTimeInterval(-600)
+        let pts = samples.filter { $0.0 >= cutoff }.map { s -> Pt in
+            let x = s.0.timeIntervalSinceNow / 60
+            return Pt(id: x, x: x, bpm: s.1)
+        }
+        let peak = samples.map { $0.1 }.max() ?? now ?? 0
+        if now == nil && pts.isEmpty {
+            EmptyMetric(metric: .heartRate, text: "Start the workout on your Watch to see your heart rate here.")
+        } else {
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                MetricHeader(metric: .heartRate, right: peak > 0 ? "PEAK \(peak)" : "")
+                if !compact, let bpm = now {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("\(bpm)").font(BrandFont.display(44)).foregroundColor(Brand.text).monospacedDigit()
+                        Text("bpm").font(BrandFont.body(12, .bold)).foregroundColor(Brand.mute)
+                        Spacer()
+                        Text(zoneText(bpm)).font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
+                    }
+                }
+                let floor = max(40, (pts.map { $0.bpm }.min() ?? 60) - 10)
+                Chart(pts) { p in
+                    AreaMark(x: .value("Minutes", p.x), yStart: .value("Floor", floor), yEnd: .value("bpm", p.bpm))
+                        .foregroundStyle(LinearGradient(colors: [Brand.danger.opacity(0.28), Brand.danger.opacity(0.02)],
+                                                        startPoint: .top, endPoint: .bottom))
+                        .interpolationMethod(.monotone)
+                    LineMark(x: .value("Minutes", p.x), y: .value("bpm", p.bpm))
+                        .foregroundStyle(Brand.danger).lineStyle(StrokeStyle(lineWidth: 2))
+                        .interpolationMethod(.monotone)
+                }
+                .chartXScale(domain: -10.0...0.0)
+                .chartYScale(domain: floor...max(100, peak + 8))
+                .animation(.easeInOut(duration: 0.6), value: pts.last?.bpm)
+                .chartXAxis {
+                    AxisMarks(values: [-10.0, -8.0, -6.0, -4.0, -2.0, 0.0]) { v in
+                        AxisTick().foregroundStyle(Brand.line)
+                        AxisValueLabel {
+                            if let m = v.as(Double.self) { Text(m == 0 ? "now" : "\(Int(m))m").font(axisFont).foregroundColor(Brand.mute) }
+                        }
+                    }
+                }
+                .liveAxes(x: "minutes", y: "bpm")
+            }
+        }
+    }
+
+    private func zoneText(_ bpm: Int) -> String {
+        let pct = Double(bpm) / Double(max(maxHR, 1)) * 100
+        let zone = pct >= 90 ? 5 : pct >= 80 ? 4 : pct >= 70 ? 3 : pct >= 60 ? 2 : 1
+        return "Zone \(zone) · \(Int(pct))% of max"
+    }
+}
+
+// MARK: Bar speed (live while lifting)
+
+private struct SpeedMetric: View {
+    let ctx: LiveMetricContext
+    let compact: Bool
+
+    private struct Bar: Identifiable { let id: Int; let rep: String; let v: Double; let slow: Bool }
+
+    var body: some View {
+        let vals = ctx.reps.map { $0.meanVelocity }
+        let target = max(vals.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? vals.count, 1)
+        let best = vals.prefix(2).max() ?? 0
+        let bars = vals.enumerated().map { Bar(id: $0.offset, rep: "\($0.offset + 1)", v: $0.element, slow: best > 0 && $0.element < best * 0.8) }
+        if vals.isEmpty && !ctx.isLive {
+            EmptyMetric(metric: .speed, text: "Lift with your Watch on and each rep's bar speed fills in here as you go.")
+        } else {
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                MetricHeader(metric: .speed, right: ctx.badge)
+                if !compact {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(vals.last.map { String(format: "%.2f", $0) } ?? "—").font(BrandFont.display(40)).foregroundColor(Brand.text)
+                            .monospacedDigit().contentTransition(.numericText())
+                        Text(ctx.isLive ? (vals.isEmpty ? "m/s · waiting for rep 1" : "m/s · this rep") : "m/s · last rep")
+                            .font(BrandFont.body(11, .bold)).foregroundColor(Brand.mute)
+                        Spacer()
+                        if let loss = CoachNotes.speedLoss(vals) {
+                            Text("Loss \(Int(loss))%").font(BrandFont.body(11, .heavy)).foregroundColor(loss >= 20 ? orange : Brand.mute)
+                        }
+                    }
+                }
+                Chart(bars) { b in
+                    BarMark(x: .value("Rep", b.rep), y: .value("m/s", b.v), width: .ratio(0.6))
+                        .foregroundStyle(b.slow ? orange : Brand.voltLine)
+                        .cornerRadius(4)
+                        .annotation(position: .top, spacing: 2) {
+                            if !compact { Text(String(format: "%.2f", b.v)).font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute) }
+                        }
+                }
+                .chartXScale(domain: (1...target).map { "\($0)" })
+                .chartYScale(domain: 0...max(0.6, (vals.max() ?? 0.5) * 1.2))
+                .repAxis()
+                .liveAxes(x: "rep", y: "m/s")
+                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: vals)
+            }
+        }
+    }
+}
+
+// MARK: Tempo (lower · pause · lift)
+
+private struct TempoMetric: View {
+    let ctx: LiveMetricContext
+    let compact: Bool
+
+    private struct Seg: Identifiable { let id: String; let rep: String; let phase: String; let sec: Double }
+
+    var body: some View {
+        let reps = ctx.reps
+        let segs = reps.flatMap { r -> [Seg] in
+            [Seg(id: "\(r.index)l", rep: "\(r.index)", phase: "Lower", sec: r.eccentricSec ?? 0),
+             Seg(id: "\(r.index)p", rep: "\(r.index)", phase: "Pause", sec: r.bottomPauseSec ?? 0),
+             Seg(id: "\(r.index)u", rep: "\(r.index)", phase: "Lift", sec: r.concentricSec)]
+        }
+        if reps.isEmpty && !ctx.isLive {
+            EmptyMetric(metric: .tempo, text: "With your Watch on: how long each rep spends lowering, paused and lifting.")
+        } else {
+            let avg = { (f: (RepMotion) -> Double?) -> String in
+                let v = reps.compactMap(f); return v.isEmpty ? "—" : String(format: "%.1f", v.reduce(0, +) / Double(v.count))
+            }
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                MetricHeader(metric: .tempo, right: ctx.isLive || ctx.lastTime != nil ? ctx.badge
+                             : "lower \(avg { $0.eccentricSec }) · pause \(avg { $0.bottomPauseSec }) · lift \(avg { $0.concentricSec }) s")
+                Chart(segs) { s in
+                    BarMark(x: .value("Rep", s.rep), y: .value("Seconds", s.sec), width: .ratio(0.6))
+                        .foregroundStyle(by: .value("Phase", s.phase))
+                }
+                .chartForegroundStyleScale(["Lower": blue, "Pause": Brand.text.opacity(0.65), "Lift": Brand.voltLine])
+                .chartLegend(compact ? .hidden : .visible)
+                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                .repAxis()
+                .liveAxes(x: "rep", y: "sec")
+                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
+            }
+        }
+    }
+}
+
+// MARK: Pause (against the target)
+
+private struct PauseMetric: View {
+    let ctx: LiveMetricContext
+    let compact: Bool
+    @EnvironmentObject var store: AppStore
+    @State private var refresh = 0
+
+    private struct Pt: Identifiable { let id: Int; let rep: String; let sec: Double }
+
+    var body: some View {
+        let _ = refresh
+        let reps = ctx.reps
+        let pts = reps.map { Pt(id: $0.index, rep: "\($0.index)", sec: $0.bottomPauseSec ?? 0) }
+        let target = ctx.exercise.flatMap { PauseTarget.target($0) }
+        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+            HStack {
+                MetricHeader(metric: .pause, right: ctx.isLive || ctx.lastTime != nil ? ctx.badge : "")
+                if let ex = ctx.exercise { targetMenu(ex, target) }
+            }
+            if reps.isEmpty && !ctx.isLive {
+                Spacer(minLength: 0)
+                Text("After a set with your Watch on: each rep's pause at the bottom, against your target.")
+                    .font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            } else {
+                Chart {
+                    ForEach(pts) { p in
+                        LineMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
+                            .foregroundStyle(orange).lineStyle(StrokeStyle(lineWidth: 1.5))
+                        PointMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
+                            .foregroundStyle(target.map { p.sec >= $0 - 0.25 } ?? true ? Brand.voltLine : orange)
+                            .symbolSize(compact ? 40 : 70)
+                    }
+                    if let t = target {
+                        RuleMark(y: .value("Target", t))
+                            .foregroundStyle(Brand.mute)
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                            .annotation(position: .top, alignment: .trailing) {
+                                Text("target \(PauseTarget.text(t))").font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute)
+                            }
+                    }
+                }
+                .chartYScale(domain: 0...max(target ?? 0, pts.map { $0.sec }.max() ?? 1, 1) * 1.3)
+                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                .repAxis()
+                .liveAxes(x: "rep", y: "sec")
+                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
+            }
+        }
+    }
+
+    /// Set the target for this exercise (sent to the Watch for the pause buzz).
+    private func targetMenu(_ ex: Exercise, _ target: Double?) -> some View {
+        Menu {
+            let program = PauseTarget.fromProgram(ex)
+            Button("From the programme" + (program.map { " (\(PauseTarget.text($0)))" } ?? " (none)")) { set(nil, ex) }
+            Button("Off") { set(0, ex) }
+            ForEach([1.0, 1.5, 2.0, 3.0], id: \.self) { s in Button(PauseTarget.text(s)) { set(s, ex) } }
+        } label: {
+            HStack(spacing: 3) {
+                Text(target.map { "Target \(PauseTarget.text($0))" } ?? "No target").font(BrandFont.body(10, .heavy))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundColor(Brand.voltText)
+        }
+    }
+
+    private func set(_ s: Double?, _ ex: Exercise) {
+        PauseTarget.setOverride(s, for: ex)
+        refresh += 1
+        store.sendActiveWorkoutToWatch()          // the Watch buzzes at the new target
+    }
+}
+
+// MARK: Depth
+
+private struct DepthMetric: View {
+    let ctx: LiveMetricContext
+    let compact: Bool
+
+    private struct Bar: Identifiable { let id: Int; let rep: String; let d: Double; let shallow: Bool }
+
+    var body: some View {
+        let reps = ctx.reps
+        let depths = reps.map { StatsUnits.depth($0.travelM) }
+        let med = depths.sorted().dropFirst(depths.count / 2).first ?? 0
+        let bars = reps.enumerated().map { i, r in
+            Bar(id: r.index, rep: "\(r.index)", d: depths[i], shallow: StatsUnits.depth(0.03) <= med - depths[i])
+        }
+        if reps.isEmpty && !ctx.isLive {
+            EmptyMetric(metric: .depth, text: "With your Watch on: how far the bar travels on each rep.")
+        } else {
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                MetricHeader(metric: .depth, right: ctx.isLive || ctx.lastTime != nil ? ctx.badge
+                             : "typical \(String(format: "%.1f", med)) \(StatsUnits.depthLabel)")
+                Chart {
+                    ForEach(bars) { b in
+                        BarMark(x: .value("Rep", b.rep), y: .value("Depth", b.d), width: .ratio(0.6))
+                            .foregroundStyle(b.shallow ? orange : blue).cornerRadius(4)
+                    }
+                    RuleMark(y: .value("Typical", med))
+                        .foregroundStyle(Brand.mute).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                }
+                .chartYScale(domain: 0...max(1, (depths.max() ?? 1) * 1.2))
+                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                .repAxis()
+                .liveAxes(x: "rep", y: StatsUnits.depthLabel)
+                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
+            }
+        }
+    }
+}
+
+// MARK: Trend (this lift's estimated 1RM)
+
+private struct TrendMetric: View {
+    let ctx: LiveMetricContext
+    let workouts: [Workout]
+    let compact: Bool
+
+    private struct Pt: Identifiable { let id: String; let date: Date; let e1rm: Double }
+
+    var body: some View {
+        let name = ctx.exercise?.name ?? ""
+        let pts: [Pt] = workouts.compactMap { w -> Pt? in
+            let best = w.exercises.filter { $0.name == name }.flatMap { $0.sets }.compactMap { s -> Double? in
+                guard let r = s.loggedReps, let wt = s.loggedWeight, r > 0, wt > 0 else { return nil }
+                return CoachNotes.epley(wt, r)
+            }.max()
+            return best.map { Pt(id: w.id, date: w.date, e1rm: StatsUnits.weight($0)) }
+        }
+        .sorted { $0.date < $1.date }
+        .suffix(10)
+        .map { $0 }
+        if pts.count < 2 {
+            EmptyMetric(metric: .trend, text: name.isEmpty ? "Your strength trend for each lift appears here."
+                        : "Log \(name) in a couple of workouts to see its trend.")
+        } else {
+            let best = pts.map { $0.e1rm }.max() ?? 0
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                MetricHeader(metric: .trend, right: "\(name) · est. 1RM")
+                if !compact, let last = pts.last {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("\(Int(last.e1rm.rounded()))").font(BrandFont.display(40)).foregroundColor(Brand.text)
+                        Text(StatsUnits.weightLabel).font(BrandFont.body(12, .bold)).foregroundColor(Brand.mute)
+                        Spacer()
+                        Text("best \(Int(best.rounded()))").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
+                    }
+                }
+                Chart(pts) { p in
+                    LineMark(x: .value("Date", p.date), y: .value("Est. 1RM", p.e1rm))
+                        .foregroundStyle(Brand.voltLine).lineStyle(StrokeStyle(lineWidth: 2))
+                    PointMark(x: .value("Date", p.date), y: .value("Est. 1RM", p.e1rm))
+                        .foregroundStyle(Brand.voltLine).symbolSize(compact ? 18 : 30)
+                }
+                .chartYScale(domain: ((pts.map { $0.e1rm }.min() ?? 0) * 0.95)...(best * 1.03))
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisTick().foregroundStyle(Brand.line)
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day()).font(axisFont).foregroundStyle(Brand.mute)
+                    }
+                }
+                .liveAxes(x: "date", y: StatsUnits.weightLabel)
+            }
+        }
+    }
+}
+
+// MARK: Session totals
+
+private struct SessionMetric: View {
+    let workout: Workout
+    let samples: [(Date, Int)]
+    let start: Date
+    let compact: Bool
+
+    var body: some View {
+        let sets = workout.exercises.flatMap { $0.sets }
+        let done = sets.filter { $0.loggedReps != nil }
+        let volume = done.reduce(0.0) { $0 + Double($1.loggedReps ?? 0) * ($1.loggedWeight ?? 0) }
+        let bpms = samples.filter { $0.0 >= start }.map { $0.1 }
+        let exDone = workout.exercises.filter { ex in !ex.sets.isEmpty && ex.sets.allSatisfy { $0.loggedReps != nil } }.count
+        VStack(alignment: .leading, spacing: compact ? 6 : 12) {
+            MetricHeader(metric: .session)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .leading), count: 3),
+                      alignment: .leading, spacing: compact ? 6 : 14) {
+                tile(StatsUnits.weightText(volume, unit: false), "VOLUME \(StatsUnits.weightLabel.uppercased())")
+                tile("\(done.count)/\(sets.count)", "SETS")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(start, style: .timer).font(BrandFont.body(compact ? 15 : 22, .heavy)).monospacedDigit().foregroundColor(Brand.text)
+                    Text("TIME").font(BrandFont.body(8.5, .heavy)).tracking(0.8).foregroundColor(Brand.mute)
+                }
+                tile(bpms.isEmpty ? "—" : "\(bpms.reduce(0, +) / bpms.count)", "AVG BPM")
+                tile(bpms.max().map { "\($0)" } ?? "—", "PEAK BPM")
+                tile("\(exDone)/\(workout.exercises.count)", "EXERCISES")
+            }
+        }
+    }
+
+    private func tile(_ v: String, _ l: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(v).font(BrandFont.body(compact ? 15 : 22, .heavy)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.7)
+            Text(l).font(BrandFont.body(8.5, .heavy)).tracking(0.8).foregroundColor(Brand.mute)
+        }
+    }
+}
+
+// MARK: Sets (this exercise)
+
+private struct SetsMetric: View {
+    let ctx: LiveMetricContext
+    let workout: Workout
+    let compact: Bool
+
+    var body: some View {
+        if let ex = ctx.exercise {
+            VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+                MetricHeader(metric: .sets, right: ex.name)
+                HStack {
+                    Text("SET").frame(width: 30, alignment: .leading)
+                    Text("REPS × WEIGHT").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("M/S").frame(width: 40, alignment: .trailing)
+                    Text("RPE").frame(width: 34, alignment: .trailing)
+                }
+                .font(BrandFont.body(8.5, .heavy)).tracking(0.8).foregroundColor(Brand.mute)
+                ForEach(Array(ex.sets.enumerated().prefix(compact ? 4 : 8)), id: \.element.id) { i, s in
+                    let logged = s.loggedReps != nil
+                    let m = logged ? LiveSessionController.shared.setMotion(workout, ex, s, index: i) : nil
+                    let v = m.map { $0.reps.map { $0.meanVelocity }.reduce(0, +) / Double(max($0.reps.count, 1)) }
+                    HStack {
+                        Text("\(i + 1)").frame(width: 30, alignment: .leading).foregroundColor(Brand.mute)
+                        Text(LiveCardData.setText(reps: s.loggedReps ?? s.targetReps, weightLb: s.loggedWeight ?? s.targetWeight))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundColor(logged ? Brand.text : Brand.mute)
+                        Text(v.map { String(format: "%.2f", $0) } ?? "—").frame(width: 40, alignment: .trailing).foregroundColor(Brand.mute)
+                        Text(s.rpe?.rpeText ?? "—").frame(width: 34, alignment: .trailing).foregroundColor(Brand.mute)
+                    }
+                    .font(BrandFont.body(compact ? 11 : 13, logged ? .bold : .medium))
+                    .monospacedDigit()
+                }
+            }
+        } else {
+            EmptyMetric(metric: .sets, text: "Your sets for the current exercise appear here.")
+        }
+    }
+}
+
+// MARK: Coach notes
+
+private struct NotesMetric: View {
+    let ctx: LiveMetricContext
+    let compact: Bool
+
+    var body: some View {
+        if ctx.notes.isEmpty {
+            EmptyMetric(metric: .notes, text: "Coach notes appear after each set. With your Watch on, they cover tempo, pause, bar speed and depth.")
+        } else {
+            VStack(alignment: .leading, spacing: compact ? 6 : 9) {
+                MetricHeader(metric: .notes, right: ctx.notesLabel)
+                if !compact, let reps = ctx.notesMotion?.reps, !reps.isEmpty {
+                    let v = reps.map { $0.meanVelocity }
+                    HStack(spacing: 8) {
+                        summary("\(reps.count)", "REPS")
+                        summary(String(format: "%.2f", v.reduce(0, +) / Double(v.count)), "AVG M/S")
+                        summary(CoachNotes.speedLoss(v).map { "−\(Int($0))%" } ?? "—", "SPEED LOSS")
+                    }
+                }
+                ForEach(ctx.notes.prefix(compact ? 1 : 3)) { n in
+                    HStack(alignment: .top, spacing: 9) {
+                        Image(systemName: n.icon).font(.system(size: 12, weight: .bold)).foregroundColor(n.color)
+                            .frame(width: 26, height: 26)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(n.color.opacity(0.15)))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(n.title).font(BrandFont.body(13, .heavy)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.8)
+                            if !compact || n.detail.count < 40 {
+                                Text(n.detail).font(BrandFont.body(11)).foregroundColor(Brand.mute).lineLimit(2)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func summary(_ v: String, _ l: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(v).font(BrandFont.body(18, .heavy)).foregroundColor(Brand.text)
+            Text(l).font(BrandFont.body(8.5, .heavy)).tracking(0.8).foregroundColor(Brand.mute)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Brand.text.opacity(0.05)))
     }
 }

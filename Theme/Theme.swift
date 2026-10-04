@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreText
 
 // MARK: - Brand Theme
 // Every colour the app draws comes from the current Palette, which follows the theme you
@@ -218,9 +219,9 @@ final class ThemeStore: ObservableObject {
     ]
 
     private let d = UserDefaults.standard
-    @Published var choice: ThemeChoice { didSet { d.set(choice.rawValue, forKey: "bst_theme_choice") } }
+    @Published var choice: ThemeChoice { didSet { d.set(choice.rawValue, forKey: "bst_theme_choice"); scheduleIcon() } }
     @Published var customBase: ThemeBase { didSet { d.set(customBase.rawValue, forKey: "bst_theme_base") } }
-    @Published var customAccent: UInt32 { didSet { d.set(Int(customAccent), forKey: "bst_theme_accent") } }
+    @Published var customAccent: UInt32 { didSet { d.set(Int(customAccent), forKey: "bst_theme_accent"); scheduleIcon() } }
     @Published var trueBlack: Bool { didSet { d.set(trueBlack, forKey: "bst_theme_trueblack") } }
     @Published var highContrast: Bool { didSet { d.set(highContrast, forKey: "bst_theme_contrast") } }
 
@@ -271,6 +272,47 @@ final class ThemeStore: ObservableObject {
     }
 
     func accentName(_ hex: UInt32) -> String { ThemeStore.accents.first { $0.hex == hex }?.name ?? "Custom" }
+
+    // MARK: The app icon follows your accent
+    // One ready-made icon per preset (Assets: AppIcon-Red, AppIcon-Cobalt…; Volt is the main icon).
+    // iOS shows its own short "icon changed" notice whenever an app switches its icon.
+
+    private var iconTask: Task<Void, Never>?
+
+    /// Wait a moment first, so cycling through themes doesn't flash a notice for each one.
+    private func scheduleIcon() {
+        iconTask?.cancel()
+        iconTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.applyAppIcon()
+        }
+    }
+
+    func applyAppIcon() {
+        let app = UIApplication.shared
+        guard app.supportsAlternateIcons else { return }
+        let name = ThemeStore.iconName(for: accent)
+        guard app.alternateIconName != name else { return }
+        app.setAlternateIconName(name) { _ in }
+    }
+
+    static func iconName(for hex: UInt32) -> String? {
+        let named: [UInt32: String] = [0x00FF85: "Toxic", 0x00E5FF: "Ice", 0x2F6BFF: "Cobalt", 0x9B3DFF: "Violet",
+                                       0xFF2E93: "HotPink", 0xFF2424: "Red", 0xFF5A1F: "Ember", 0xFFB300: "Amber"]
+        if hex == volt { return nil }
+        if let n = named[hex] { return "AppIcon-" + n }
+        // A custom colour: the nearest preset by hue (greys keep the main icon).
+        let c = RGBColor(hex: hex).hsl
+        guard c.s > 0.25 else { return nil }
+        var best: (hex: UInt32, d: Double) = (volt, 9)
+        for a in accents {
+            let h = RGBColor(hex: a.hex).hsl.h
+            let d = min(abs(h - c.h), 1 - abs(h - c.h))
+            if d < best.d { best = (a.hex, d) }
+        }
+        return named[best.hex].map { "AppIcon-" + $0 }
+    }
 }
 
 /// Wraps the whole app: sets the palette for the current theme (and the iPhone's light/dark
@@ -285,6 +327,10 @@ struct ThemeHost<Content: View>: View {
             content()
         }
         .preferredColorScheme(theme.forcedScheme)
+        .task {                                   // once a launch: make sure the icon matches your accent
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            theme.applyAppIcon()
+        }
     }
 }
 
@@ -298,6 +344,16 @@ private struct SchemeReader<C: View>: View {
 // "Big Shoulders Display" is the display face on the site. Add the .ttf to the
 // project and register in Info.plist; falls back to a heavy system font if absent.
 enum BrandFont {
+    /// Big Shoulders Display Black ships in the app (BigScherlyTraining/Fonts). Registered at
+    /// launch, so no Info.plist entry is needed. Call once, before anything draws.
+    static func registerFonts() {
+        for name in ["BigShouldersDisplay-Black"] {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "ttf")
+                    ?? Bundle.main.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts") else { continue }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
+
     static func display(_ size: CGFloat) -> Font {
         .custom("BigShouldersDisplay-Black", size: size)
             .weight(.black)

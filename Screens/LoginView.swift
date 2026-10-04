@@ -137,7 +137,6 @@ struct LoginView: View {
 // Revolving grid of #bigscherlytraining photos with the big overlay headline.
 struct WelcomeBoardView: View {
     @EnvironmentObject var store: AppStore
-    @StateObject private var motion = MotionManager()
     @Binding var showBoard: Bool
 
     var body: some View {
@@ -162,16 +161,15 @@ struct WelcomeBoardView: View {
                 outlinedWord("GET")
                 filledWord("BIG")
                 outlinedWord("TOGETHER")
-                MetallicRainbowText(text: "QUEENS", size: 140, fillWidth: true, motion: motion)
+                SparkleWord(text: "QUEENS", width: UIScreen.main.bounds.width - 44)   // glittery, still
                 Spacer()
-                VoltButton(title: "Enter") { withAnimation { showBoard = false } }
+                EnterCard { withAnimation { showBoard = false } }
                     .padding(.top, 12)
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 30)
         }
-        .onAppear { motion.start() }
-        .onDisappear { motion.stop() }
+
     }
 
     // Big, heavy, one line each — shrinks to fit width so TOGETHER never wraps.
@@ -196,6 +194,45 @@ struct WelcomeBoardView: View {
 // MARK: - Flipping tile grid
 // A flat grid of photo tiles. Each tile periodically flips (3D rotation) to the
 // next photo in the set, on a staggered timer so the board feels alive but calm.
+// MARK: - Enter (a standard bar in your theme colour: — ENTER —)
+
+struct EnterCard: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                line
+                Text("ENTER")
+                    .font(BrandFont.display(24)).tracking(5)
+                    .lineLimit(1).fixedSize()
+                    .offset(x: 2.5)                     // tracking adds space after the last letter
+                line
+            }
+            .foregroundColor(Brand.onVolt)
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Brand.volt))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(EnterPress())
+        .accessibilityLabel("Enter")
+    }
+
+    /// A thin line either side of the word.
+    private var line: some View {
+        Rectangle().fill(Brand.onVolt).frame(width: 36, height: 1.5)
+    }
+}
+
+private struct EnterPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
 struct FlippingTileGrid: View {
     let photos: [String]
     private let cols = 3
@@ -289,6 +326,7 @@ struct FlipTile: View {
 // MARK: - Stroke (outlined) text helper for GET / TOGETHER
 // Hollow white outline: white ring of offset copies with the letter center
 // knocked out so the photo board shows through, matching the website's outlined words.
+
 struct StrokeText: View {
     let text: String
     let size: CGFloat
@@ -314,4 +352,3 @@ struct StrokeText: View {
         .minimumScaleFactor(0.4)
     }
 }
-

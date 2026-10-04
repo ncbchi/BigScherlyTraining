@@ -297,7 +297,8 @@ final class AppStore: ObservableObject {
                     sets: ex.sets.map { s in
                         WatchSet(id: s.id, targetReps: s.targetReps, targetWeight: s.targetWeight,
                                  loggedReps: s.loggedReps, loggedWeight: s.loggedWeight, rpe: s.rpe)
-                    })
+                    },
+                    pauseTarget: PauseTarget.forWatch(ex))     // Settings ▸ Apple Watch ▸ Pause buzz
             })
         WatchBridge.shared.sendActiveWorkout(payload)
     }

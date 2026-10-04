@@ -59,7 +59,7 @@ struct TrainerShareView: View {
 
                     // Live preview of the card
                     shareCard
-                        .frame(width: 260, height: format == .post ? 325 : 462)
+                        .frame(width: 260, height: 260 * format.layoutHeight / format.layoutWidth)   // each format's real proportions
                         .frame(maxWidth: .infinity)
 
                     // Stat toggles

@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import CoreMotion
 import WatchKit
+import SwiftUI
 
 // MARK: - Motion recording on the wrist
 // Runs only while a workout session is active (the session is what keeps the app
@@ -32,6 +33,14 @@ final class MotionRecorder: ObservableObject {
     @Published private(set) var liveRepCount: Int? = nil
     @Published private(set) var liveLastVelocity: Double? = nil
 
+    /// Phase 3 — pause buzz. Non-nil while you're held at the bottom of a rep.
+    @Published private(set) var pauseStart: Date? = nil
+    @Published private(set) var pauseTarget: Double = 0       // 0 = off
+    @Published private(set) var pauseReached = false
+    /// Every rep so far in the set in progress (speed, lowering, pause, lifting, travel) —
+    /// sent on to the phone's live card as each one is counted.
+    var onLiveReps: (([RepMotion]) -> Void)?
+
     /// Called on the main actor when a finished set has at least one rep.
     var onSetDetected: ((_ reps: [RepMotion], _ start: Date, _ end: Date) -> Void)?
     /// v1.1: the first rep of a set was counted — the phone's Live Activity switches to "lifting".
@@ -43,9 +52,14 @@ final class MotionRecorder: ObservableObject {
     private init() {
         // The recorder is a singleton, so the callbacks reach it through `shared`
         // instead of capturing `self` across threads.
-        processor.onLive = { count, lastVel, buzz in
+        processor.onLive = { reps, buzz in
             Task { @MainActor in
-                MotionRecorder.shared.applyLive(count: count, lastVelocity: lastVel, buzz: buzz)
+                MotionRecorder.shared.applyLive(reps: reps, buzz: buzz)
+            }
+        }
+        processor.onPause = { bottomAt, reached in
+            Task { @MainActor in
+                MotionRecorder.shared.applyPause(bottomAt: bottomAt, reached: reached)
             }
         }
         processor.onSetEnded = { reps, start, end in
@@ -55,19 +69,38 @@ final class MotionRecorder: ObservableObject {
         }
     }
 
-    private func applyLive(count: Int, lastVelocity: Double?, buzz: Bool) {
+    private func applyLive(reps: [RepMotion], buzz: Bool) {
+        let velocities = reps.map { $0.meanVelocity }
+        let count = velocities.count
         // First counted rep (not just movement — unracking or walking doesn't count).
         if count >= 1 && !announcedStart {
             announcedStart = true
             onSetStarted?()
         }
         liveRepCount = count
-        liveLastVelocity = lastVelocity
+        liveLastVelocity = velocities.last
+        if count >= 1 { onLiveReps?(reps) }
         if buzz { WKInterfaceDevice.current().play(.directionDown) }
+    }
+
+    /// The exercise you're on asks for this bottom pause (nil or 0 = off).
+    func setPauseTarget(_ seconds: Double?) {
+        let s = max(0, seconds ?? 0)
+        guard s != pauseTarget else { return }
+        pauseTarget = s
+        processor.setPauseTarget(s)
+    }
+
+    private func applyPause(bottomAt: TimeInterval?, reached: Bool) {
+        guard let bottomAt else { pauseStart = nil; pauseReached = false; return }
+        pauseStart = Date(timeIntervalSince1970: bottomAt)
+        pauseReached = reached
+        if reached { WKInterfaceDevice.current().play(.success) }     // the tap: drive up
     }
 
     private func applySetEnded(reps: [RepMotion], start: Date, end: Date) {
         announcedStart = false
+        pauseStart = nil; pauseReached = false
         liveRepCount = nil
         liveLastVelocity = nil
         if !reps.isEmpty { onSetDetected?(reps, start, end) }
@@ -91,7 +124,9 @@ final class MotionRecorder: ObservableObject {
 
 nonisolated final class MotionProcessor: @unchecked Sendable {
     // Callbacks fire on the processing queue.
-    var onLive: (@Sendable (_ repCount: Int, _ lastVelocity: Double?, _ buzz: Bool) -> Void)?
+    var onLive: (@Sendable (_ reps: [RepMotion], _ buzz: Bool) -> Void)?
+    /// Pause buzz: bottomAt = when you settled at the bottom (nil = you've left it); reached = target hit.
+    var onPause: (@Sendable (_ bottomAt: TimeInterval?, _ reached: Bool) -> Void)?
     var onSetEnded: (@Sendable (_ reps: [RepMotion], _ start: Date, _ end: Date) -> Void)?
 
     private let manager = CMMotionManager()
@@ -117,6 +152,23 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
     private var buzzed = false
     private var buzzEnabled = true
     private var buzzThreshold = 20.0
+
+    // Pause buzz: a light, per-sample bottom detector (the rep analyser runs only twice a
+    // second, too coarse to tap at exactly 2 s). Leaky-integrated vertical velocity tells
+    // descending from settled; stillness after a descent is the bottom.
+    private var pauseTarget = 0.0
+    private var vel = 0.0
+    private var lastT: TimeInterval = 0
+    private var descendFor = 0.0
+    private var bottomAt: TimeInterval? = nil
+    private var pauseReached = false
+
+    func setPauseTarget(_ s: Double) {
+        queue.addOperation { [self] in
+            self.pauseTarget = s
+            if s <= 0, self.bottomAt != nil { self.bottomAt = nil; self.onPause?(nil, false) }
+        }
+    }
 
     // Tuning
     private let activeAccel = 0.30        // m/s², smoothed |vertical accel|
@@ -196,6 +248,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
                 liveReps = 0
                 buzzed = false
                 lastLiveAnalysis = t
+                vel = 0; lastT = t; descendFor = 0; bottomAt = nil; pauseReached = false
             } else if buffer.count > 600 {
                 // Idle: keep just a couple of seconds for the preroll.
                 buffer.removeFirst(buffer.count - 300)
@@ -204,6 +257,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         }
 
         if active { lastActiveIndex = idx }
+        pauseStep(av: av, t: t)
         let quietFor = t - buffer[lastActiveIndex].t
         let setLength = t - buffer[setStartIndex].t
 
@@ -215,6 +269,33 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         if t - lastLiveAnalysis >= 0.5 {
             lastLiveAnalysis = t
             liveAnalysis()
+        }
+    }
+
+    /// Runs on every sample during a set.
+    private func pauseStep(av: Double, t: TimeInterval) {
+        let dt = lastT > 0 ? min(0.05, max(0, t - lastT)) : 1.0 / RepAnalyzer.sampleRate
+        lastT = t
+        vel = (vel + av * dt) * 0.985               // local direction, without long-term drift
+        guard pauseTarget > 0 else { return }
+        let still = smoothA < 0.22 && smoothR < 0.5
+        if let b = bottomAt {
+            if vel > 0.10 || smoothA > 0.45 {         // driving up (or moving): the pause is over
+                bottomAt = nil; descendFor = 0
+                onPause?(nil, false)
+            } else if !pauseReached, t - b >= pauseTarget {
+                pauseReached = true
+                onPause?(b, true)
+            }
+        } else {
+            if vel < -0.12 { descendFor += dt } else if vel > 0.08 { descendFor = 0 }
+            if descendFor >= 0.3, still, abs(vel) < 0.08 {
+                let at = t - 0.25                     // stillness is spotted about ¼ s after it starts
+                bottomAt = at
+                pauseReached = false
+                descendFor = 0
+                onPause?(at, false)
+            }
         }
     }
 
@@ -232,11 +313,12 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
                 buzzed = true
             }
         }
-        onLive?(reps.count, reps.last?.meanVelocity, buzz)
+        onLive?(reps, buzz)
     }
 
     private func finishSet() {
         inSet = false
+        if bottomAt != nil { bottomAt = nil; onPause?(nil, false) }
         let endIdx = min(buffer.count, lastActiveIndex + Int(1.5 * RepAnalyzer.sampleRate))
         guard endIdx > setStartIndex else { return }
         let slice = Array(buffer[setStartIndex..<endIdx])
@@ -251,3 +333,43 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         onSetEnded?(reps, start, end)
     }
 }
+
+// MARK: - Pause countdown (over every screen while you're held at the bottom)
+
+struct PauseCountdownOverlay: View {
+    @ObservedObject private var motion = MotionRecorder.shared
+    private let volt = Color(red: 237 / 255, green: 1, blue: 61 / 255)
+
+    var body: some View {
+        if let start = motion.pauseStart, motion.pauseTarget > 0 {
+            TimelineView(.periodic(from: .now, by: 0.1)) { ctx in
+                let target = motion.pauseTarget
+                let held = max(0, ctx.date.timeIntervalSince(start))
+                let done = motion.pauseReached || held >= target
+                ZStack {
+                    Color.black.opacity(0.9).ignoresSafeArea()
+                    if done {
+                        Circle().fill(volt).padding(14)
+                        VStack(spacing: 0) {
+                            Text("GO").font(.system(size: 46, weight: .black)).foregroundColor(.black)
+                            Text(String(format: "%.1f s ✓", target)).font(.system(size: 12, weight: .heavy)).foregroundColor(.black)
+                        }
+                    } else {
+                        Circle().stroke(Color.white.opacity(0.12), lineWidth: 10).padding(14)
+                        Circle().trim(from: 0, to: min(1, held / target))
+                            .stroke(volt, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                            .rotationEffect(.degrees(-90)).padding(14)
+                        VStack(spacing: 0) {
+                            Text("PAUSE").font(.system(size: 11, weight: .heavy)).foregroundColor(.gray)
+                            Text(String(format: "%.1f", held)).font(.system(size: 44, weight: .black)).foregroundColor(.white).monospacedDigit()
+                            Text(String(format: "of %.1f s", target)).font(.system(size: 11, weight: .semibold)).foregroundColor(.gray)
+                        }
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+    }
+}
+

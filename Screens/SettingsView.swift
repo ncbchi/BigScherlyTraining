@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage("bst_auto_rest") private var autoRest = true
     @AppStorage("bst_live_activity") private var liveActivity = true
     @AppStorage("bst_weight_step") private var weightStep = "standard"
+    @AppStorage("bst_pause_buzz") private var pauseBuzz = true
     @AppStorage("bst_stats_window") private var statsWindow = StatsWindow.w12.rawValue
     @State private var editingMenu = false
     @State private var customPick: Color = Color(hex: 0x00E5FF)
@@ -59,6 +60,7 @@ struct SettingsView: View {
                 notifications
                 preferences
                 workoutPrefs
+                appleWatch
                 navigation
                 statsDefaults
                 about
@@ -335,6 +337,19 @@ struct SettingsView: View {
         }
         .tint(Brand.volt)
         .padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    // MARK: Apple Watch
+
+    private var appleWatch: some View {
+        section("Apple Watch") {
+            subToggle("Pause buzz", "Taps your wrist when your bottom pause reaches its target", $pauseBuzz)
+            rowDivider
+            Text("Targets come from your programme (\"2-sec pause\", tempo 3-2-1-0). Change one from the Pause view on the workout screen.")
+                .font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .onChange(of: pauseBuzz) { _, _ in store.sendActiveWorkoutToWatch() }
     }
 
     // MARK: Navigation

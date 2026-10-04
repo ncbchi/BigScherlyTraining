@@ -17,6 +17,8 @@ final class LiveSessionController: ObservableObject {
     @Published private(set) var restEnd: Date? = nil
     @Published private(set) var restTotal: Int = 0
     @Published private(set) var workoutId: String? = nil
+    /// Bumped on every change, so the in-app live card redraws with the Lock Screen card.
+    @Published private(set) var revision = 0
 
     private weak var store: AppStore?
     private var activity: Activity<WorkoutActivityAttributes>?
@@ -43,6 +45,8 @@ final class LiveSessionController: ObservableObject {
     private var stageTask: Task<Void, Never>?
     private var demoTask: Task<Void, Never>?
     private var lastDetectionSeen: Date? = nil
+    /// Demo Mode: the reps you watched arrive, kept for the set once it's logged (by set id).
+    private var demoMotions: [String: SetMotion] = [:]
 
     // Heart rate
     private var hrSamples: [(Date, Int)] = []
@@ -235,6 +239,12 @@ final class LiveSessionController: ObservableObject {
         WatchBridge.shared.clearDetection()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
 
+        if !wasLogged, isDemo, let first = WatchBridge.shared.liveRepMotions.first,
+           let last = WatchBridge.shared.liveRepMotions.last {
+            demoMotions[setId] = SetMotion(id: UUID().uuidString, workoutId: wid, exerciseId: exerciseId, setId: setId,
+                                           exerciseName: store.workouts[wi].exercises[ei].name, start: first.start, end: last.end,
+                                           reps: WatchBridge.shared.liveRepMotions, autoDetected: true, analyzerVersion: 1)
+        }
         if !wasLogged {
             setStart = nil
             logNeeded = false
@@ -325,13 +335,52 @@ final class LiveSessionController: ObservableObject {
     /// (and you) can see the 10-second log window without a Watch.
     private func simulateDemoSet() {
         demoTask?.cancel()
+        WatchBridge.shared.demoLive(reps: [])
         demoTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
-            guard !Task.isCancelled, let self, self.isDemo, self.stage == .lifting, !self.editing,
-                  let wid = self.workoutId, let w = self.store?.workouts.first(where: { $0.id == wid }),
+            guard let self, let wid = self.workoutId, let w = self.store?.workouts.first(where: { $0.id == wid }),
                   let nx = Self.nextSet(w) else { return }
-            self.setEnded(reps: nx.1.targetReps, workoutId: wid, at: Date())
+            // Whole reps, the way the Watch sends them: each a little slower than the last,
+            // the pause shortening as you tire, and one rep a touch shallow.
+            let target = max(1, nx.1.targetReps)
+            let base = Self.demoBaseSpeed(nx.0.name)
+            let pauseGoal = PauseTarget.target(nx.0)
+            var reps: [RepMotion] = []
+            var t = Date().addingTimeInterval(3)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)          // unrack and set up
+            for i in 0..<target {
+                guard !Task.isCancelled, self.isDemo, self.stage == .lifting, !self.logNeeded else { return }
+                let f = Double(i)
+                let v = max(0.12, base * (1 - 0.055 * f) + Double.random(in: -0.02...0.02))
+                let ecc = 1.7 + Double.random(in: -0.25...0.25)
+                let pause = pauseGoal.map { max(0.3, $0 + 0.1 - 0.15 * f + Double.random(in: -0.12...0.12)) }
+                    ?? Double.random(in: 0.1...0.3)
+                let travel = 0.62 + Double.random(in: -0.012...0.012) - (target >= 4 && i == target - 2 ? 0.045 : 0)
+                let conc = travel / v
+                let end = t.addingTimeInterval(ecc + pause + conc)
+                reps.append(RepMotion(index: i + 1, start: t, end: end,
+                                      eccentricSec: (ecc * 10).rounded() / 10, bottomPauseSec: (pause * 10).rounded() / 10,
+                                      concentricSec: (conc * 10).rounded() / 10, topPauseSec: 0.6, travelM: travel,
+                                      meanVelocity: (v * 100).rounded() / 100, peakVelocity: (v * 135).rounded() / 100,
+                                      stickingPoint: nil, driftM: 0.01))
+                t = end.addingTimeInterval(0.6)
+                WatchBridge.shared.demoLive(reps: reps)
+                try? await Task.sleep(nanoseconds: 2_600_000_000)
+            }
+            guard !Task.isCancelled, self.isDemo, self.stage == .lifting, !self.editing, !reps.isEmpty else { return }
+            // Same path a real Watch takes: the detection arrives, the set ends, Log ✓ appears.
+            WatchBridge.shared.demoDetection(workoutId: wid, reps: target,
+                                             velocity: reps.map { $0.meanVelocity }.reduce(0, +) / Double(reps.count))
         }
+    }
+
+    /// Believable bar speeds (m/s) for Demo Mode.
+    static func demoBaseSpeed(_ name: String) -> Double {
+        let n = name.lowercased()
+        if n.contains("bench") { return 0.48 }
+        if n.contains("dead") { return 0.52 }
+        if n.contains("squat") { return 0.56 }
+        if n.contains("press") { return 0.58 }
+        return 0.62
     }
 
     /// Where the left pane is.
@@ -444,6 +493,7 @@ final class LiveSessionController: ObservableObject {
 
     /// Coalesced: at most one update every ~2 s unless `now`.
     private func push(now: Bool) {
+        revision &+= 1                                  // the in-app card redraws now
         guard activity != nil else { return }
         pushTask?.cancel()
         pushTask = Task { [weak self] in
@@ -493,9 +543,7 @@ final class LiveSessionController: ObservableObject {
         var best: (Exercise, ExerciseSet, Int, SetMotion, Date)? = nil
         for ex in w.exercises {
             for (i, s) in ex.sets.enumerated() where s.loggedReps != nil {
-                let m: SetMotion? = isDemo
-                    ? DemoMotion.motion(workoutId: w.id, exercise: ex, set: s, setIndex: i, workouts: store?.workouts ?? [])
-                    : SetMotionStore.shared.motion(workoutId: w.id, setId: s.id)
+                let m = setMotion(w, ex, s, index: i)
                 guard let m, m.repCount > 0 else { continue }
                 let at = s.loggedAt ?? m.end
                 if best == nil || at > best!.4 { best = (ex, s, i + 1, m, at) }
@@ -678,6 +726,38 @@ final class LiveSessionController: ObservableObject {
         }
         return nil
     }
+
+    // MARK: In-app live card (Phase 3) — read-only views of the session state
+
+    var liftingSince: Date? { setStart }
+    var setAwaitingLog: Bool { logNeeded }
+    /// Heart rate over the last half hour (Demo Mode: the same wave the Lock Screen card shows).
+    var heartSamples: [(Date, Int)] {
+        guard isDemo, workoutId != nil else { return hrSamples }
+        let now = Date()
+        return stride(from: -600.0, through: 0, by: 5).map { off in
+            let d = now.addingTimeInterval(off)
+            return (d, demoHR(at: d))
+        }
+    }
+    /// The Watch is connected (Demo Mode pretends it is during a workout).
+    var watchConnected: Bool { isDemo ? workoutId != nil : WatchBridge.shared.watchSessionLive }
+    var heartMax: Int { maxHR }
+    var currentHeartRate: Int? { liveHR() }
+    /// When the workout clock started: the first logged set, or when the workout was opened.
+    func sessionStart(_ w: Workout) -> Date {
+        let first = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min()
+        return min(first ?? openedAt, openedAt)
+    }
+    /// The last logged set in this workout that has Watch data.
+    func lastSetMotion(_ w: Workout) -> (Exercise, ExerciseSet, Int, SetMotion)? { lastMotion(w) }
+    /// Any logged set's Watch data (Demo Mode: the reps you watched, or believable ones).
+    func setMotion(_ w: Workout, _ ex: Exercise, _ s: ExerciseSet, index: Int) -> SetMotion? {
+        guard isDemo else { return SetMotionStore.shared.motion(workoutId: w.id, setId: s.id) }
+        return demoMotions[s.id]
+            ?? DemoMotion.motion(workoutId: w.id, exercise: ex, set: s, setIndex: index, workouts: store?.workouts ?? [])
+    }
+
 }
 
 private extension SetMotion {

@@ -70,6 +70,10 @@ final class WatchBridge: NSObject, ObservableObject {
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
     @Published private(set) var liveSetStartedAt: Date? = nil
+    /// Phase 3: every rep so far in the set in progress, as the Watch counts it.
+    @Published private(set) var liveRepMotions: [RepMotion] = []
+    /// Their speeds (m/s).
+    var liveReps: [Double] { liveRepMotions.map { $0.meanVelocity } }
 
     /// Session reported live within the last minute (guards against a silent Watch).
     var watchSessionLive: Bool {
@@ -80,13 +84,22 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The phone logged the set — don't offer the same detection again.
     func clearDetection() { lastDetection = nil }
 
+    // Demo Mode: drive the live card without a Watch, through the same published values.
+    func demoLive(reps: [RepMotion]) { liveRepMotions = reps }
+    func demoDetection(workoutId: String, reps: Int, velocity: Double) {
+        lastDetection = LiveDetection(workoutId: workoutId, exerciseId: nil, setId: nil,
+                                      reps: reps, meanVelocity: velocity, receivedAt: Date())
+    }
+
     fileprivate func applyLive(_ message: [String: Any]) {
         if let active = message["sessionActive"] as? Bool {
             watchSessionActive = active
             if !active { liveHeartRate = nil }
         }
         if let bpm = message["liveHR"] as? Int { liveHeartRate = bpm }
-        if message["setStarted"] as? Bool == true { liveSetStartedAt = Date() }
+        if message["setStarted"] as? Bool == true { liveSetStartedAt = Date(); liveRepMotions = [] }
+        if let data = message["liveRepsData"] as? Data,
+           let reps = try? JSONDecoder().decode([RepMotion].self, from: data) { liveRepMotions = reps }
         if message["detectedSet"] as? Bool == true,
            let wid = message["workoutId"] as? String,
            let reps = message["reps"] as? Int {
@@ -159,6 +172,7 @@ struct WatchExercise: Codable, Identifiable {
     var name: String
     var restSeconds: Int
     var sets: [WatchSet]
+    var pauseTarget: Double? = nil      // seconds — the Watch taps you when the bottom pause reaches it
 }
 struct WatchSet: Codable, Identifiable {
     var id: String
@@ -187,7 +201,9 @@ extension WatchBridge: WCSessionDelegate {
     }
 
     private func handleIncoming(_ message: [String: Any]) {
-        if message["sessionActive"] != nil || message["liveHR"] != nil || message["detectedSet"] != nil {
+        // (setStarted and liveReps were missing here, so "set started" never reached the phone.)
+        if message["sessionActive"] != nil || message["liveHR"] != nil || message["detectedSet"] != nil
+            || message["setStarted"] != nil || message["liveRepsData"] != nil {
             DispatchQueue.main.async { self.applyLive(message) }
             return
         }

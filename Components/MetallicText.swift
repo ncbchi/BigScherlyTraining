@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreMotion
+import CoreText
 import Combine
 
 // MARK: - Motion manager (gyroscope / device attitude)
@@ -172,3 +173,156 @@ struct MetallicRainbowText: View {
         .compositingGroup()
     }
 }
+
+// MARK: - Sparkly QUEENS (static: a glittery finish that doesn't move)
+// Letters drawn from the Big Shoulders outlines themselves, so the fill and outline are crisp
+// and line up exactly: high-contrast rainbow bands with glitter, a gold-banded outline with
+// gold glitter.
+
+enum GlyphText {
+    static let fontName = "BigShouldersDisplay-Black"
+    private static var cache: [String: (path: CGPath, size: CGSize)] = [:]
+
+    /// `text` set at `size`: the letter outlines (top-left at 0,0, y down) and their tight size.
+    static func shape(_ text: String, size: CGFloat) -> (path: CGPath, size: CGSize) {
+        let key = "\(text)|\(Int((size * 10).rounded()))"
+        if let hit = cache[key] { return hit }
+        let font = CTFontCreateWithName(fontName as CFString, size, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+        _ = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+        let path = CGMutablePath()
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let n = CTRunGetGlyphCount(run)
+            var glyphs = [CGGlyph](repeating: 0, count: n)
+            var points = [CGPoint](repeating: .zero, count: n)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: n), &glyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: n), &points)
+            for i in 0..<n {
+                guard let g = CTFontCreatePathForGlyph(font, glyphs[i], nil) else { continue }
+                let t = CGAffineTransform(translationX: points[i].x, y: ascent - points[i].y).scaledBy(x: 1, y: -1)
+                path.addPath(g, transform: t)
+            }
+        }
+        let box = path.boundingBoxOfPath
+        var shift = CGAffineTransform(translationX: -box.minX, y: -box.minY)
+        let made = (path.copy(using: &shift) ?? path, box.size)
+        cache[key] = made
+        return made
+    }
+
+    /// The biggest size (up to `maxSize`) at which `text` fits `width`.
+    static func fit(_ text: String, width: CGFloat, maxSize: CGFloat, inset: CGFloat = 0) -> CGFloat {
+        let w = shape(text, size: 100).size.width
+        guard w > 0 else { return maxSize }
+        return min(maxSize, (width - inset) / w * 100)
+    }
+
+    static func shifted(_ p: CGPath, by d: CGFloat) -> CGPath {
+        var t = CGAffineTransform(translationX: d, y: d)
+        return p.copy(using: &t) ?? p
+    }
+}
+
+private struct GlyphShape: Shape {
+    let cg: CGPath
+    func path(in rect: CGRect) -> Path { Path(cg) }
+}
+
+struct SparkleWord: View {
+    let text: String
+    let width: CGFloat
+    var maxSize: CGFloat = 160
+    var outlineWidth: CGFloat = 0.05          // × font size — the original outline weight
+
+    /// Vivid bands with crisp edges: each colour holds, then hands over quickly.
+    private static func bands(_ colors: [Color], hold: Double) -> [Gradient.Stop] {
+        let n = Double(colors.count)
+        var stops: [Gradient.Stop] = []
+        for (i, c) in colors.enumerated() {
+            stops.append(.init(color: c, location: Double(i) / n))
+            stops.append(.init(color: c, location: (Double(i) + hold) / n))
+        }
+        return stops
+    }
+    private static let rainbow = bands([Color(hex: 0xFF1744), Color(hex: 0xFF9100), Color(hex: 0xFFEA00), Color(hex: 0x00E676),
+                                        Color(hex: 0x00B0FF), Color(hex: 0x651FFF), Color(hex: 0xD500F9)], hold: 0.72)
+    private static let gold = bands([Color(hex: 0xB8860B), Color(hex: 0xFFD54A), Color(hex: 0xD99A1E), Color(hex: 0xFFE68A),
+                                     Color(hex: 0xC8911A), Color(hex: 0xF2C230), Color(hex: 0xB8860B), Color(hex: 0xFFE68A)], hold: 0.6)
+
+    var body: some View {
+        let size = GlyphText.fit(text, width: width, maxSize: maxSize, inset: maxSize * outlineWidth)
+        let g = GlyphText.shape(text, size: size)
+        let lw = size * outlineWidth
+        let box = CGSize(width: g.size.width + lw, height: g.size.height + lw)
+        let shape = GlyphShape(cg: GlyphText.shifted(g.path, by: lw / 2))
+        let outline = StrokeStyle(lineWidth: lw, lineJoin: .round)
+        ZStack(alignment: .topLeading) {
+            shape.stroke(LinearGradient(stops: Self.gold, startPoint: .topLeading, endPoint: .bottomTrailing), style: outline)
+            StaticGlitter(size: box, count: 900, seed: 7, scale: 0.6, tint: Color(hex: 0xFFF6D6))
+                .mask(shape.stroke(style: outline))
+            shape.fill(LinearGradient(stops: Self.rainbow, startPoint: .leading, endPoint: .trailing))
+            StaticGlitter(size: box, count: 320, seed: 1)
+                .mask(shape)
+        }
+        .frame(width: box.width, height: box.height, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Glitter that sits still: flecks at fixed spots, a few bright, most soft, some four-point stars.
+private struct StaticGlitter: View {
+    let size: CGSize
+    var count = 300
+    var seed: UInt64 = 1
+    var scale: Double = 1
+    var tint: Color = .white
+
+    private struct Fleck { let x: Double, y: Double, glow: Double, r: Double }
+
+    private static var made: [String: [Fleck]] = [:]
+    private static func flecks(_ count: Int, _ seed: UInt64) -> [Fleck] {
+        let key = "\(count)|\(seed)"
+        if let f = made[key] { return f }
+        var state: UInt64 = 0x9E3779B97F4A7C15 &+ seed &* 0xBF58476D1CE4E5B9
+        func next() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Double(state >> 11) / Double(1 << 53)
+        }
+        let f = (0..<count).map { _ in
+            Fleck(x: next(), y: next(), glow: pow(next(), 2.6), r: 0.6 + next() * 1.6)     // mostly soft, a few bright
+        }
+        made[key] = f
+        return f
+    }
+
+    var body: some View {
+        let flecks = Self.flecks(count, seed)
+        Canvas { ctx, sz in
+            ctx.blendMode = .plusLighter
+            let k = max(1, sz.height / 90)
+            for f in flecks {
+                let b = 0.18 + 0.82 * f.glow
+                let p = CGPoint(x: f.x * sz.width, y: f.y * sz.height)
+                let r = f.r * scale * (0.7 + 0.8 * f.glow) * k
+                ctx.fill(Path(ellipseIn: CGRect(x: p.x - r / 2, y: p.y - r / 2, width: r, height: r)), with: .color(tint.opacity(b)))
+                if f.glow > 0.72 {                                 // the brightest become stars
+                    var star = Path()
+                    let l = r * 3.0, w = r * 0.3
+                    star.move(to: CGPoint(x: p.x, y: p.y - l))
+                    star.addLine(to: CGPoint(x: p.x + w, y: p.y - w))
+                    star.addLine(to: CGPoint(x: p.x + l, y: p.y))
+                    star.addLine(to: CGPoint(x: p.x + w, y: p.y + w))
+                    star.addLine(to: CGPoint(x: p.x, y: p.y + l))
+                    star.addLine(to: CGPoint(x: p.x - w, y: p.y + w))
+                    star.addLine(to: CGPoint(x: p.x - l, y: p.y))
+                    star.addLine(to: CGPoint(x: p.x - w, y: p.y - w))
+                    star.closeSubpath()
+                    ctx.fill(star, with: .color(tint.opacity(b * 0.9)))
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+

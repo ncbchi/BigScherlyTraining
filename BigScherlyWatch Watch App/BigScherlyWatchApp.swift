@@ -28,6 +28,7 @@ struct BigScherlyWatchApp: App {
                 .environmentObject(state)
                 .environmentObject(session)
                 .environmentObject(motion)
+                .overlay { PauseCountdownOverlay() }       // Phase 3: the pause buzz countdown
                 .sheet(item: $state.presentedDetection) { d in
                     WatchDetectedSetView(detection: d)
                         .environmentObject(state)

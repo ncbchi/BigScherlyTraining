@@ -9,6 +9,7 @@ struct BigScherlyTrainingApp: App {
     @StateObject private var store = AppStore.shared
 
     init() {
+        BrandFont.registerFonts()                          // the display face, before anything draws
         LiveSessionController.shared.attach(AppStore.shared)
         WidgetBridge.shared.attach(AppStore.shared)        // keeps Home & Lock Screen widgets current
     }

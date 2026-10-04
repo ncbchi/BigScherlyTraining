@@ -90,6 +90,10 @@ enum DemoMotion {
             let ecc: Double? = (isDeadlift && i == 0) ? nil : p.ecc * (1 + (unit(key + "e\(i)") - 0.5) * 0.15)
             let bottom: Double? = {
                 if isDeadlift && i == 0 { return nil }
+                // A programmed pause ("2-sec pause"): held near it, slipping a little as you tire.
+                if let goal = PauseTarget.target(exercise) {
+                    return max(0.3, goal * (1.05 - 0.07 * Double(i)) + (unit(key + "p\(i)") - 0.5) * 0.3)
+                }
                 if let r = p.pause { return r.lowerBound + (r.upperBound - r.lowerBound) * unit(key + "p\(i)") }
                 return 0.03 + 0.06 * unit(key + "p\(i)")
             }()

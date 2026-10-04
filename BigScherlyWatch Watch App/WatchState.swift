@@ -20,7 +20,9 @@ final class WatchState: NSObject, ObservableObject {
     @Published var unreadMessages: Int = 0
 
     // The live workout the phone says is active (open on phone, or today's/next).
-    @Published var activeWorkout: WatchWorkout? = nil
+    @Published var activeWorkout: WatchWorkout? = nil {
+        didSet { updatePauseTarget() }
+    }
 
     // Local rest timer state (for the in-app countdown ring).
     @Published var restEndDate: Date? = nil
@@ -35,7 +37,9 @@ final class WatchState: NSObject, ObservableObject {
     // MARK: - Auto-detected sets
 
     /// The exercise screen currently open on the wrist (best hint for what's being lifted).
-    @Published var focusedExerciseId: String? = nil
+    @Published var focusedExerciseId: String? = nil {
+        didSet { updatePauseTarget() }
+    }
     /// The detected set currently shown in the confirm sheet.
     @Published var presentedDetection: DetectedSet? = nil {
         didSet { if presentedDetection == nil { presentNextDetection() } }
@@ -158,6 +162,14 @@ final class WatchState: NSObject, ObservableObject {
     }
 
     /// A set was logged on the phone instead of the wrist: hand it the matching motion.
+    /// Pause buzz: the target for the exercise you're on — the screen open on the wrist, else the next set's.
+    private func updatePauseTarget() {
+        guard let w = activeWorkout else { MotionRecorder.shared.setPauseTarget(nil); return }
+        let ex = w.exercises.first { $0.id == focusedExerciseId }
+            ?? w.exercises.first { $0.sets.contains { $0.loggedReps == nil } }
+        MotionRecorder.shared.setPauseTarget(ex?.pauseTarget)
+    }
+
     private func attachDetectionsToPhoneLoggedSets(old: WatchWorkout?, new: WatchWorkout) {
         guard let old, old.id == new.id, !detections.isEmpty else { return }
         for ex in new.exercises {
@@ -202,6 +214,11 @@ final class WatchState: NSObject, ObservableObject {
         MotionRecorder.shared.onSetStarted = { [weak self] in
             guard let wid = self?.activeWorkout?.id else { return }
             Self.sendLive(["setStarted": true, "workoutId": wid])
+        }
+        // Phase 3: every rep so far, as each is counted, for the phone's live card.
+        MotionRecorder.shared.onLiveReps = { [weak self] reps in
+            guard let wid = self?.activeWorkout?.id, let data = try? JSONEncoder().encode(reps) else { return }
+            Self.sendLive(["liveRepsData": data, "workoutId": wid])
         }
 
         // When the Watch app runs with no state from the phone — standalone in the
