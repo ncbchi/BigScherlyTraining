@@ -18,7 +18,7 @@ struct AwardCelebrationView: View {
 
     var body: some View {
         ZStack {
-            Brand.bg.ignoresSafeArea()
+            BrandDark.bg.ignoresSafeArea()
 
             if !reduceMotion {
                 ConfettiLayer()
@@ -33,7 +33,7 @@ struct AwardCelebrationView: View {
                 ZStack {
                     // Ambient glow
                     Circle()
-                        .fill(Brand.volt)
+                        .fill(BrandDark.volt)
                         .frame(width: 230, height: 230)
                         .blur(radius: 70)
                         .opacity(0.28)
@@ -42,7 +42,7 @@ struct AwardCelebrationView: View {
                         // Expanding shockwave rings (the celebratory pulse)
                         ForEach(0..<2, id: \.self) { i in
                             Circle()
-                                .stroke(Brand.volt, lineWidth: 2)
+                                .stroke(BrandDark.volt, lineWidth: 2)
                                 .frame(width: 120, height: 120)
                                 .scaleEffect(ringPulse ? 2.0 : 0.7)
                                 .opacity(ringPulse ? 0 : 0.55)
@@ -55,35 +55,35 @@ struct AwardCelebrationView: View {
 
                         // Slowly turning sunburst
                         RaysView()
-                            .stroke(Brand.volt.opacity(0.35), lineWidth: 2.5)
+                            .stroke(BrandDark.volt.opacity(0.35), lineWidth: 2.5)
                             .frame(width: 250, height: 250)
                             .rotationEffect(.degrees(rayAngle))
 
                         // Static concentric rings for depth
                         ForEach(0..<3, id: \.self) { i in
                             Circle()
-                                .stroke(Brand.volt.opacity(0.16 - Double(i) * 0.045), lineWidth: 1.5)
+                                .stroke(BrandDark.volt.opacity(0.16 - Double(i) * 0.045), lineWidth: 1.5)
                                 .frame(width: 150 + CGFloat(i) * 46, height: 150 + CGFloat(i) * 46)
                         }
                     }
 
                     Circle()
-                        .fill(Brand.volt)
+                        .fill(BrandDark.volt)
                         .frame(width: 128, height: 128)
                         .overlay(
                             Image(systemName: award.icon)
                                 .font(.system(size: 56, weight: .bold))
-                                .foregroundColor(Brand.black)
+                                .foregroundColor(BrandDark.black)
                         )
-                        .shadow(color: Brand.volt.opacity(0.5), radius: 24)
+                        .shadow(color: BrandDark.volt.opacity(0.5), radius: 24)
                         .scaleEffect(badgeIn ? 1 : 0.01)
                         .rotationEffect(.degrees(badgeIn ? 0 : -25))
                 }
                 .frame(height: 260)
 
-                Text("AWARD UNLOCKED")
+                Text("AWARD UNLOCKED · \(award.kind.cheer.uppercased())")
                     .font(BrandFont.body(11, .bold)).tracking(3)
-                    .foregroundColor(Brand.volt)
+                    .foregroundColor(BrandDark.volt)
                     .padding(.bottom, 10)
                     .opacity(contentIn ? 1 : 0)
                     .offset(y: contentIn ? 0 : 16)
@@ -99,7 +99,7 @@ struct AwardCelebrationView: View {
 
                 Text(award.blurb)
                     .font(BrandFont.body(14))
-                    .foregroundColor(Brand.mute)
+                    .foregroundColor(BrandDark.mute)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 36)
                     .padding(.top, 8)
@@ -111,17 +111,17 @@ struct AwardCelebrationView: View {
                     ForEach(Array(award.stats.enumerated()), id: \.element.id) { i, s in
                         VStack(spacing: 4) {
                             Text(s.value)
-                                .font(BrandFont.display(28)).foregroundColor(Brand.volt)
+                                .font(BrandFont.display(28)).foregroundColor(BrandDark.volt)
                                 .minimumScaleFactor(0.5).lineLimit(1)
                             Text(s.label)
                                 .font(BrandFont.body(9, .bold)).tracking(1.3)
-                                .foregroundColor(Brand.mute)
+                                .foregroundColor(BrandDark.mute)
                                 .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 16)
-                        .background(Brand.black)
+                        .background(BrandDark.black)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Brand.line, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(BrandDark.line, lineWidth: 1))
                     }
                 }
                 .padding(.horizontal, 30)
@@ -142,13 +142,13 @@ struct AwardCelebrationView: View {
                         } label: {
                             HStack {
                                 Image(systemName: "camera.fill")
-                                Text("Share it").font(BrandFont.body(15, .bold))
+                                Text("Show it off").font(BrandFont.body(15, .bold))
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(Brand.volt)
+                            .background(BrandDark.volt)
                             .clipShape(Capsule())
-                            .foregroundColor(Brand.black)
+                            .foregroundColor(BrandDark.black)
                         }
                     } else {
                         Button {
@@ -161,15 +161,15 @@ struct AwardCelebrationView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(Brand.volt)
+                            .background(BrandDark.volt)
                             .clipShape(Capsule())
-                            .foregroundColor(Brand.black)
+                            .foregroundColor(BrandDark.black)
                         }
                     }
 
                     Button("Not now") { dismiss() }
                         .font(BrandFont.body(14))
-                        .foregroundColor(Brand.mute)
+                        .foregroundColor(BrandDark.mute)
                 }
                 .padding(.horizontal, 30)
                 .padding(.bottom, 24)
@@ -244,9 +244,9 @@ private struct ConfettiPiece: View {
     private var h: CGFloat { 9 + CGFloat(seed) * 7 }
     private var color: Color {
         switch index % 3 {
-        case 0:  return Brand.volt
+        case 0:  return BrandDark.volt
         case 1:  return .white
-        default: return Brand.volt.opacity(0.75)
+        default: return BrandDark.volt.opacity(0.75)
         }
     }
 

@@ -57,25 +57,72 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// The congratulations — shown on the celebration, the badge and the detail screen.
     var blurb: String {
         switch self {
-        case .perfectWeek:        return "Every workout done. Everything your coach asked for. Nothing missed."
-        case .perfectMonth:       return "Four perfect weeks back to back. That's a habit now."
-        case .streak4:            return "Four straight weeks of training. No gaps."
-        case .streak12:           return "Twelve straight weeks. This is who you are now."
-        case .doseStreak30:       return "Thirty days. Every single one, on time."
-        case .workouts10:         return "Ten workouts in the books. You've started."
-        case .workouts25:         return "Twenty-five sessions deep."
-        case .workouts50:         return "Fifty workouts. Halfway to triple digits."
-        case .workouts100:        return "Triple digits. Not a phase anymore."
-        case .workouts250:        return "Two hundred and fifty sessions. Veteran status."
-        case .millionPounds:      return "One million pounds moved. Cumulatively, you've lifted a house."
-        case .firstPR:            return "Your first personal record. The first of many."
-        case .upAcrossTheBoard:   return "Heavier on every main lift this week."
-        case .tripleCrown:        return "PR'd the squat, bench, and deadlift in one block."
-        case .thousandPoundClub:  return "Squat, bench, and deadlift now total over 1,000 lb."
-        case .fullSend:           return "Every prescribed set, at or above target. No rep left behind."
-        case .comeback:           return "You came back. That's the hardest set of all."
+        case .perfectWeek:        return "Every single workout, every single thing your coach asked for — done. Not one missed. That's a perfect week."
+        case .perfectMonth:       return "Four perfect weeks, back to back. This isn't motivation anymore — it's who you are."
+        case .streak4:            return "Four straight weeks without missing a beat. The habit is officially built."
+        case .streak12:           return "Twelve weeks in a row. Three months of showing up, no excuses. That's elite."
+        case .doseStreak30:       return "Thirty days straight, every one on time. That kind of discipline is rare — be proud of it."
+        case .workouts10:         return "Ten workouts in the books! The hardest part was starting, and you're officially rolling."
+        case .workouts25:         return "Twenty-five sessions deep. You're not trying it out anymore — you're doing it."
+        case .workouts50:         return "FIFTY workouts. Halfway to triple digits and stronger with every single one."
+        case .workouts100:        return "One hundred workouts. Let that sink in. This is a lifestyle now."
+        case .workouts250:        return "Two hundred and fifty sessions. Veteran status unlocked — absolute legend."
+        case .millionPounds:      return "ONE MILLION POUNDS moved. You've lifted the weight of a house. Several, honestly."
+        case .firstPR:            return "Your first personal record! The strongest you've ever been — and it's only the first of many."
+        case .upAcrossTheBoard:   return "Heavier on every main lift in a single week. No weak links — you're getting strong everywhere."
+        case .tripleCrown:        return "PRs on squat, bench AND deadlift in one block. The crown is yours — you earned it."
+        case .thousandPoundClub:  return "Squat, bench and deadlift now total over 1,000 lb. Four digits. Welcome to the club."
+        case .fullSend:           return "Every prescribed set hit at or above target. No rep left behind — that's how it's done."
+        case .comeback:           return "You came back — and that's the hardest set of all. So proud of you for showing up again."
+        }
+    }
+
+    /// A short shout for the badge itself.
+    var cheer: String {
+        switch self {
+        case .perfectWeek:        return "Flawless!"
+        case .perfectMonth:       return "Untouchable!"
+        case .streak4:            return "On a roll!"
+        case .streak12:           return "Unstoppable!"
+        case .doseStreak30:       return "Locked in!"
+        case .workouts10:         return "Ten down!"
+        case .workouts25:         return "Twenty-five strong!"
+        case .workouts50:         return "Fifty & fierce!"
+        case .workouts100:        return "Triple digits!"
+        case .workouts250:        return "Legendary!"
+        case .millionPounds:      return "Seven figures!"
+        case .firstPR:            return "Record breaker!"
+        case .upAcrossTheBoard:   return "Stronger everywhere!"
+        case .tripleCrown:        return "Crowned!"
+        case .thousandPoundClub:  return "Welcome to the club!"
+        case .fullSend:           return "Full send!"
+        case .comeback:           return "Welcome back!"
+        }
+    }
+
+    /// How to earn it — shown on locked awards. Encouraging, never preachy.
+    var howTo: String {
+        switch self {
+        case .perfectWeek:        return "Finish every workout your coach plans in a week, nothing missed."
+        case .perfectMonth:       return "String four perfect weeks together, back to back."
+        case .streak4:            return "Train at least once a week, four weeks running."
+        case .streak12:           return "Train at least once a week for twelve straight weeks."
+        case .doseStreak30:       return "Thirty days in a row, every dose on time. Private — just you and your coach."
+        case .workouts10:         return "Complete 10 workouts."
+        case .workouts25:         return "Complete 25 workouts."
+        case .workouts50:         return "Complete 50 workouts."
+        case .workouts100:        return "Complete 100 workouts."
+        case .workouts250:        return "Complete 250 workouts."
+        case .millionPounds:      return "Move 1,000,000 lb in total across every set you log."
+        case .firstPR:            return "Set your first personal record on a main lift."
+        case .upAcrossTheBoard:   return "Go heavier on every main lift in the same week."
+        case .tripleCrown:        return "PR your squat, bench and deadlift within one 12-week block."
+        case .thousandPoundClub:  return "Get your squat, bench and deadlift to total 1,000 lb (estimated 1RMs)."
+        case .fullSend:           return "Hit every prescribed set at or above target in one workout."
+        case .comeback:           return "Come back and train after 14+ days away. It counts — big time."
         }
     }
 

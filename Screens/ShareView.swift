@@ -33,6 +33,8 @@ struct ShareView: View {
     @State private var showTagReminder = false
     @State private var pendingImage: UIImage?
     @State private var pendingTarget: SocialTarget = .instagram
+    @State private var showCamera = false
+    @State private var showCameraDenied = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -41,10 +43,10 @@ struct ShareView: View {
                     Eyebrow(text: "Show It Off")
                     Text("Share").font(BrandFont.display(48)).foregroundColor(.white)
                     Text("Snap a shot of today's win. Pick what to show on the border, then share.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                        .font(BrandFont.body(14)).foregroundColor(BrandDark.mute)
 
                     // Format — Story gives far more room for the PR to be the hero.
-                    Text("FORMAT").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("FORMAT").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(BrandDark.volt)
                     HStack(spacing: 10) {
                         ForEach(ShareFormat.allCases) { f in
                             Button {
@@ -52,11 +54,11 @@ struct ShareView: View {
                             } label: {
                                 Text(f.rawValue)
                                     .font(BrandFont.body(13, .semibold))
-                                    .foregroundColor(format == f ? Brand.black : .white)
+                                    .foregroundColor(format == f ? BrandDark.black : .white)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
-                                    .background(format == f ? Brand.volt : Brand.black).clipShape(Capsule())
-                                    .overlay(Capsule().stroke(format == f ? Brand.volt : Brand.line, lineWidth: 1))
+                                    .background(format == f ? BrandDark.volt : BrandDark.black).clipShape(Capsule())
+                                    .overlay(Capsule().stroke(format == f ? BrandDark.volt : BrandDark.line, lineWidth: 1))
                             }
                         }
                     }
@@ -80,7 +82,7 @@ struct ShareView: View {
                         }
 
                     // Field picker
-                    Text("SHOW ON CARD").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("SHOW ON CARD").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(BrandDark.volt)
                     let cols = [GridItem(.flexible()), GridItem(.flexible())]
                     LazyVGrid(columns: cols, spacing: 10) {
                         // "New PR" only makes sense when there's actually a record to show.
@@ -96,7 +98,7 @@ struct ShareView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: enabled.contains(f) ? "checkmark.square.fill" : "square")
-                                        .foregroundColor(enabled.contains(f) ? Brand.volt : Brand.mute)
+                                        .foregroundColor(enabled.contains(f) ? BrandDark.volt : BrandDark.mute)
                                     Text(f.rawValue).font(BrandFont.body(13, .semibold)).foregroundColor(.white)
                                     Spacer()
                                 }
@@ -105,11 +107,35 @@ struct ShareView: View {
                         }
                     }
 
-                    PhotosPicker(selection: $pickedItem, matching: .images, photoLibrary: .shared()) {
-                        HStack { Image(systemName: "camera.fill"); Text(chosenImage == nil ? "Take / Choose Photo" : "Change Photo") }
-                            .font(BrandFont.body(14, .bold)).foregroundColor(.white)
-                            .frame(maxWidth: .infinity).padding(.vertical, 16)
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt, lineWidth: 2))
+                    // Photo source — camera and library side by side.
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                Task {
+                                    let ok = await CameraAccess.request()
+                                    await MainActor.run {
+                                        if ok { showCamera = true } else { showCameraDenied = true }
+                                    }
+                                }
+                            } label: {
+                                photoSourceLabel("camera.fill", chosenImage == nil ? "Take Photo" : "Retake")
+                            }
+                        }
+                        PhotosPicker(selection: $pickedItem, matching: .images, photoLibrary: .shared()) {
+                            photoSourceLabel("photo.on.rectangle",
+                                             CameraPicker.isAvailable ? "Library"
+                                             : (chosenImage == nil ? "Choose Photo" : "Change Photo"))
+                        }
+                    }
+                    .alert("Camera access is off", isPresented: $showCameraDenied) {
+                        Button("Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Turn on Camera for Big Scherly Training in Settings to snap your share photo here.")
                     }
                     Color.clear.frame(height: 80)
                 }
@@ -118,16 +144,23 @@ struct ShareView: View {
 
             // Floating share button (bottom-right)
             Button { withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { showDrawer = true } } label: {
-                Image(systemName: "square.and.arrow.up").foregroundColor(Brand.black).font(.system(size: 22, weight: .bold))
-                    .frame(width: 62, height: 62).background(Circle().fill(Brand.volt))
-                    .shadow(color: Brand.volt.opacity(0.4), radius: 12)
+                Image(systemName: "square.and.arrow.up").foregroundColor(BrandDark.black).font(.system(size: 22, weight: .bold))
+                    .frame(width: 62, height: 62).background(Circle().fill(BrandDark.volt))
+                    .shadow(color: BrandDark.volt.opacity(0.4), radius: 12)
             }
             .padding(24)
 
             if showDrawer { ShareDrawer(show: $showDrawer, onShare: routeShare) }
         }
         .sheet(isPresented: $showShareSheet) {
-            if let img = renderedCard { ActivityView(items: [img]) }
+            if let img = renderedCard {
+                ActivityView(items: [img]) { activity in
+                    // Only social destinations mark the calendar.
+                    if let platform = ShareLog.platformName(forActivity: activity) {
+                        ShareLog.shared.record(workoutDate: store.shareStats.date, platform: platform)
+                    }
+                }
+            }
         }
         .alert("Tag your coach!", isPresented: $showTagReminder) {
             Button("Got it — open \(pendingTarget == .facebook ? "Facebook" : "Instagram")") {
@@ -136,6 +169,13 @@ struct ShareView: View {
             Button("Cancel", role: .cancel) { pendingImage = nil }
         } message: {
             Text("Before you post, remember to tag @big.scherly so we can find your win and reshare it. 👑")
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            // Live viewfinder inside the card: same stats/logo/border, clear photo area.
+            ShareCameraView(format: format, chrome: AnyView(cardLayout { Color.clear })) { image in
+                if let image { chosenImage = image }
+                showCamera = false
+            }
         }
         .onChange(of: pickedItem) { _, item in
             guard let item else { return }
@@ -183,14 +223,22 @@ struct ShareView: View {
     @MainActor private func launchPendingStory() {
         guard let img = pendingImage else { return }
         let ok = SocialShare.shareToStory(img, target: pendingTarget)
-        if !ok { showShareSheet = true }   // not installed after all — fall back
+        if ok {
+            ShareLog.shared.record(workoutDate: store.shareStats.date,
+                                   platform: pendingTarget == .facebook ? "Facebook" : "Instagram")
+        } else {
+            showShareSheet = true   // not installed after all — fall back
+        }
         pendingImage = nil
     }
 
     var shareCard: some View {
-        ZStack {
-            // Photo — fills the card's fixed canonical frame.
-            Rectangle().fill(Brand.black)
+        cardLayout { photoLayer }
+    }
+
+    // Photo — fills the card's fixed canonical frame.
+    private var photoLayer: some View {
+        Rectangle().fill(BrandDark.black)
                 .overlay(
                     Group {
                         if let img = chosenImage {
@@ -201,10 +249,17 @@ struct ShareView: View {
                     }
                 )
                 .overlay(
-                    Image(systemName: "photo").foregroundColor(Brand.mute).font(.system(size: 40))
+                    Image(systemName: "photo").foregroundColor(BrandDark.mute).font(.system(size: 40))
                         .opacity(chosenImage == nil && UIImage(named: "photo_front") == nil ? 1 : 0)
                 )
                 .clipped()
+    }
+
+    /// The card around any photo layer. The Share preview and the export pass the
+    /// real photo; the camera passes a clear layer so the live viewfinder shows through.
+    func cardLayout<Photo: View>(@ViewBuilder photo: () -> Photo) -> some View {
+        ZStack {
+            photo()
 
             // Scrim behind the text so stats stay readable on a bright photo.
             LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.75)],
@@ -230,13 +285,13 @@ struct ShareView: View {
                     VStack(spacing: 1) {
                         HStack(spacing: 4) {
                             Image(systemName: aw.icon)
-                                .font(.system(size: 7)).foregroundColor(Brand.black)
+                                .font(.system(size: 7)).foregroundColor(BrandDark.black)
                             Text(aw.title.uppercased())
                                 .font(BrandFont.body(7, .bold)).tracking(1.2)
-                                .foregroundColor(Brand.black)
+                                .foregroundColor(BrandDark.black)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Brand.volt).clipShape(Capsule())
+                        .background(BrandDark.volt).clipShape(Capsule())
 
                         if let s0 = aw.shareStats.first {
                             Text(s0.value)
@@ -244,7 +299,7 @@ struct ShareView: View {
                                 .shadow(color: .black.opacity(0.7), radius: 4)
                             Text(s0.label)
                                 .font(BrandFont.body(7, .bold)).tracking(1.2)
-                                .foregroundColor(Brand.volt)
+                                .foregroundColor(BrandDark.volt)
                                 .shadow(color: .black.opacity(0.7), radius: 3)
                         }
                     }
@@ -255,12 +310,12 @@ struct ShareView: View {
                     VStack(spacing: 1) {
                         HStack(spacing: 4) {
                             Image(systemName: "trophy.fill")
-                                .font(.system(size: 7)).foregroundColor(Brand.black)
+                                .font(.system(size: 7)).foregroundColor(BrandDark.black)
                             Text(pr.isFirstEver ? "FIRST RECORD" : "NEW PR")
-                                .font(BrandFont.body(7, .bold)).tracking(1.2).foregroundColor(Brand.black)
+                                .font(BrandFont.body(7, .bold)).tracking(1.2).foregroundColor(BrandDark.black)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Brand.volt).clipShape(Capsule())
+                        .background(BrandDark.volt).clipShape(Capsule())
 
                         Text("\(pr.reps)×\(Int(pr.weight))")
                             .font(BrandFont.display(20))
@@ -268,7 +323,7 @@ struct ShareView: View {
                             .shadow(color: .black.opacity(0.7), radius: 4)
                         Text(pr.exercise.uppercased())
                             .font(BrandFont.body(7, .bold)).tracking(1.2)
-                            .foregroundColor(Brand.volt)
+                            .foregroundColor(BrandDark.volt)
                             .shadow(color: .black.opacity(0.7), radius: 3)
                     }
                     .padding(.top, 10)
@@ -297,21 +352,29 @@ struct ShareView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 28)
                 .inset(by: 2.5)
-                .stroke(Brand.volt, lineWidth: 5)
+                .stroke(BrandDark.volt, lineWidth: 5)
         )
         .padding(10)
     }
 
+    func photoSourceLabel(_ icon: String, _ title: String) -> some View {
+        HStack(spacing: 8) { Image(systemName: icon); Text(title) }
+            .font(BrandFont.body(14, .bold)).foregroundColor(.white)
+            .frame(maxWidth: .infinity).padding(.vertical, 16)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(BrandDark.volt, lineWidth: 2))
+            .contentShape(Rectangle())
+    }
+
     func bigStat(_ v: String, _ l: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(v).font(BrandFont.display(32)).foregroundColor(Brand.volt)
+            Text(v).font(BrandFont.display(32)).foregroundColor(BrandDark.volt)
             Text(l).font(BrandFont.body(9, .bold)).tracking(1.5).foregroundColor(.white)
         }
         .shadow(color: .black, radius: 4)
     }
     func statChip(_ t: String) -> some View {
-        Text(t).font(BrandFont.body(11, .bold)).foregroundColor(Brand.black)
-            .padding(.horizontal, 10).padding(.vertical, 5).background(Brand.volt).clipShape(Capsule())
+        Text(t).font(BrandFont.body(11, .bold)).foregroundColor(BrandDark.black)
+            .padding(.horizontal, 10).padding(.vertical, 5).background(BrandDark.volt).clipShape(Capsule())
     }
     func dateLabel(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; return f.string(from: d) }
 }
@@ -335,7 +398,7 @@ struct ShareDrawer: View {
             Color.black.opacity(0.55).ignoresSafeArea()
                 .onTapGesture { withAnimation { show = false } }
             VStack(alignment: .leading, spacing: 20) {
-                Capsule().fill(Brand.mute).frame(width: 40, height: 4).frame(maxWidth: .infinity)
+                Capsule().fill(BrandDark.mute).frame(width: 40, height: 4).frame(maxWidth: .infinity)
                 Text("Share Your Win").font(BrandFont.display(28)).foregroundColor(.white)
 
                 // Social grid
@@ -344,12 +407,12 @@ struct ShareDrawer: View {
                     ForEach(socials, id: \.0) { s in
                         Button { onShare(s.2) } label: {
                             VStack(spacing: 8) {
-                                Image(systemName: s.1).font(.system(size: 30)).foregroundColor(Brand.volt)
+                                Image(systemName: s.1).font(.system(size: 30)).foregroundColor(BrandDark.volt)
                                 Text(s.0).font(BrandFont.body(11, .semibold)).foregroundColor(.white)
                                 // Show which ones jump straight into the app.
                                 if s.2.canDeepLink {
                                     Text("DIRECT").font(BrandFont.body(7, .bold)).tracking(0.8)
-                                        .foregroundColor(Brand.volt.opacity(0.8))
+                                        .foregroundColor(BrandDark.volt.opacity(0.8))
                                 }
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 16).card(padding: 0)
@@ -360,18 +423,18 @@ struct ShareDrawer: View {
                 // Apple system share sheet
                 Button { onShare(.systemSheet) } label: {
                     HStack { Image(systemName: "square.and.arrow.up"); Text("More — Messages, Mail, AirDrop…") }
-                        .font(BrandFont.body(14, .bold)).foregroundColor(Brand.black)
-                        .frame(maxWidth: .infinity).padding(.vertical, 16).background(Brand.volt)
+                        .font(BrandFont.body(14, .bold)).foregroundColor(BrandDark.black)
+                        .frame(maxWidth: .infinity).padding(.vertical, 16).background(BrandDark.volt)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 Button { withAnimation { show = false } } label: {
-                    Text("Cancel").font(BrandFont.body(14, .semibold)).foregroundColor(Brand.mute)
+                    Text("Cancel").font(BrandFont.body(14, .semibold)).foregroundColor(BrandDark.mute)
                         .frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
             }
             .padding(24).padding(.bottom, 12)
-            .background(Brand.bg)
-            .overlay(Rectangle().fill(Brand.volt).frame(height: 3), alignment: .top)
+            .background(BrandDark.bg)
+            .overlay(Rectangle().fill(BrandDark.volt).frame(height: 3), alignment: .top)
             .transition(.move(edge: .bottom))
         }
     }
@@ -382,8 +445,17 @@ struct ShareDrawer: View {
 // Messages, Mail, AirDrop, Photos, or anywhere the user has installed.
 struct ActivityView: UIViewControllerRepresentable {
     let items: [Any]
+    /// Called with the destination's activity type when a share completes.
+    var onComplete: ((String?) -> Void)? = nil
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let done = onComplete
+        vc.completionWithItemsHandler = { type, completed, _, _ in
+            guard completed else { return }
+            let raw = type?.rawValue
+            DispatchQueue.main.async { done?(raw) }
+        }
+        return vc
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }

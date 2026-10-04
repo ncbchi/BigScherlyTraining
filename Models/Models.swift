@@ -51,7 +51,7 @@ struct ExerciseSet: Identifiable, Codable {
     var targetWeight: Double          // prescribed
     var loggedReps: Int? = nil        // actual achieved
     var loggedWeight: Double? = nil
-    var rpe: Int? = nil               // 1-10 difficulty (rate of perceived exertion)
+    var rpe: Double? = nil            // 1–10 in half steps (rate of perceived exertion)
     var loggedAt: Date? = nil         // when this set was recorded (for per-exercise HR slicing)
 
     var volume: Double {              // for total-weight stats
@@ -88,7 +88,12 @@ struct LoggedSetRecord: Identifiable, Codable {
     var id: String
     var reps: Int
     var weight: Double
-    var rpe: Int?
+    var rpe: Double?
+}
+
+extension Double {
+    /// RPE the way people write it: "8" or "8.5".
+    var rpeText: String { self == rounded() ? String(Int(self)) : String(format: "%.1f", self) }
 }
 
 // MARK: Macros

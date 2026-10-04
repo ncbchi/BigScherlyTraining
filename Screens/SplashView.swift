@@ -19,7 +19,7 @@ struct SplashView: View {
             Color.black.ignoresSafeArea()
 
             Circle()
-                .stroke(Brand.volt.opacity(ringOpacity), lineWidth: 3)
+                .stroke(BrandDark.volt.opacity(ringOpacity), lineWidth: 3)
                 .frame(width: 240, height: 240)
                 .scaleEffect(ringScale)
 
@@ -27,12 +27,12 @@ struct SplashView: View {
                 logoBlock
                     .scaleEffect(appear ? 1 : 0.7)
                     .opacity(appear ? 1 : 0)
-                    .shadow(color: Brand.volt.opacity(glowPulse ? 0.7 : 0.2),
+                    .shadow(color: BrandDark.volt.opacity(glowPulse ? 0.7 : 0.2),
                             radius: glowPulse ? 30 : 8)
 
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Brand.line).frame(width: 180, height: 5)
-                    Capsule().fill(Brand.volt).frame(width: 180 * barFill, height: 5)
+                    Capsule().fill(BrandDark.line).frame(width: 180, height: 5)
+                    Capsule().fill(BrandDark.volt).frame(width: 180 * barFill, height: 5)
                 }
                 .opacity(appear ? 1 : 0)
             }
@@ -50,10 +50,10 @@ struct SplashView: View {
                 VStack(spacing: 10) {
                     Image(systemName: "dumbbell.fill")
                         .font(.system(size: 60, weight: .bold))
-                        .foregroundColor(Brand.volt)
+                        .foregroundColor(BrandDark.volt)
                         .rotationEffect(.degrees(spin ? 0 : -12))
                     Text("BIG SCHERLY")
-                        .font(BrandFont.display(38)).foregroundColor(Brand.volt)
+                        .font(BrandFont.display(38)).foregroundColor(BrandDark.volt)
                     Text("TRAINING")
                         .font(BrandFont.display(38)).foregroundColor(.white)
                         .overlay(shimmerBand.mask(Text("TRAINING").font(BrandFont.display(38))))

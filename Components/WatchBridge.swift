@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import HealthKit
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 #endif
@@ -50,12 +51,85 @@ final class WatchBridge: NSObject, ObservableObject {
         #endif
     }
 
+    // MARK: - Live session state from the Watch
+    // Sent by the Watch only while the phone is reachable; nothing here is stored.
+
+    /// A set the Watch just detected, used to pre-fill the phone's set fields.
+    struct LiveDetection: Equatable {
+        var workoutId: String
+        var exerciseId: String?
+        var setId: String?
+        var reps: Int
+        var meanVelocity: Double
+        var receivedAt: Date
+    }
+
+    @Published private(set) var liveHeartRate: Int? = nil
+    @Published private(set) var watchSessionActive = false
+    @Published private(set) var lastDetection: LiveDetection? = nil
+    @Published private(set) var lastLiveUpdate: Date? = nil
+    /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
+    @Published private(set) var liveSetStartedAt: Date? = nil
+
+    /// Session reported live within the last minute (guards against a silent Watch).
+    var watchSessionLive: Bool {
+        guard watchSessionActive, let t = lastLiveUpdate else { return false }
+        return Date().timeIntervalSince(t) < 60
+    }
+
+    /// The phone logged the set — don't offer the same detection again.
+    func clearDetection() { lastDetection = nil }
+
+    fileprivate func applyLive(_ message: [String: Any]) {
+        if let active = message["sessionActive"] as? Bool {
+            watchSessionActive = active
+            if !active { liveHeartRate = nil }
+        }
+        if let bpm = message["liveHR"] as? Int { liveHeartRate = bpm }
+        if message["setStarted"] as? Bool == true { liveSetStartedAt = Date() }
+        if message["detectedSet"] as? Bool == true,
+           let wid = message["workoutId"] as? String,
+           let reps = message["reps"] as? Int {
+            lastDetection = LiveDetection(workoutId: wid,
+                                          exerciseId: message["exerciseId"] as? String,
+                                          setId: message["setId"] as? String,
+                                          reps: reps,
+                                          meanVelocity: message["velocity"] as? Double ?? 0,
+                                          receivedAt: Date())
+        }
+        lastLiveUpdate = Date()
+    }
+
+    // MARK: - Starting the Watch session from the phone
+
+    /// A paired Watch with the app installed.
+    var isWatchReady: Bool {
+        #if canImport(WatchConnectivity)
+        guard let session, session.activationState == .activated else { return false }
+        return session.isPaired && session.isWatchAppInstalled
+        #else
+        return false
+        #endif
+    }
+
+    /// Launches the Watch app straight into a strength-training session (it opens on the
+    /// wrist even if the app wasn't running). Completion runs on the main thread.
+    func startWatchWorkout(completion: @escaping (Bool) -> Void) {
+        guard HKHealthStore.isHealthDataAvailable() else { completion(false); return }
+        let config = HKWorkoutConfiguration()
+        config.activityType = .traditionalStrengthTraining
+        config.locationType = .indoor
+        HKHealthStore().startWatchApp(with: config) { ok, _ in
+            DispatchQueue.main.async { completion(ok) }
+        }
+    }
+
     // MARK: - Live workout companion
 
     // Called by the phone when a set is edited from the Watch. The AppStore sets this
     // so incoming wrist edits flow through the same save path as phone edits.
     var onSetLogged: ((_ workoutId: String, _ exerciseId: String, _ setId: String,
-                       _ reps: Int?, _ weight: Double?, _ rpe: Int?) -> Void)?
+                       _ reps: Int?, _ weight: Double?, _ rpe: Double?) -> Void)?
 
     // Push the currently-active workout to the Watch as JSON (application context,
     // so the Watch always has the latest even if it reconnects).
@@ -92,7 +166,7 @@ struct WatchSet: Codable, Identifiable {
     var targetWeight: Double
     var loggedReps: Int?
     var loggedWeight: Double?
-    var rpe: Int?
+    var rpe: Double?
 }
 
 #if canImport(WatchConnectivity)
@@ -102,14 +176,35 @@ extension WatchBridge: WCSessionDelegate {
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
     // A set was logged from the wrist → apply it through the phone's save path.
+    // Live message when the phone was reachable…
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        handleIncoming(message)
+    }
+
+    // …or queued delivery when it wasn't (also how set motion data always arrives).
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        handleIncoming(userInfo)
+    }
+
+    private func handleIncoming(_ message: [String: Any]) {
+        if message["sessionActive"] != nil || message["liveHR"] != nil || message["detectedSet"] != nil {
+            DispatchQueue.main.async { self.applyLive(message) }
+            return
+        }
+        if let data = message["setMotion"] as? Data {
+            guard let motion = try? JSONDecoder().decode(SetMotion.self, from: data) else { return }
+            DispatchQueue.main.async {
+                SetMotionStore.shared.ingest(motion)
+            }
+            return
+        }
         guard message["logSet"] as? Bool == true,
               let workoutId = message["workoutId"] as? String,
               let exerciseId = message["exerciseId"] as? String,
               let setId = message["setId"] as? String else { return }
         let reps = message["reps"] as? Int
         let weight = message["weight"] as? Double
-        let rpe = message["rpe"] as? Int
+        let rpe = message["rpe"] as? Double     // half steps; whole numbers arrive as Double too
         DispatchQueue.main.async {
             self.onSetLogged?(workoutId, exerciseId, setId, reps, weight, rpe)
         }

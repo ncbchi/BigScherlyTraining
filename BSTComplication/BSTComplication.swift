@@ -31,7 +31,7 @@ struct BSTComplicationProvider: TimelineProvider {
     }
 
     private func currentEntry() -> BSTComplicationEntry {
-        let shared = UserDefaults(suiteName: "group.com.nicholasbowen.bigscherlytraining") ?? .standard
+        let shared = UserDefaults(suiteName: "group.bigscherlytraining.app") ?? .standard
         let ctx = shared.dictionary(forKey: "bst.watch.lastContext")
             ?? UserDefaults.standard.dictionary(forKey: "bst.watch.lastContext") ?? [:]
         return BSTComplicationEntry(

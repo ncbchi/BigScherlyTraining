@@ -12,11 +12,11 @@ struct PRCelebrationView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Capsule().fill(Brand.line).frame(width: 40, height: 5).padding(.top, 10)
+            Capsule().fill(BrandDark.line).frame(width: 40, height: 5).padding(.top, 10)
 
             Image(systemName: "trophy.fill")
                 .font(.system(size: 44))
-                .foregroundColor(Brand.volt)
+                .foregroundColor(BrandDark.volt)
                 .padding(.top, 6)
 
             Text(pr.isFirstEver ? "First Record" : "New PR")
@@ -25,18 +25,18 @@ struct PRCelebrationView: View {
 
             Text(pr.exercise.uppercased())
                 .font(BrandFont.body(12, .bold)).tracking(1.5)
-                .foregroundColor(Brand.volt)
+                .foregroundColor(BrandDark.volt)
 
             Text("\(pr.reps) × \(Int(pr.weight)) lb")
                 .font(BrandFont.display(46))
-                .foregroundColor(Brand.volt)
+                .foregroundColor(BrandDark.volt)
 
             VStack(spacing: 4) {
                 Text("\(Int(pr.estimatedOneRepMax)) lb estimated 1RM")
                     .font(BrandFont.body(14)).foregroundColor(.white)
                 if !pr.isFirstEver {
                     Text("+\(Int(pr.gain)) lb on your previous best")
-                        .font(BrandFont.body(13, .bold)).foregroundColor(Brand.volt)
+                        .font(BrandFont.body(13, .bold)).foregroundColor(BrandDark.volt)
                 }
             }
 
@@ -54,19 +54,19 @@ struct PRCelebrationView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
-                    .background(Brand.volt)
+                    .background(BrandDark.volt)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .foregroundColor(Brand.black)
+                    .foregroundColor(BrandDark.black)
                 }
 
                 Button("Not now") { dismiss() }
                     .font(BrandFont.body(14))
-                    .foregroundColor(Brand.mute)
+                    .foregroundColor(BrandDark.mute)
                     .padding(.bottom, 8)
             }
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Brand.bg)
+        .background(BrandDark.bg)
     }
 }

@@ -8,23 +8,20 @@ import PhotosUI
 struct TrainerShareView: View {
     @EnvironmentObject var store: AppStore
 
-    // Which business stats to show on the card.
+    // Crew totals for this Monday–Sunday week. Totals only — never a client's name or numbers.
     enum BizField: String, CaseIterable, Identifiable {
-        case clients, workouts, attention, awards, drifting, avgTrained
+        case workouts, awards, clients
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .clients:    return "Active Clients"
-            case .workouts:   return "Workouts / Week"
-            case .attention:  return "Need Attention"
-            case .awards:     return "Awards / Week"
-            case .drifting:   return "Drifting"
-            case .avgTrained: return "Avg Days Trained"
+            case .workouts: return "Workouts Logged"
+            case .awards:   return "Awards Earned"
+            case .clients:  return "Athletes"
             }
         }
     }
 
-    @State private var enabled: Set<BizField> = [.clients, .workouts, .awards]
+    @State private var enabled: Set<BizField> = [.workouts, .awards, .clients]
     @State private var format: ShareFormat = .story
     @State private var showDrawer = false
     @State private var pickedItem: PhotosPickerItem?
@@ -41,23 +38,21 @@ struct TrainerShareView: View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Eyebrow(text: "Show It Off")
-                    Text("Share").font(BrandFont.display(48)).foregroundColor(.white)
-                    Text("Share how your crew is showing up. Pick what to feature, then post it.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                    DSScreenHeader(eyebrow: "Show off the crew", title: "Share",
+                                   subtitle: "Pick what to feature, then post it.")
 
                     // Format
-                    Text("FORMAT").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("FORMAT").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(BrandDark.volt)
                     HStack(spacing: 10) {
                         ForEach(ShareFormat.allCases) { f in
                             Button { format = f } label: {
                                 Text(f.rawValue)
                                     .font(BrandFont.body(13, .semibold))
-                                    .foregroundColor(format == f ? Brand.black : .white)
+                                    .foregroundColor(format == f ? BrandDark.black : .white)
                                     .padding(.horizontal, 16).padding(.vertical, 10)
-                                    .background(format == f ? Brand.volt : Brand.black)
+                                    .background(format == f ? BrandDark.volt : BrandDark.black)
                                     .clipShape(Capsule())
-                                    .overlay(Capsule().stroke(Brand.line, lineWidth: format == f ? 0 : 1))
+                                    .overlay(Capsule().stroke(BrandDark.line, lineWidth: format == f ? 0 : 1))
                             }
                         }
                     }
@@ -68,7 +63,7 @@ struct TrainerShareView: View {
                         .frame(maxWidth: .infinity)
 
                     // Stat toggles
-                    Text("SHOW ON CARD").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("SHOW ON CARD").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(BrandDark.volt)
                     let cols = [GridItem(.flexible()), GridItem(.flexible())]
                     LazyVGrid(columns: cols, spacing: 10) {
                         ForEach(BizField.allCases) { f in
@@ -77,33 +72,37 @@ struct TrainerShareView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: enabled.contains(f) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(enabled.contains(f) ? Brand.volt : Brand.mute)
+                                        .foregroundColor(enabled.contains(f) ? BrandDark.volt : BrandDark.mute)
                                     Text(f.label).font(BrandFont.body(13, .semibold)).foregroundColor(.white)
                                     Spacer()
                                 }
-                                .padding(12).background(Brand.black)
+                                .padding(12).background(BrandDark.black)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(BrandDark.line, lineWidth: 1))
                             }
                         }
                     }
 
+                    Text("Totals only — no client names or numbers on the card.")
+                        .font(BrandFont.body(11)).foregroundColor(BrandDark.mute)
+
                     // Optional background photo
                     PhotosPicker(selection: $pickedItem, matching: .images) {
                         HStack {
-                            Image(systemName: "photo.on.rectangle").foregroundColor(Brand.volt)
+                            Image(systemName: "photo.on.rectangle").foregroundColor(BrandDark.volt)
                             Text(chosenImage == nil ? "Add a background photo" : "Change background photo")
                                 .font(BrandFont.body(14, .semibold)).foregroundColor(.white)
                             Spacer()
                         }
-                        .padding(14).background(Brand.black)
+                        .padding(14).background(BrandDark.black)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(BrandDark.line, lineWidth: 1))
                     }
                 }
-                .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 120)
+                .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 120)
             }
-            .background(Brand.bg.ignoresSafeArea())
+            .background(BrandDark.bg.ignoresSafeArea())
+            .dsTopFade()
             .refreshable { store.loadRoster() }
 
             // Share button
@@ -112,9 +111,9 @@ struct TrainerShareView: View {
                     Image(systemName: "square.and.arrow.up").font(.system(size: 16, weight: .bold))
                     Text("Share").font(BrandFont.body(16, .bold))
                 }
-                .foregroundColor(Brand.black)
+                .foregroundColor(BrandDark.black)
                 .padding(.horizontal, 28).padding(.vertical, 16)
-                .background(Brand.volt).clipShape(Capsule())
+                .background(BrandDark.volt).clipShape(Capsule())
                 .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
             }
             .padding(20)
@@ -149,7 +148,7 @@ struct TrainerShareView: View {
     // The rendered card — business stats over an optional photo.
     var shareCard: some View {
         ZStack {
-            Rectangle().fill(Brand.black)
+            Rectangle().fill(BrandDark.black)
                 .overlay(
                     Group {
                         if let img = chosenImage {
@@ -167,7 +166,7 @@ struct TrainerShareView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("STATE OF THE CREW")
-                            .font(BrandFont.body(8, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                            .font(BrandFont.body(8, .bold)).tracking(1.5).foregroundColor(BrandDark.volt)
                         Text("This Week")
                             .font(BrandFont.display(22)).foregroundColor(.white)
                             .shadow(color: .black.opacity(0.6), radius: 3)
@@ -187,7 +186,7 @@ struct TrainerShareView: View {
                     ForEach(shown) { f in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(value(for: f))
-                                .font(BrandFont.display(30)).foregroundColor(Brand.volt)
+                                .font(BrandFont.display(30)).foregroundColor(BrandDark.volt)
                                 .shadow(color: .black.opacity(0.7), radius: 3)
                             Text(f.label.uppercased())
                                 .font(BrandFont.body(8, .bold)).tracking(1).foregroundColor(.white)
@@ -201,19 +200,17 @@ struct TrainerShareView: View {
         .clipShape(RoundedRectangle(cornerRadius: 28))
         .overlay(
             RoundedRectangle(cornerRadius: 28).inset(by: 2.5)
-                .stroke(Brand.volt, lineWidth: 5)
+                .stroke(BrandDark.volt, lineWidth: 5)
         )
         .padding(10)
     }
 
     private func value(for f: BizField) -> String {
         switch f {
-        case .clients:    return "\(i.totalClients)"
-        case .workouts:   return "\(i.workoutsThisWeek)"
-        case .attention:  return "\(i.needingAttention)"
-        case .awards:     return "\(i.awardsThisWeek)"
-        case .drifting:   return "\(i.drifting)"
-        case .avgTrained: return i.avgDaysSinceTrained > 90 ? "—" : "\(i.avgDaysSinceTrained)d"
+        case .workouts: return "\(i.workoutsThisWeek)"
+        case .clients:  return "\(i.totalClients)"
+        case .awards:
+            return "\(store.recentAwards.filter { Calendar.training.isSameTrainingWeek($0.earnedAt, Date()) }.count)"
         }
     }
 

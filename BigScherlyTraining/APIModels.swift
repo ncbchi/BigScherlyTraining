@@ -30,7 +30,7 @@ struct APISet: Decodable {
     let targetWeight: Double
     let loggedReps: Int?
     let loggedWeight: Double?
-    let rpe: Int?
+    let rpe: Double?
     let setOrder: Int
     let loggedAt: Date?
 
@@ -68,6 +68,9 @@ struct APIWorkout: Decodable {
     let scheduledDate: Date
     let completed: Bool
     let exercises: [APIExercise]
+    // v1.1 server. Optional so an older server still decodes.
+    let clientNote: String?
+    let originalDate: Date?
 
     func toModel() -> Workout {
         Workout(id: id, title: title, date: scheduledDate,

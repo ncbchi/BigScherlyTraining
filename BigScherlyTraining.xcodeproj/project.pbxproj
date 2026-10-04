@@ -8,6 +8,27 @@
 
 /* Begin PBXBuildFile section */
 		A50F8B81301454C7004ED65A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50F8B80301454C7004ED65A /* SettingsView.swift */; };
+		A524017F30708B01004524F5 /* CameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524017E30708B01004524F5 /* CameraPicker.swift */; };
+		A524018530708D0C004524F5 /* SetMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018330708D0C004524F5 /* SetMotion.swift */; };
+		A524018630708D0C004524F5 /* SetMotionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018430708D0C004524F5 /* SetMotionStore.swift */; };
+		A524018830708F8B004524F5 /* ShareCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018730708F8B004524F5 /* ShareCameraView.swift */; };
+		A524018B30709247004524F5 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018A30709247004524F5 /* StatsView.swift */; };
+		A524018C30709247004524F5 /* StatsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018930709247004524F5 /* StatsDetailView.swift */; };
+		A524018F30709265004524F5 /* DemoMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018D30709265004524F5 /* DemoMotion.swift */; };
+		A524019030709265004524F5 /* StatsEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524018E30709265004524F5 /* StatsEngine.swift */; };
+		A5240192307099F1004524F5 /* StatsCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5240191307099F1004524F5 /* StatsCalendar.swift */; };
+		A5240194307099F8004524F5 /* ShareLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5240193307099F8004524F5 /* ShareLog.swift */; };
+		A52401963070A0D6004524F5 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401953070A0D6004524F5 /* DesignSystem.swift */; };
+		A52401983070A276004524F5 /* WorkoutSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401973070A276004524F5 /* WorkoutSessionView.swift */; };
+		A524019A3070A9C1004524F5 /* TrainingWeek.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401993070A9C1004524F5 /* TrainingWeek.swift */; };
+		A524019C3070A9D7004524F5 /* MacroPlanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524019B3070A9D7004524F5 /* MacroPlanStore.swift */; };
+		A524019E3070A9EF004524F5 /* ActivityLogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524019D3070A9EF004524F5 /* ActivityLogSheet.swift */; };
+		A52401A13070A9FF004524F5 /* EffortEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524019F3070A9FF004524F5 /* EffortEstimator.swift */; };
+		A52401A23070A9FF004524F5 /* HealthActivityReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401A03070A9FF004524F5 /* HealthActivityReader.swift */; };
+		A52401A43070AB4C004524F5 /* PhotoCompare.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401A33070AB4C004524F5 /* PhotoCompare.swift */; };
+		A52401A63070BA62004524F5 /* ServerSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401A53070BA62004524F5 /* ServerSync.swift */; };
+		A52401A83070C039004524F5 /* CoachKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401A73070C039004524F5 /* CoachKit.swift */; };
+		A52401AA3070C048004524F5 /* CoachClientTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52401A93070C048004524F5 /* CoachClientTabs.swift */; };
 		A52E98F93001CCDE002EFD8C /* Supplements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98F83001CCDE002EFD8C /* Supplements.swift */; };
 		A52E98FB3001CCF3002EFD8C /* SupplementEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */; };
 		A52E98FD3001CCFC002EFD8C /* SupplementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */; };
@@ -21,6 +42,7 @@
 		A585FBD73008678B008E8BE1 /* BSTComplicationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A5976FB32FF82FC20088A450 /* bell.caf in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB12FF82FC20088A450 /* bell.caf */; };
 		A5976FB42FF82FC20088A450 /* bell.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB22FF82FC20088A450 /* bell.mp3 */; };
+		A5A491BC3071B811001B07A1 /* WidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A491BB3071B811001B07A1 /* WidgetBridge.swift */; };
 		A5AB68902FF8CE9C004396CD /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68862FF8CE9C004396CD /* LoginView.swift */; };
 		A5AB68912FF8CE9C004396CD /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68852FF8CE9C004396CD /* HistoryView.swift */; };
 		A5AB68922FF8CE9C004396CD /* ShareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB688A2FF8CE9C004396CD /* ShareView.swift */; };
@@ -43,6 +65,11 @@
 		A5B90C10301026D20081F533 /* FullScreenPhotoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */; };
 		A5D04AB8300EED4B0051D2DF /* CheckInFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */; };
 		A5D3C0352FFC4A6100F53A37 /* VideoCompressor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */; };
+		A5DC6C573068A1D10077FFCD /* TrainerWorkoutsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5DC6C563068A1D10077FFCD /* TrainerWorkoutsView.swift */; };
+		A5F6672230717255005E9580 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBC93008678A008E8BE1 /* WidgetKit.framework */; };
+		A5F6672330717255005E9580 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBCB3008678A008E8BE1 /* SwiftUI.framework */; };
+		A5F6673030717257005E9580 /* BigScherlyWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A5F6672130717255005E9580 /* BigScherlyWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A5F66787307178EE005E9580 /* LiveSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F6678530717881005E9580 /* LiveSessionController.swift */; };
 		FF2000000000000000000000 /* Awards.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000000000000000000000 /* Awards.swift */; };
 		FF2000100000000000000000 /* TrainerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000100000000000000000 /* TrainerModels.swift */; };
 		FF2000300000000000000000 /* AwardEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1000300000000000000000 /* AwardEngine.swift */; };
@@ -83,6 +110,13 @@
 			remoteGlobalIDString = A585FBC63008678A008E8BE1;
 			remoteInfo = BSTComplicationExtension;
 		};
+		A5F6672E30717257005E9580 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5F6672030717255005E9580;
+			remoteInfo = BigScherlyWidgetsExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -104,11 +138,41 @@
 			);
 			name = "Embed Foundation Extensions";
 		};
+		A5F6673130717257005E9580 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				A5F6673030717257005E9580 /* BigScherlyWidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* BigScherlyTraining.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BigScherlyTraining.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A50F8B80301454C7004ED65A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A524017E30708B01004524F5 /* CameraPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPicker.swift; sourceTree = "<group>"; };
+		A524018330708D0C004524F5 /* SetMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetMotion.swift; sourceTree = "<group>"; };
+		A524018430708D0C004524F5 /* SetMotionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetMotionStore.swift; sourceTree = "<group>"; };
+		A524018730708F8B004524F5 /* ShareCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareCameraView.swift; sourceTree = "<group>"; };
+		A524018930709247004524F5 /* StatsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsDetailView.swift; sourceTree = "<group>"; };
+		A524018A30709247004524F5 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
+		A524018D30709265004524F5 /* DemoMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoMotion.swift; sourceTree = "<group>"; };
+		A524018E30709265004524F5 /* StatsEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsEngine.swift; sourceTree = "<group>"; };
+		A5240191307099F1004524F5 /* StatsCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsCalendar.swift; sourceTree = "<group>"; };
+		A5240193307099F8004524F5 /* ShareLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareLog.swift; sourceTree = "<group>"; };
+		A52401953070A0D6004524F5 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		A52401973070A276004524F5 /* WorkoutSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSessionView.swift; sourceTree = "<group>"; };
+		A52401993070A9C1004524F5 /* TrainingWeek.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingWeek.swift; sourceTree = "<group>"; };
+		A524019B3070A9D7004524F5 /* MacroPlanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroPlanStore.swift; sourceTree = "<group>"; };
+		A524019D3070A9EF004524F5 /* ActivityLogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityLogSheet.swift; sourceTree = "<group>"; };
+		A524019F3070A9FF004524F5 /* EffortEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffortEstimator.swift; sourceTree = "<group>"; };
+		A52401A03070A9FF004524F5 /* HealthActivityReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthActivityReader.swift; sourceTree = "<group>"; };
+		A52401A33070AB4C004524F5 /* PhotoCompare.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCompare.swift; sourceTree = "<group>"; };
+		A52401A53070BA62004524F5 /* ServerSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSync.swift; sourceTree = "<group>"; };
+		A52401A73070C039004524F5 /* CoachKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachKit.swift; sourceTree = "<group>"; };
+		A52401A93070C048004524F5 /* CoachClientTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachClientTabs.swift; sourceTree = "<group>"; };
 		A52E98F83001CCDE002EFD8C /* Supplements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Supplements.swift; sourceTree = "<group>"; };
 		A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupplementEngine.swift; sourceTree = "<group>"; };
 		A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupplementsView.swift; sourceTree = "<group>"; };
@@ -122,6 +186,8 @@
 		A585FBCB3008678A008E8BE1 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		A5976FB12FF82FC20088A450 /* bell.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = bell.caf; sourceTree = "<group>"; };
 		A5976FB22FF82FC20088A450 /* bell.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = bell.mp3; sourceTree = "<group>"; };
+		A5A491BB3071B811001B07A1 /* WidgetBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetBridge.swift; sourceTree = "<group>"; };
+		A5A491BE3071B980001B07A1 /* BigScherlyWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BigScherlyWidgetsExtension.entitlements; sourceTree = "<group>"; };
 		A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseHistoryView.swift; sourceTree = "<group>"; };
 		A5AB687C2FF8CE9C004396CD /* InlineRestButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineRestButton.swift; sourceTree = "<group>"; };
 		A5AB687D2FF8CE9C004396CD /* MetallicText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetallicText.swift; sourceTree = "<group>"; };
@@ -146,6 +212,10 @@
 		A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullScreenPhotoView.swift; sourceTree = "<group>"; };
 		A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckInFlow.swift; sourceTree = "<group>"; };
 		A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressor.swift; sourceTree = "<group>"; };
+		A5DC6C553068A1D10077FFCD /* CameraPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPicker.swift; sourceTree = "<group>"; };
+		A5DC6C563068A1D10077FFCD /* TrainerWorkoutsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerWorkoutsView.swift; sourceTree = "<group>"; };
+		A5F6672130717255005E9580 /* BigScherlyWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BigScherlyWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5F6678530717881005E9580 /* LiveSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSessionController.swift; sourceTree = "<group>"; };
 		FF1000000000000000000000 /* Awards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Awards.swift; sourceTree = "<group>"; };
 		FF1000100000000000000000 /* TrainerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainerModels.swift; sourceTree = "<group>"; };
 		FF1000300000000000000000 /* AwardEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwardEngine.swift; sourceTree = "<group>"; };
@@ -158,7 +228,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A50F8B84301458C8004ED65A /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */ = {
+		A524018030708C0B004524F5 /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -172,6 +242,21 @@
 				Info.plist,
 			);
 			target = A585FBC63008678A008E8BE1 /* BSTComplicationExtension */;
+		};
+		A5F6673430717257005E9580 /* Exceptions for "BigScherlyWidgets" folder in "BigScherlyWidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A5F6672030717255005E9580 /* BigScherlyWidgetsExtension */;
+		};
+		A5F6678230717799005E9580 /* Exceptions for "BigScherlyWidgets" folder in "BigScherlyTraining" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				WidgetSnapshot.swift,
+				WorkoutActivity.swift,
+			);
+			target = 000000000000000100000000 /* BigScherlyTraining */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -192,9 +277,18 @@
 		A5976F962FF829630088A450 /* BigScherlyTraining */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A50F8B84301458C8004ED65A /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */,
+				A524018030708C0B004524F5 /* Exceptions for "BigScherlyTraining" folder in "BigScherlyTraining" target */,
 			);
 			path = BigScherlyTraining;
+			sourceTree = "<group>";
+		};
+		A5F6672430717255005E9580 /* BigScherlyWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A5F6678230717799005E9580 /* Exceptions for "BigScherlyWidgets" folder in "BigScherlyTraining" target */,
+				A5F6673430717257005E9580 /* Exceptions for "BigScherlyWidgets" folder in "BigScherlyWidgetsExtension" target */,
+			);
+			path = BigScherlyWidgets;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -227,21 +321,30 @@
 				A585FBCA3008678A008E8BE1 /* WidgetKit.framework in Frameworks */,
 			);
 		};
+		A5F6671E30717255005E9580 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				A5F6672330717255005E9580 /* SwiftUI.framework in Frameworks */,
+				A5F6672230717255005E9580 /* WidgetKit.framework in Frameworks */,
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */,
-				A585FBCD3008678A008E8BE1 /* BSTComplication */,
-				A585FBC83008678A008E8BE1 /* Frameworks */,
-				000000000000000000000020 /* Products */,
-				A5976F962FF829630088A450 /* BigScherlyTraining */,
+				A5A491BE3071B980001B07A1 /* BigScherlyWidgetsExtension.entitlements */,
 				A5976FB12FF82FC20088A450 /* bell.caf */,
 				A5976FB22FF82FC20088A450 /* bell.mp3 */,
+				A5976F962FF829630088A450 /* BigScherlyTraining */,
+				A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */,
+				A5F6672430717255005E9580 /* BigScherlyWidgets */,
+				A585FBCD3008678A008E8BE1 /* BSTComplication */,
 				A5AB68802FF8CE9C004396CD /* Components */,
+				A585FBC83008678A008E8BE1 /* Frameworks */,
 				A5AB68822FF8CE9C004396CD /* Models */,
+				000000000000000000000020 /* Products */,
 				A5AB688D2FF8CE9C004396CD /* Screens */,
 				A5AB688F2FF8CE9C004396CD /* Theme */,
 			);
@@ -255,6 +358,7 @@
 				A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */,
 				A5B356D33015759500FD7182 /* BigScherlyWatch Watch AppTests.xctest */,
 				A5B356D43015759500FD7182 /* BigScherlyWatch Watch AppUITests.xctest */,
+				A5F6672130717255005E9580 /* BigScherlyWidgetsExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -262,8 +366,8 @@
 		A585FBC83008678A008E8BE1 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				A585FBC93008678A008E8BE1 /* WidgetKit.framework */,
 				A585FBCB3008678A008E8BE1 /* SwiftUI.framework */,
+				A585FBC93008678A008E8BE1 /* WidgetKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -271,21 +375,34 @@
 		A5AB68802FF8CE9C004396CD /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				A5A491BB3071B811001B07A1 /* WidgetBridge.swift */,
+				A5B90C0D3010266B0081F533 /* AuthedAsyncImage.swift */,
 				A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */,
 				FF1000300000000000000000 /* AwardEngine.swift */,
-				FF1000500000000000000000 /* ProgressEngine.swift */,
-				FF1000600000000000000000 /* SocialShare.swift */,
-				A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */,
-				A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */,
-				A585FB8C300865DF008E8BE1 /* WatchBridge.swift */,
-				A5B90C0D3010266B0081F533 /* AuthedAsyncImage.swift */,
-				A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */,
-				A555A88530082C930026B8B9 /* HealthKitManager.swift */,
+				A524017E30708B01004524F5 /* CameraPicker.swift */,
+				A524018D30709265004524F5 /* DemoMotion.swift */,
+				A524019F3070A9FF004524F5 /* EffortEstimator.swift */,
 				A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */,
+				A52401A03070A9FF004524F5 /* HealthActivityReader.swift */,
+				A555A88530082C930026B8B9 /* HealthKitManager.swift */,
 				A5AB687C2FF8CE9C004396CD /* InlineRestButton.swift */,
+				A5F6678530717881005E9580 /* LiveSessionController.swift */,
+				A524019B3070A9D7004524F5 /* MacroPlanStore.swift */,
 				A5AB687D2FF8CE9C004396CD /* MetallicText.swift */,
 				A5AB687E2FF8CE9C004396CD /* NavTray.swift */,
+				A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */,
+				FF1000500000000000000000 /* ProgressEngine.swift */,
 				A5AB687F2FF8CE9C004396CD /* RestTimerEngine.swift */,
+				A52401A53070BA62004524F5 /* ServerSync.swift */,
+				A524018330708D0C004524F5 /* SetMotion.swift */,
+				A524018430708D0C004524F5 /* SetMotionStore.swift */,
+				A5240193307099F8004524F5 /* ShareLog.swift */,
+				FF1000600000000000000000 /* SocialShare.swift */,
+				A524018E30709265004524F5 /* StatsEngine.swift */,
+				A52E98FA3001CCF3002EFD8C /* SupplementEngine.swift */,
+				A52401993070A9C1004524F5 /* TrainingWeek.swift */,
+				A5D3C0342FFC4A6100F53A37 /* VideoCompressor.swift */,
+				A585FB8C300865DF008E8BE1 /* WatchBridge.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -294,9 +411,9 @@
 			isa = PBXGroup;
 			children = (
 				FF1000000000000000000000 /* Awards.swift */,
-				FF1000100000000000000000 /* TrainerModels.swift */,
-				A52E98F83001CCDE002EFD8C /* Supplements.swift */,
 				A5AB68812FF8CE9C004396CD /* Models.swift */,
+				A52E98F83001CCDE002EFD8C /* Supplements.swift */,
+				FF1000100000000000000000 /* TrainerModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -304,24 +421,35 @@
 		A5AB688D2FF8CE9C004396CD /* Screens */ = {
 			isa = PBXGroup;
 			children = (
+				A524019D3070A9EF004524F5 /* ActivityLogSheet.swift */,
 				FF1000700000000000000000 /* AwardsView.swift */,
-				A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */,
-				FF1000800000000000000000 /* TrainerClientView.swift */,
-				FF1000900000000000000000 /* TrainerSections.swift */,
-				FF1001000000000000000000 /* TrainerShell.swift */,
-				A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */,
+				A5DC6C553068A1D10077FFCD /* CameraPicker.swift */,
 				A5AB68832FF8CE9C004396CD /* ChatView.swift */,
+				A5D04AB7300EED4B0051D2DF /* CheckInFlow.swift */,
+				A52401A93070C048004524F5 /* CoachClientTabs.swift */,
+				A52401A73070C039004524F5 /* CoachKit.swift */,
 				A5AB68842FF8CE9C004396CD /* DashboardView.swift */,
 				A5B90C0F301026D20081F533 /* FullScreenPhotoView.swift */,
 				A5AB68852FF8CE9C004396CD /* HistoryView.swift */,
 				A5AB68862FF8CE9C004396CD /* LoginView.swift */,
 				A5AB68872FF8CE9C004396CD /* MacrosView.swift */,
-				A50F8B80301454C7004ED65A /* SettingsView.swift */,
+				A52401A33070AB4C004524F5 /* PhotoCompare.swift */,
 				A5AB68882FF8CE9C004396CD /* ProgressScreens.swift */,
 				A5AB68892FF8CE9C004396CD /* SetPasswordView.swift */,
-				A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */,
+				A50F8B80301454C7004ED65A /* SettingsView.swift */,
+				A524018730708F8B004524F5 /* ShareCameraView.swift */,
 				A5AB688A2FF8CE9C004396CD /* ShareView.swift */,
 				A5AB688B2FF8CE9C004396CD /* SplashView.swift */,
+				A5240191307099F1004524F5 /* StatsCalendar.swift */,
+				A524018930709247004524F5 /* StatsDetailView.swift */,
+				A524018A30709247004524F5 /* StatsView.swift */,
+				A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */,
+				FF1000800000000000000000 /* TrainerClientView.swift */,
+				FF1000900000000000000000 /* TrainerSections.swift */,
+				A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */,
+				FF1001000000000000000000 /* TrainerShell.swift */,
+				A5DC6C563068A1D10077FFCD /* TrainerWorkoutsView.swift */,
+				A52401973070A276004524F5 /* WorkoutSessionView.swift */,
 				A5AB688C2FF8CE9C004396CD /* WorkoutsView.swift */,
 			);
 			path = Screens;
@@ -331,6 +459,7 @@
 			isa = PBXGroup;
 			children = (
 				A5AB688E2FF8CE9C004396CD /* Theme.swift */,
+				A52401953070A0D6004524F5 /* DesignSystem.swift */,
 			);
 			path = Theme;
 			sourceTree = "<group>";
@@ -346,11 +475,13 @@
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
 				A585FBB430086679008E8BE1 /* Embed Watch Content */,
+				A5F6673130717257005E9580 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				A585FBAF30086679008E8BE1 /* PBXTargetDependency */,
+				A5F6672F30717257005E9580 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A5976F962FF829630088A450 /* BigScherlyTraining */,
@@ -436,6 +567,24 @@
 			productReference = A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		A5F6672030717255005E9580 /* BigScherlyWidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5F6673530717257005E9580 /* Build configuration list for PBXNativeTarget "BigScherlyWidgetsExtension" */;
+			buildPhases = (
+				A5F6671D30717255005E9580 /* Sources */,
+				A5F6671E30717255005E9580 /* Frameworks */,
+				A5F6671F30717255005E9580 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				A5F6672430717255005E9580 /* BigScherlyWidgets */,
+			);
+			name = BigScherlyWidgetsExtension;
+			productName = BigScherlyWidgetsExtension;
+			productReference = A5F6672130717255005E9580 /* BigScherlyWidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -463,6 +612,9 @@
 					A585FBC63008678A008E8BE1 = {
 						CreatedOnToolsVersion = 27.0;
 					};
+					A5F6672030717255005E9580 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "BigScherlyTraining" */;
@@ -484,6 +636,7 @@
 				A585FB9D30086678008E8BE1 /* BigScherlyWatch Watch AppTests */,
 				A585FBA730086679008E8BE1 /* BigScherlyWatch Watch AppUITests */,
 				A585FBC63008678A008E8BE1 /* BSTComplicationExtension */,
+				A5F6672030717255005E9580 /* BigScherlyWidgetsExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -516,20 +669,37 @@
 			files = (
 			);
 		};
+		A5F6671F30717255005E9580 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		000000000000000120000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				A52401963070A0D6004524F5 /* DesignSystem.swift in Sources */,
 				FF2000000000000000000000 /* Awards.swift in Sources */,
+				A524018B30709247004524F5 /* StatsView.swift in Sources */,
+				A524018C30709247004524F5 /* StatsDetailView.swift in Sources */,
 				A5B90C0E3010266B0081F533 /* AuthedAsyncImage.swift in Sources */,
+				A524019A3070A9C1004524F5 /* TrainingWeek.swift in Sources */,
+				A52401A83070C039004524F5 /* CoachKit.swift in Sources */,
+				A524018830708F8B004524F5 /* ShareCameraView.swift in Sources */,
+				A5DC6C573068A1D10077FFCD /* TrainerWorkoutsView.swift in Sources */,
 				FF2000100000000000000000 /* TrainerModels.swift in Sources */,
 				FF2000300000000000000000 /* AwardEngine.swift in Sources */,
+				A52401983070A276004524F5 /* WorkoutSessionView.swift in Sources */,
+				A52401A43070AB4C004524F5 /* PhotoCompare.swift in Sources */,
 				FF2000500000000000000000 /* ProgressEngine.swift in Sources */,
 				FF2000600000000000000000 /* SocialShare.swift in Sources */,
 				FF2000700000000000000000 /* AwardsView.swift in Sources */,
+				A52401A63070BA62004524F5 /* ServerSync.swift in Sources */,
 				FF2000800000000000000000 /* TrainerClientView.swift in Sources */,
+				A52401A13070A9FF004524F5 /* EffortEstimator.swift in Sources */,
+				A52401A23070A9FF004524F5 /* HealthActivityReader.swift in Sources */,
 				A585FB8D300865DF008E8BE1 /* WatchBridge.swift in Sources */,
 				FF2000900000000000000000 /* TrainerSections.swift in Sources */,
 				A5D04AB8300EED4B0051D2DF /* CheckInFlow.swift in Sources */,
@@ -542,22 +712,34 @@
 				A5AB68932FF8CE9C004396CD /* ProgressScreens.swift in Sources */,
 				A52E98F93001CCDE002EFD8C /* Supplements.swift in Sources */,
 				A5AB68942FF8CE9C004396CD /* MetallicText.swift in Sources */,
+				A524019E3070A9EF004524F5 /* ActivityLogSheet.swift in Sources */,
 				A52E98FD3001CCFC002EFD8C /* SupplementsView.swift in Sources */,
 				A5AB68952FF8CE9C004396CD /* InlineRestButton.swift in Sources */,
 				A555A88630082C930026B8B9 /* HealthKitManager.swift in Sources */,
 				A5AB68962FF8CE9C004396CD /* RestTimerEngine.swift in Sources */,
 				A5AB68972FF8CE9C004396CD /* Theme.swift in Sources */,
 				A5AB68982FF8CE9C004396CD /* NavTray.swift in Sources */,
+				A52401AA3070C048004524F5 /* CoachClientTabs.swift in Sources */,
 				A5AB68992FF8CE9C004396CD /* ChatView.swift in Sources */,
 				A5AB689A2FF8CE9C004396CD /* SplashView.swift in Sources */,
 				A5AB689B2FF8CE9C004396CD /* MacrosView.swift in Sources */,
+				A524018F30709265004524F5 /* DemoMotion.swift in Sources */,
+				A524019C3070A9D7004524F5 /* MacroPlanStore.swift in Sources */,
+				A524019030709265004524F5 /* StatsEngine.swift in Sources */,
 				A50F8B81301454C7004ED65A /* SettingsView.swift in Sources */,
 				A52E98FB3001CCF3002EFD8C /* SupplementEngine.swift in Sources */,
 				A5AB689C2FF8CE9C004396CD /* WorkoutsView.swift in Sources */,
 				A5AB689D2FF8CE9C004396CD /* ExerciseHistoryView.swift in Sources */,
+				A5A491BC3071B811001B07A1 /* WidgetBridge.swift in Sources */,
 				A5AB689E2FF8CE9C004396CD /* Models.swift in Sources */,
 				A5D3C0352FFC4A6100F53A37 /* VideoCompressor.swift in Sources */,
 				A5AB689F2FF8CE9C004396CD /* SetPasswordView.swift in Sources */,
+				A5240194307099F8004524F5 /* ShareLog.swift in Sources */,
+				A524017F30708B01004524F5 /* CameraPicker.swift in Sources */,
+				A5240192307099F1004524F5 /* StatsCalendar.swift in Sources */,
+				A524018530708D0C004524F5 /* SetMotion.swift in Sources */,
+				A524018630708D0C004524F5 /* SetMotionStore.swift in Sources */,
+				A5F66787307178EE005E9580 /* LiveSessionController.swift in Sources */,
 				A5AB68A02FF8CE9C004396CD /* DashboardView.swift in Sources */,
 				A555A8803007DABA0026B8B9 /* AwardCelebrationView.swift in Sources */,
 				A555A8823007DAC10026B8B9 /* PRCelebrationView.swift in Sources */,
@@ -579,6 +761,11 @@
 			);
 		};
 		A585FBC33008678A008E8BE1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A5F6671D30717255005E9580 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -605,6 +792,11 @@
 			isa = PBXTargetDependency;
 			target = A585FBC63008678A008E8BE1 /* BSTComplicationExtension */;
 			targetProxy = A585FBD53008678B008E8BE1 /* PBXContainerItemProxy */;
+		};
+		A5F6672F30717257005E9580 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5F6672030717255005E9580 /* BigScherlyWidgetsExtension */;
+			targetProxy = A5F6672E30717257005E9580 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -858,7 +1050,10 @@
 				DEVELOPMENT_TEAM = ANCC8575Z3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "BigScherlyWatch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWatch;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Big Scherly Training reads your heart rate during training sessions so you and your coach can see your effort per lift.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Big Scherly Training saves your training sessions to Apple Health as strength-training workouts.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -895,7 +1090,10 @@
 				DEVELOPMENT_TEAM = ANCC8575Z3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "BigScherlyWatch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWatch;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Big Scherly Training reads your heart rate during training sessions so you and your coach can see your effort per lift.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Big Scherly Training saves your training sessions to Apple Health as strength-training workouts.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bigscherlytraining.app;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1082,6 +1280,77 @@
 			};
 			name = Release;
 		};
+		A5F6673230717257005E9580 /* Debug configuration for PBXNativeTarget "BigScherlyWidgetsExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = BigScherlyWidgetsExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BigScherlyWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.BigScherlyWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A5F6673330717257005E9580 /* Release configuration for PBXNativeTarget "BigScherlyWidgetsExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = BigScherlyWidgetsExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ANCC8575Z3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BigScherlyWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BigScherlyWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bigscherlytraining.app.BigScherlyWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1130,6 +1399,14 @@
 			buildConfigurations = (
 				A585FBDA3008678B008E8BE1 /* Debug configuration for PBXNativeTarget "BSTComplicationExtension" */,
 				A585FBDB3008678B008E8BE1 /* Release configuration for PBXNativeTarget "BSTComplicationExtension" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A5F6673530717257005E9580 /* Build configuration list for PBXNativeTarget "BigScherlyWidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5F6673230717257005E9580 /* Debug configuration for PBXNativeTarget "BigScherlyWidgetsExtension" */,
+				A5F6673330717257005E9580 /* Release configuration for PBXNativeTarget "BigScherlyWidgetsExtension" */,
 			);
 			defaultConfigurationName = Release;
 		};

@@ -91,7 +91,7 @@ struct CheckInSummaryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(dateLabel(checkIn.date)).font(BrandFont.display(22)).foregroundColor(.white)
+                Text(dateLabel(checkIn.date)).font(BrandFont.display(22)).foregroundColor(Brand.text)
                 Spacer()
                 statusPill(checkIn.status)
             }
@@ -113,7 +113,7 @@ struct CheckInSummaryCard: View {
                     Image(systemName: "bubble.left.fill").font(.system(size: 10))
                     Text("Coach responded").font(BrandFont.body(11, .bold))
                 }
-                .foregroundColor(Brand.volt)
+                .foregroundColor(Brand.voltText)
             }
         }
         .card()
@@ -121,9 +121,9 @@ struct CheckInSummaryCard: View {
 
     private func miniStat(icon: String, value: String, label: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundColor(Brand.volt)
+            Image(systemName: icon).font(.system(size: 12)).foregroundColor(Brand.voltText)
             VStack(alignment: .leading, spacing: 0) {
-                Text(value).font(BrandFont.body(14, .bold)).foregroundColor(.white)
+                Text(value).font(BrandFont.body(14, .bold)).foregroundColor(Brand.text)
                 Text(label).font(BrandFont.body(8, .bold)).tracking(0.5).foregroundColor(Brand.mute)
             }
         }
@@ -139,7 +139,7 @@ struct CheckInSummaryCard: View {
         }()
         return Text(txt.uppercased())
             .font(BrandFont.body(10, .bold)).tracking(1)
-            .foregroundColor(s == .draft ? Brand.mute : Brand.black)
+            .foregroundColor(s == .draft ? Brand.mute : Brand.onVolt)
             .padding(.horizontal, 10).padding(.vertical, 4)
             .background(s == .draft ? Color.clear : col)
             .overlay(Capsule().stroke(col, lineWidth: 1))
@@ -166,13 +166,25 @@ struct CheckInDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    if let resp = checkIn.trainerResponse {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("YOUR COACH SAID").font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
+                            Text("“\(resp)”").font(BrandFont.body(16, .semibold)).foregroundColor(Brand.text)
+                                .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16).background(Brand.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.voltLine.opacity(0.5), lineWidth: 1))
+                    }
+
                     // Weight (with its own emphasis)
                     ForEach(numbers) { f in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(f.cleanLabel.uppercased())
-                                .font(BrandFont.body(11, .bold)).tracking(1.2).foregroundColor(Brand.volt)
+                                .font(BrandFont.body(11, .bold)).tracking(1.2).headerPill()
                             Text(f.value.isEmpty ? "—" : "\(f.value) lb")
-                                .font(BrandFont.display(34)).foregroundColor(.white)
+                                .font(BrandFont.display(34)).foregroundColor(Brand.text)
                         }
                     }
 
@@ -180,7 +192,7 @@ struct CheckInDetailView: View {
                     if !scales.isEmpty {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("HOW THE WEEK FELT")
-                                .font(BrandFont.body(11, .bold)).tracking(1.2).foregroundColor(Brand.volt)
+                                .font(BrandFont.body(11, .bold)).tracking(1.2).headerPill()
                             ForEach(scales) { f in
                                 scaleBar(f.cleanLabel, value: Int(f.value) ?? 0)
                             }
@@ -191,9 +203,9 @@ struct CheckInDetailView: View {
                     ForEach(longText) { f in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(f.cleanLabel.uppercased())
-                                .font(BrandFont.body(11, .bold)).tracking(1.2).foregroundColor(Brand.volt)
+                                .font(BrandFont.body(11, .bold)).tracking(1.2).headerPill()
                             Text(f.value.isEmpty ? "—" : f.value)
-                                .font(BrandFont.body(15)).foregroundColor(.white)
+                                .font(BrandFont.body(15)).foregroundColor(Brand.text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(14).background(Brand.black)
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -203,21 +215,9 @@ struct CheckInDetailView: View {
 
                     if !checkIn.photoIDs.isEmpty {
                         Text("\(checkIn.photoIDs.count) photo\(checkIn.photoIDs.count > 1 ? "s" : "") attached")
-                            .font(BrandFont.body(13, .semibold)).foregroundColor(Brand.volt)
+                            .font(BrandFont.body(13, .semibold)).foregroundColor(Brand.voltText)
                     }
 
-                    // Coach response
-                    if let resp = checkIn.trainerResponse {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("COACH RESPONSE")
-                                .font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.volt)
-                            Text(resp).font(BrandFont.body(15)).foregroundColor(.white)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16).background(Brand.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt.opacity(0.5), lineWidth: 1))
-                    }
                 }
                 .padding(20)
             }
@@ -225,16 +225,16 @@ struct CheckInDetailView: View {
             .navigationTitle(dateLabel(checkIn.date))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { dismiss() }.foregroundColor(Brand.volt) } }
+                Button("Done") { dismiss() }.foregroundColor(Brand.voltText) } }
         }
     }
 
     private func scaleBar(_ label: String, value: Int) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(label).font(BrandFont.body(13, .semibold)).foregroundColor(.white)
+                Text(label).font(BrandFont.body(13, .semibold)).foregroundColor(Brand.text)
                 Spacer()
-                Text("\(value)/10").font(BrandFont.body(13, .bold)).foregroundColor(Brand.volt)
+                Text("\(value)/10").font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -292,13 +292,13 @@ struct NewCheckInForm: View {
                     VoltButton(title: "Submit Check-In") { submit() }
                         .padding(.top, 4)
                 }
-                .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
+                .padding(.top, 12).padding(.horizontal, 20).padding(.bottom, 30)
             }
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("New Check-In")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                Button("Cancel") { dismiss() }.foregroundColor(Brand.volt) } }
+                Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) } }
             .tapToDismissKeyboard()
         }
         .fullScreenCover(isPresented: $showCelebration) {
@@ -312,7 +312,7 @@ struct NewCheckInForm: View {
     private var photoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CHECK-IN PHOTOS")
-                .font(BrandFont.body(11, .bold)).tracking(1.2).foregroundColor(Brand.volt)
+                .font(BrandFont.body(11, .bold)).tracking(1.2).headerPill()
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
                                 GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(photoSlots, id: \.self) { slot in
@@ -328,7 +328,7 @@ struct NewCheckInForm: View {
     private func questionView(_ q: CheckInQuestion) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(q.label.uppercased())
-                .font(BrandFont.body(11, .bold)).tracking(1.2).foregroundColor(Brand.volt)
+                .font(BrandFont.body(11, .bold)).tracking(1.2).headerPill()
 
             switch q.kind {
             case .scale:
@@ -340,7 +340,7 @@ struct NewCheckInForm: View {
                     HStack(spacing: 8) {
                         TextField("0", text: $weight)
                             .keyboardType(.decimalPad)
-                            .font(BrandFont.display(26)).foregroundColor(.white)
+                            .font(BrandFont.display(26)).foregroundColor(Brand.text)
                             .frame(maxWidth: 120)
                             .padding(.horizontal, 14).padding(.vertical, 10)
                             .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -356,7 +356,7 @@ struct NewCheckInForm: View {
                             Text("\(up ? "+" : "")\(String(format: "%.1f", d)) \(q.unit) vs last week")
                                 .font(BrandFont.body(12, .semibold))
                         }
-                        .foregroundColor(Brand.volt)
+                        .foregroundColor(Brand.voltText)
                     } else if previousWeight == nil {
                         Text("First weigh-in — we'll track the change next week.")
                             .font(BrandFont.body(11)).foregroundColor(Brand.mute)
@@ -366,7 +366,7 @@ struct NewCheckInForm: View {
                 TextEditor(text: Binding(
                     get: { longAnswers[q.id] ?? "" },
                     set: { longAnswers[q.id] = $0 }))
-                    .font(BrandFont.body(15)).foregroundColor(.white)
+                    .font(BrandFont.body(15)).foregroundColor(Brand.text)
                     .scrollContentBackground(.hidden)
                     .padding(10).frame(height: 110)
                     .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -411,7 +411,7 @@ struct PhotoSlotTile: View {
                     VStack {
                         Spacer()
                         Text(label.uppercased())
-                            .font(BrandFont.body(9, .bold)).tracking(0.5).foregroundColor(.white)
+                            .font(BrandFont.body(9, .bold)).tracking(0.5).foregroundColor(Brand.text)
                             .frame(maxWidth: .infinity).padding(.vertical, 4)
                             .background(LinearGradient(colors: [.clear, .black.opacity(0.7)],
                                                        startPoint: .top, endPoint: .bottom))
@@ -419,7 +419,7 @@ struct PhotoSlotTile: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 } else {
                     VStack(spacing: 5) {
-                        Image(systemName: "plus").font(.system(size: 18, weight: .bold)).foregroundColor(Brand.volt)
+                        Image(systemName: "plus").font(.system(size: 18, weight: .bold)).foregroundColor(Brand.voltText)
                         Text(label.uppercased())
                             .font(BrandFont.body(9, .bold)).tracking(0.5).foregroundColor(Brand.mute)
                     }
@@ -427,7 +427,7 @@ struct PhotoSlotTile: View {
             }
             .aspectRatio(3.0/4.0, contentMode: .fit)
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .stroke(image == nil ? Brand.line : Brand.volt.opacity(0.5),
+                .stroke(image == nil ? Brand.line : Brand.voltLine.opacity(0.5),
                         style: StrokeStyle(lineWidth: 1, dash: image == nil ? [5] : [])))
         }
         .buttonStyle(.plain)
@@ -455,12 +455,12 @@ struct ScaleRow: View {
                 Button { value = Double(n) } label: {
                     Text("\(n)")
                         .font(BrandFont.body(n == 10 ? 13 : 14, .bold))
-                        .foregroundColor(selected ? Brand.black : tileText(n))
+                        .foregroundColor(selected ? Brand.onVolt : tileText(n))
                         .frame(maxWidth: .infinity, minHeight: 40)
                         .background(selected ? Brand.volt : Brand.black)
                         .clipShape(RoundedRectangle(cornerRadius: 9))
                         .overlay(RoundedRectangle(cornerRadius: 9)
-                            .stroke(selected ? Brand.volt : Brand.line, lineWidth: 1))
+                            .stroke(selected ? Brand.voltLine : Brand.line, lineWidth: 1))
                         .shadow(color: selected ? Brand.volt.opacity(0.4) : .clear, radius: 6)
                 }
                 .buttonStyle(.plain)
@@ -501,7 +501,7 @@ struct CheckInCelebrationView: View {
                             .scaleEffect(appear ? 1 : 0.4)
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 68, weight: .bold))
-                            .foregroundColor(Brand.volt)
+                            .foregroundColor(Brand.voltText)
                             .scaleEffect(appear ? 1 : 0.3)
                             .rotationEffect(.degrees(appear ? 0 : -30))
                     }
@@ -509,9 +509,9 @@ struct CheckInCelebrationView: View {
 
                     VStack(spacing: 6) {
                         Text("CHECK-IN COMPLETE")
-                            .font(BrandFont.body(12, .bold)).tracking(2).foregroundColor(Brand.volt)
+                            .font(BrandFont.body(12, .bold)).tracking(2).headerPill()
                         Text("Look at this week 👑")
-                            .font(BrandFont.display(32)).foregroundColor(.white)
+                            .font(BrandFont.display(32)).foregroundColor(Brand.text)
                             .multilineTextAlignment(.center)
                     }
                     .opacity(appear ? 1 : 0)
@@ -536,7 +536,7 @@ struct CheckInCelebrationView: View {
 
                     Button { onDone() } label: {
                         Text("Done")
-                            .font(BrandFont.body(16, .bold)).foregroundColor(Brand.black)
+                            .font(BrandFont.body(16, .bold)).foregroundColor(Brand.onVolt)
                             .frame(maxWidth: .infinity).padding(.vertical, 16)
                             .background(Brand.volt).clipShape(Capsule())
                     }
@@ -556,10 +556,10 @@ struct CheckInCelebrationView: View {
             ZStack {
                 Circle().fill(Brand.volt).frame(width: 44, height: 44)
                 Image(systemName: win.icon)
-                    .font(.system(size: 19, weight: .bold)).foregroundColor(Brand.black)
+                    .font(.system(size: 19, weight: .bold)).foregroundColor(Brand.onVolt)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.title).font(BrandFont.body(15, .bold)).foregroundColor(.white)
+                Text(win.title).font(BrandFont.body(15, .bold)).foregroundColor(Brand.text)
                 Text(win.detail).font(BrandFont.body(13)).foregroundColor(Brand.mute)
             }
             Spacer()
@@ -567,7 +567,7 @@ struct CheckInCelebrationView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt.opacity(0.5), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.voltLine.opacity(0.5), lineWidth: 1))
     }
 }
 
@@ -584,7 +584,7 @@ struct CheckInWin: Identifiable {
 struct ConfettiView: View {
     @State private var animate = false
     private let pieces = 40
-    private let colors: [Color] = [Brand.volt, .white, Brand.volt.opacity(0.6)]
+    private let colors: [Color] = [Brand.volt, Brand.text, Brand.volt.opacity(0.6)]
 
     var body: some View {
         GeometryReader { geo in

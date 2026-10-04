@@ -3,6 +3,7 @@ import Combine
 import WatchConnectivity
 import UserNotifications
 import WidgetKit
+import WatchKit
 
 // The Watch app's single source of truth. Receives glance state from the phone
 // (streak, next workout, unread messages) and handles rest-timer start messages
@@ -31,10 +32,28 @@ final class WatchState: NSObject, ObservableObject {
 
     private let restNotifId = "bst.watch.rest.bell"
 
+    // MARK: - Auto-detected sets
+
+    /// The exercise screen currently open on the wrist (best hint for what's being lifted).
+    @Published var focusedExerciseId: String? = nil
+    /// The detected set currently shown in the confirm sheet.
+    @Published var presentedDetection: DetectedSet? = nil {
+        didSet { if presentedDetection == nil { presentNextDetection() } }
+    }
+    /// Detected sets not yet matched. A swiped-away one stays here so logging the set
+    /// by hand within a few minutes still picks up its motion data.
+    private var detections: [DetectedSet] = []
+    private var shownDetectionIds: Set<UUID> = []
+    private var lastRestEnd: Date? = nil
+    private var lastLoggedExerciseId: String? = nil
+
     // MARK: - Logging a set from the wrist
 
     // Optimistically update local state, then send to the phone to persist.
-    func logSet(exerciseId: String, setId: String, reps: Int?, weight: Double?, rpe: Int?) {
+    // `motion` is the detected set being confirmed, if any; otherwise a recent
+    // unmatched detection for this exercise is attached automatically.
+    func logSet(exerciseId: String, setId: String, reps: Int?, weight: Double?, rpe: Double?,
+                motion: DetectedSet? = nil) {
         guard var workout = activeWorkout,
               let ei = workout.exercises.firstIndex(where: { $0.id == exerciseId }),
               let si = workout.exercises[ei].sets.firstIndex(where: { $0.id == setId }) else { return }
@@ -50,9 +69,122 @@ final class WatchState: NSObject, ObservableObject {
         if let reps { msg["reps"] = reps }
         if let weight { msg["weight"] = weight }
         if let rpe { msg["rpe"] = rpe }
-        if WCSession.default.activationState == .activated, WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        msg["loggedAt"] = Date().timeIntervalSince1970
+        Self.sendReliably(msg)
+
+        lastLoggedExerciseId = exerciseId
+        if let d = motion ?? recentDetection(for: exerciseId) {
+            sendMotion(d, workout: workout, exerciseId: exerciseId, setId: setId)
+            removeDetection(d)
         }
+    }
+
+    /// Live-only message for the phone (heart rate, session state, detected sets).
+    /// Dropped when the phone isn't reachable — it's only useful in the moment.
+    nonisolated static func sendLive(_ msg: [String: Any]) {
+        guard WCSession.default.activationState == .activated, WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// Live message when the phone is reachable; otherwise queued so it arrives later.
+    nonisolated private static func sendReliably(_ msg: [String: Any]) {
+        guard WCSession.default.activationState == .activated else { return }
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: nil) { _ in
+                WCSession.default.transferUserInfo(msg)
+            }
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
+    // MARK: - Detected sets
+
+    /// A finished set came in from the motion recorder.
+    func handleDetectedSet(reps: [RepMotion], start: Date, end: Date) {
+        guard let workout = activeWorkout, !reps.isEmpty else { return }
+        let exId = suggestedExercise(in: workout)
+        let setId = exId.flatMap { id in
+            workout.exercises.first(where: { $0.id == id })?.sets.first(where: { $0.loggedReps == nil })?.id
+        }
+        // "Around when the rest timer went off" → confident match.
+        let confident = lastRestEnd.map { abs(start.timeIntervalSince($0)) <= 90 } ?? false
+        let d = DetectedSet(start: start, end: end, reps: reps,
+                            suggestedExerciseId: exId, suggestedSetId: setId, confident: confident)
+        detections.removeAll { Date().timeIntervalSince($0.end) > 600 }   // forget stale ones
+        detections.append(d)
+        // Let the phone pre-fill its set fields if it's open (live only; never queued).
+        var live: [String: Any] = ["detectedSet": true, "workoutId": workout.id,
+                                   "reps": reps.count, "velocity": d.meanVelocity]
+        if let exId { live["exerciseId"] = exId }
+        if let setId { live["setId"] = setId }
+        Self.sendLive(live)
+        WKInterfaceDevice.current().play(.click)
+        if presentedDetection == nil { presentNextDetection() }
+    }
+
+    func discardDetection(_ d: DetectedSet) {
+        removeDetection(d)
+        if presentedDetection?.id == d.id { presentedDetection = nil }
+    }
+
+    private func removeDetection(_ d: DetectedSet) {
+        detections.removeAll { $0.id == d.id }
+    }
+
+    private func presentNextDetection() {
+        guard let next = detections.first(where: { !shownDetectionIds.contains($0.id) }) else { return }
+        shownDetectionIds.insert(next.id)
+        presentedDetection = next
+    }
+
+    /// An unmatched detection that ended within the last 3 minutes, for this exercise
+    /// (or with no exercise guess at all).
+    private func recentDetection(for exerciseId: String) -> DetectedSet? {
+        detections.last { d in
+            Date().timeIntervalSince(d.end) <= 180 &&
+            (d.suggestedExerciseId == nil || d.suggestedExerciseId == exerciseId)
+        }
+    }
+
+    private func suggestedExercise(in w: WatchWorkout) -> String? {
+        func hasOpen(_ id: String?) -> Bool {
+            guard let id, let ex = w.exercises.first(where: { $0.id == id }) else { return false }
+            return ex.sets.contains { $0.loggedReps == nil }
+        }
+        if hasOpen(focusedExerciseId) { return focusedExerciseId }
+        if hasOpen(lastLoggedExerciseId) { return lastLoggedExerciseId }
+        return w.exercises.first(where: { $0.sets.contains { $0.loggedReps == nil } })?.id
+    }
+
+    /// A set was logged on the phone instead of the wrist: hand it the matching motion.
+    private func attachDetectionsToPhoneLoggedSets(old: WatchWorkout?, new: WatchWorkout) {
+        guard let old, old.id == new.id, !detections.isEmpty else { return }
+        for ex in new.exercises {
+            guard let oldEx = old.exercises.first(where: { $0.id == ex.id }) else { continue }
+            for set in ex.sets where set.loggedReps != nil {
+                guard oldEx.sets.first(where: { $0.id == set.id })?.loggedReps == nil else { continue }
+                let match = detections.first(where: { $0.suggestedSetId == set.id }) ?? recentDetection(for: ex.id)
+                if let d = match {
+                    sendMotion(d, workout: new, exerciseId: ex.id, setId: set.id)
+                    removeDetection(d)
+                    if presentedDetection?.id == d.id { presentedDetection = nil }
+                }
+            }
+        }
+    }
+
+    /// Ship the motion for a logged set to the phone (queued — survives the phone being away).
+    private func sendMotion(_ d: DetectedSet, workout: WatchWorkout, exerciseId: String, setId: String) {
+        guard !isDemo else { return }
+        let name = workout.exercises.first(where: { $0.id == exerciseId })?.name ?? ""
+        let record = SetMotion(id: UUID().uuidString, workoutId: workout.id,
+                               exerciseId: exerciseId, setId: setId, exerciseName: name,
+                               start: d.start, end: d.end, reps: d.reps,
+                               autoDetected: true, analyzerVersion: RepAnalyzer.version)
+        guard WCSession.default.activationState == .activated,
+              let data = try? JSONEncoder().encode(record) else { return }
+        WCSession.default.transferUserInfo(["setMotion": data])
     }
 
     override init() {
@@ -63,6 +195,14 @@ final class WatchState: NSObject, ObservableObject {
         }
         requestNotificationPermission()
         let hadState = loadCachedContext()
+        MotionRecorder.shared.onSetDetected = { [weak self] reps, start, end in
+            self?.handleDetectedSet(reps: reps, start: start, end: end)
+        }
+        // v1.1: tell the phone a set has started (its Lock Screen card switches to "lifting").
+        MotionRecorder.shared.onSetStarted = { [weak self] in
+            guard let wid = self?.activeWorkout?.id else { return }
+            Self.sendLive(["setStarted": true, "workoutId": wid])
+        }
 
         // When the Watch app runs with no state from the phone — standalone in the
         // Simulator for App Store screenshots, or before the first sync — fall back
@@ -95,6 +235,7 @@ final class WatchState: NSObject, ObservableObject {
         restTotal = total
         let end = Date().addingTimeInterval(TimeInterval(total))
         restEndDate = end
+        lastRestEnd = end
         scheduleRestNotification(after: seconds)
     }
 
@@ -157,7 +298,9 @@ final class WatchState: NSObject, ObservableObject {
             if data.isEmpty {
                 activeWorkout = nil
             } else if let w = try? JSONDecoder().decode(WatchWorkout.self, from: data) {
+                let previous = activeWorkout
                 activeWorkout = w
+                attachDetectionsToPhoneLoggedSets(old: previous, new: w)
             }
         }
         cacheContext(context)
@@ -168,7 +311,7 @@ final class WatchState: NSObject, ObservableObject {
     // Persist the last context so the glance/complication have data at launch.
     // Uses the shared App Group so the complication (a separate process) can read
     // it; falls back to standard defaults if the group isn't configured yet.
-    private static let sharedDefaults = UserDefaults(suiteName: "group.com.nicholasbowen.bigscherlytraining") ?? .standard
+    private static let sharedDefaults = UserDefaults(suiteName: "group.bigscherlytraining.app") ?? .standard
     private func cacheContext(_ context: [String: Any]) {
         Self.sharedDefaults.set(context, forKey: "bst.watch.lastContext")
         UserDefaults.standard.set(context, forKey: "bst.watch.lastContext")

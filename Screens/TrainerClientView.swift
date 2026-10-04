@@ -1,7 +1,8 @@
 import SwiftUI
 
-// MARK: - Trainer's view of one client
-// Everything needed to answer them, nothing for authoring their program.
+// MARK: - Coach's view of one client
+// Read + respond: check-ins, conversations, their photos and awards, your private notes.
+// Detailed data review (Stats, Watch data, macros) lives in the web console.
 
 struct TrainerClientView: View {
     @EnvironmentObject var store: AppStore
@@ -9,60 +10,54 @@ struct TrainerClientView: View {
     let client: RosterItem
 
     enum Section: String, CaseIterable, Identifiable {
-        case checkins = "Check-Ins"
-        case chat     = "Chat"
-        case progress = "Progress"
-        case photos   = "Photos"
-        case awards   = "Awards"
-        case notes    = "Notes"
+        case checkins = "Check-Ins", workouts = "Workouts", chat = "Chat", progress = "Progress",
+             photos = "Photos", awards = "Awards", notes = "Notes"
         var id: String { rawValue }
     }
-    @State private var section: Section = .checkins
+    @State private var section: Section
+
+    init(client: RosterItem) {
+        self.client = client
+        _section = State(initialValue: client.unreadMessages > 0 ? .chat : .checkins)
+    }
+
+    /// Opens on what most likely needs you: unread messages → Chat, otherwise Check-Ins.
+    private var likelySection: Section { client.unreadMessages > 0 ? .chat : .checkins }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Header
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(client.name).font(BrandFont.display(34)).foregroundColor(.white)
-                    if !client.goal.isEmpty {
-                        Text(client.goal).font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                    }
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 14) {
-                        stat("\(client.workoutsThisWeek)", "THIS WEEK")
-                        stat("\(client.missedWorkouts)", "MISSED")
-                        stat(client.daysSinceTrained > 90 ? "—" : "\(client.daysSinceTrained)d", "SINCE TRAINED")
-                    }
-                    .padding(.top, 6)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20).padding(.bottom, 14)
-
-                // Section picker
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Section.allCases) { s in
-                            Button { section = s } label: {
-                                Text(s.rawValue)
-                                    .font(BrandFont.body(13, .semibold))
-                                    .foregroundColor(section == s ? Brand.black : .white)
-                                    .padding(.horizontal, 16).padding(.vertical, 9)
-                                    .background(section == s ? Brand.volt : Brand.black).clipShape(Capsule())
-                                    .overlay(Capsule().stroke(section == s ? Brand.volt : Brand.line, lineWidth: 1))
+                        CoachAvatar(name: client.name, size: 56, highlighted: true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(client.name).font(BrandFont.display(34)).foregroundColor(Brand.text)
+                                .lineLimit(1).minimumScaleFactor(0.6)
+                            if !client.goal.isEmpty {
+                                Text(client.goal).font(BrandFont.body(12)).foregroundColor(Brand.mute).lineLimit(2)
                             }
+                            Text(client.headline).font(BrandFont.body(12, .bold))
+                                .foregroundColor(client.needsAttention ? Brand.voltText : (client.isDrifting ? .orange : Brand.mute))
                         }
                     }
-                    .padding(.horizontal, 20)
+                    HStack(spacing: 10) {
+                        DSStatTile(value: "\(client.workoutsThisWeek)", label: "THIS WEEK")
+                        DSStatTile(value: "\(client.missedWorkouts)", label: "MISSED", color: client.missedWorkouts > 0 ? .orange : Brand.text)
+                        DSStatTile(value: client.daysSinceTrained > 90 ? "—" : "\(client.daysSinceTrained)d", label: "SINCE TRAINED", color: Brand.text)
+                    }
                 }
-                .padding(.bottom, 12)
+                .padding(.horizontal, 20).padding(.bottom, 12)
+
+                DSCarousel(options: Section.allCases.map { DSCarousel<Section>.Option(id: $0, label: $0.rawValue) },
+                           selection: $section, likely: likelySection, itemWidth: 108,
+                           accessibilityName: "Section")
+                    .padding(.bottom, 12)
 
                 Group {
                     switch section {
-                    case .checkins: TrainerCheckInsView(clientId: client.id)
-                    case .chat:     GoToChatShortcut(clientName: client.name) {
-                                        store.trainerTab = .chat
-                                        dismiss()
-                                    }
+                    case .checkins: TrainerCheckInsView(clientId: client.id, clientName: client.name)
+                    case .workouts: TrainerWorkoutsView(clientId: client.id, clientName: client.name)
+                    case .chat:     CoachClientThreads(client: client)
                     case .progress: TrainerProgressView(clientId: client.id)
                     case .photos:   TrainerPhotosView(clientId: client.id)
                     case .awards:   TrainerAwardsView(clientId: client.id, clientName: client.name)
@@ -71,149 +66,67 @@ struct TrainerClientView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .padding(.top, 8)
             .background(Brand.bg.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { store.loadRoster(); dismiss() }
-                        .foregroundColor(Brand.volt)
+                    Button("Done") { store.loadRoster(); dismiss() }.foregroundColor(Brand.voltText)
                 }
             }
         }
-    }
-
-    private func stat(_ v: String, _ l: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(v).font(BrandFont.display(20)).foregroundColor(Brand.volt)
-            Text(l).font(BrandFont.body(8, .bold)).tracking(1).foregroundColor(Brand.mute)
-        }
+        .tint(Brand.volt)
     }
 }
 
-// MARK: Check-ins — read and respond
+// MARK: Check-ins — open any to review and respond
 
 struct TrainerCheckInsView: View {
+    @ObservedObject private var data = CoachData.shared
     let clientId: String
-    @State private var checkIns: [APICheckIn] = []
-    @State private var responses: [String: String] = [:]
-    @State private var loading = true
-    @State private var sendingFor: String?
+    var clientName: String = ""
+    @State private var open: APICheckIn?
 
     var body: some View {
+        let list = (data.checkIns[clientId] ?? []).filter { $0.status != "draft" }
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if loading {
+            VStack(alignment: .leading, spacing: 10) {
+                if data.checkIns[clientId] == nil {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
-                } else if checkIns.isEmpty {
-                    Text("No check-ins yet.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                } else if list.isEmpty {
+                    Text("No check-ins yet.").font(BrandFont.body(14)).foregroundColor(Brand.mute)
                         .frame(maxWidth: .infinity).padding(.top, 30)
                 }
-
-                ForEach(checkIns, id: \.id) { ci in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text(ci.date.formatted(date: .abbreviated, time: .omitted))
-                                .font(BrandFont.body(14, .bold)).foregroundColor(.white)
+                ForEach(list, id: \.id) { ci in
+                    Button { open = ci } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(ci.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                                    .font(BrandFont.body(15, .heavy)).foregroundColor(Brand.text)
+                                Text([ci.photoIds.isEmpty ? nil : "\(ci.photoIds.count) photo\(ci.photoIds.count == 1 ? "" : "s")",
+                                      ci.trainerResponse.map { "You: \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                                    .font(BrandFont.body(12)).foregroundColor(Brand.mute).lineLimit(1)
+                            }
                             Spacer()
-                            Text(ci.status.uppercased())
-                                .font(BrandFont.body(9, .bold)).tracking(1)
-                                .foregroundColor(ci.status == "reviewed" ? Brand.black : Brand.volt)
-                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(ci.status == "reviewed" ? Brand.volt : Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt, lineWidth: 1))
+                            if ci.status == "reviewed" { DSChip(text: "Reviewed", icon: "checkmark", color: Brand.volt, filled: true) }
+                            else { DSChip(text: "Review", icon: "exclamationmark", color: Brand.volt) }
                         }
-
-                        // Awards won in the week leading up to this check-in — so he can
-                        // open with the win instead of hunting for it.
-                        if let aw = ci.awards, !aw.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("WON THIS WEEK")
-                                    .font(BrandFont.body(9, .bold)).tracking(1.4)
-                                    .foregroundColor(Brand.volt)
-                                ForEach(aw, id: \.kind) { a in
-                                    HStack(spacing: 6) {
-                                        Image(systemName: a.icon)
-                                            .font(.system(size: 11)).foregroundColor(Brand.volt)
-                                        Text(a.title)
-                                            .font(BrandFont.body(12, .semibold)).foregroundColor(.white)
-                                    }
-                                }
-                            }
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Brand.volt.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt, lineWidth: 1))
-                        }
-
-                        ForEach(ci.fields, id: \.id) { f in
-                            HStack {
-                                Text(f.cleanLabel).font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                                Spacer()
-                                Text(f.value).font(BrandFont.body(13, .bold)).foregroundColor(.white)
-                            }
-                        }
-
-                        if let r = ci.trainerResponse, !r.isEmpty {
-                            Text("YOUR RESPONSE")
-                                .font(BrandFont.body(9, .bold)).tracking(1.4).foregroundColor(Brand.volt)
-                                .padding(.top, 4)
-                            Text(r).font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                        } else {
-                            TextEditor(text: Binding(
-                                get: { responses[ci.id] ?? "" },
-                                set: { responses[ci.id] = $0 }))
-                                .font(BrandFont.body(14))
-                                .foregroundColor(.white)
-                                .scrollContentBackground(.hidden)
-                                .padding(8)
-                                .frame(height: 90)
-                                .background(Brand.bg)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                            Button {
-                                respond(ci)
-                            } label: {
-                                HStack {
-                                    if sendingFor == ci.id { ProgressView().tint(Brand.black) }
-                                    Text("Send response").font(BrandFont.body(13, .bold))
-                                }
-                                .frame(maxWidth: .infinity).padding(.vertical, 11)
-                                .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
-                            }
-                            .disabled((responses[ci.id] ?? "").isEmpty || sendingFor == ci.id)
-                        }
+                        .padding(14)
+                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(ci.status == "reviewed" ? Brand.line : Brand.voltLine.opacity(0.5), lineWidth: 1))
                     }
-                    .padding(16)
-                    .background(Brand.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                    .buttonStyle(PressableStyle())
                 }
             }
             .padding(.horizontal, 20).padding(.bottom, 30)
         }
-        .task { await load() }
-        .tapToDismissKeyboard()
-        .keyboardDoneButton()
-    }
-
-    private func load() async {
-        loading = true
-        checkIns = (try? await APIClient.shared.trainerCheckIns(clientId: clientId)) ?? []
-        loading = false
-    }
-
-    private func respond(_ ci: APICheckIn) {
-        guard let text = responses[ci.id], !text.isEmpty else { return }
-        sendingFor = ci.id
-        Task {
-            try? await APIClient.shared.trainerRespondCheckIn(checkInId: ci.id, response: text)
-            await load()
-            await MainActor.run { sendingFor = nil }
+        .task { await data.loadCheckIns(clientId) }
+        .refreshable { await data.loadCheckIns(clientId, force: true) }
+        .sheet(item: Binding(get: { open.map { IdentifiedCheckIn(checkIn: $0) } }, set: { open = $0?.checkIn })) { w in
+            CoachCheckInReview(clientId: clientId, clientName: clientName, checkIn: w.checkIn)
         }
     }
+
+    private struct IdentifiedCheckIn: Identifiable { let checkIn: APICheckIn; var id: String { checkIn.id } }
 }
 
 // MARK: Chat
@@ -237,9 +150,9 @@ struct TrainerChatView: View {
                 HStack(spacing: 6) {
                     Text(cat.uppercased())
                         .font(BrandFont.body(10, .bold)).tracking(1)
-                        .foregroundColor(Brand.volt)
+                        .foregroundColor(Brand.voltText)
                         .padding(.horizontal, 10).padding(.vertical, 4)
-                        .overlay(Capsule().stroke(Brand.volt, lineWidth: 1))
+                        .overlay(Capsule().stroke(Brand.voltLine, lineWidth: 1))
                     Spacer()
                 }
                 .padding(.horizontal, 20).padding(.top, 10)
@@ -260,7 +173,7 @@ struct TrainerChatView: View {
                                 if m.fromTrainer { Spacer(minLength: 40) }
                                 Text(m.text)
                                     .font(BrandFont.body(14))
-                                    .foregroundColor(m.fromTrainer ? Brand.black : .white)
+                                    .foregroundColor(m.fromTrainer ? Brand.onVolt : Brand.text)
                                     .padding(.horizontal, 14).padding(.vertical, 10)
                                     .background(m.fromTrainer ? Brand.volt : Brand.black)
                                     .clipShape(BubbleShape(fromMe: m.fromTrainer))
@@ -278,10 +191,12 @@ struct TrainerChatView: View {
                 }
             }
 
+            QuickReplies(options: ["Love to hear it!", "Keep it up 💪", "Send me a video?", "Can we talk this week?"]) { draft = $0 }
+                .padding(.horizontal, 20).padding(.top, 6)
             HStack(spacing: 8) {
                 TextField("Message \(clientName)…", text: $draft)
                     .font(BrandFont.body(14))
-                    .foregroundColor(.white)
+                    .foregroundColor(Brand.text)
                     .padding(12)
                     .background(Brand.black)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -290,7 +205,7 @@ struct TrainerChatView: View {
                 Button { send() } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(Brand.black)
+                        .foregroundColor(Brand.onVolt)
                         .frame(width: 44, height: 44)
                         .background(Brand.volt).clipShape(Capsule())
                 }
@@ -327,7 +242,7 @@ struct TrainerChatView: View {
     }
 }
 
-// MARK: Progress — what they've actually been lifting
+// MARK: Progress — strength trend and recent sessions
 
 struct TrainerProgressView: View {
     let clientId: String
@@ -336,83 +251,66 @@ struct TrainerProgressView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 if loading {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
                 } else if workouts.filter({ $0.completed }).isEmpty {
-                    Text("Nothing logged yet.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                    Text("Nothing logged yet.").font(BrandFont.body(14)).foregroundColor(Brand.mute)
                         .frame(maxWidth: .infinity).padding(.top, 30)
                 }
 
                 let trends = ProgressEngine.trends(workouts: workouts)
                 if !trends.isEmpty {
-                    Text("STRENGTH TREND")
-                        .font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
-                    VStack(spacing: 0) {
-                        ForEach(trends) { t in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.exercise).font(BrandFont.body(14, .semibold)).foregroundColor(.white)
-                                    Text("\(t.sessions) session\(t.sessions == 1 ? "" : "s")")
-                                        .font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                                }
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("\(Int(t.current)) lb")
-                                        .font(BrandFont.body(14, .bold)).foregroundColor(.white)
-                                    if t.change != 0 {
-                                        Text("\(t.change > 0 ? "+" : "")\(Int(t.change)) lb")
-                                            .font(BrandFont.body(11, .bold))
-                                            .foregroundColor(t.change > 0 ? Brand.volt : .orange)
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: "STRENGTH TREND")
+                        VStack(spacing: 0) {
+                            ForEach(trends) { t in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(t.exercise).font(BrandFont.body(14, .bold)).foregroundColor(Brand.text)
+                                        Text("\(t.sessions) session\(t.sessions == 1 ? "" : "s")").font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 2) {
+                                        Text(StatsUnits.weightText(t.current)).font(BrandFont.body(14, .heavy)).foregroundColor(Brand.text)
+                                        if t.change != 0 {
+                                            Text("\(t.change > 0 ? "+" : "−")\(StatsUnits.weightText(abs(t.change)))")
+                                                .font(BrandFont.body(11, .heavy)).foregroundColor(t.change > 0 ? Brand.voltText : .orange)
+                                        }
                                     }
                                 }
+                                .padding(.vertical, 12)
+                                if t.id != trends.last?.id { Divider().overlay(Brand.line) }
                             }
-                            .padding(.vertical, 12)
-                            Divider().overlay(Brand.line)
                         }
+                        .padding(.horizontal, 16)
+                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                     }
-                    .padding(.horizontal, 16)
-                    .background(Brand.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                 }
 
-                // Recent sessions with how much of the target they actually hit.
-                let recent = workouts.filter { $0.completed }
-                    .sorted { $0.date > $1.date }.prefix(8)
+                let recent = workouts.filter { $0.completed }.sorted { $0.date > $1.date }.prefix(8)
                 if !recent.isEmpty {
-                    Text("RECENT SESSIONS")
-                        .font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
-                        .padding(.top, 8)
-                    ForEach(Array(recent)) { w in
-                        let c = ProgressEngine.compliance(for: w)
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(w.title).font(BrandFont.body(14, .semibold)).foregroundColor(.white)
-                                Text(w.date.formatted(date: .abbreviated, time: .omitted))
-                                    .font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                            }
-                            Spacer()
-                            Text("\(Int(c.rate * 100))%")
-                                .font(BrandFont.body(15, .bold))
-                                .foregroundColor(c.rate >= 1 ? Brand.volt
-                                                 : c.rate >= 0.8 ? .orange : Brand.mute)
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: "RECENT SESSIONS", subtitle: "% of prescribed sets hit")
+                        ForEach(Array(recent)) { w in
+                            let c = ProgressEngine.compliance(for: w)
+                            DSListRow(title: w.title,
+                                      subtitle: w.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()),
+                                      trailing: "\(Int(c.rate * 100))%",
+                                      icon: c.rate >= 1 ? "checkmark.circle.fill" : "circle.lefthalf.filled",
+                                      iconTint: c.rate >= 1 ? Brand.volt : (c.rate >= 0.8 ? .orange : Brand.mute))
                         }
-                        .padding(14)
-                        .background(Brand.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                     }
                 }
             }
             .padding(.horizontal, 20).padding(.bottom, 30)
         }
         .task { await load() }
+        .refreshable { await load() }
     }
 
     private func load() async {
-        loading = true
         let api = (try? await APIClient.shared.trainerWorkouts(clientId: clientId)) ?? []
         workouts = api.map { $0.toModel() }
         loading = false
@@ -426,52 +324,64 @@ struct TrainerAwardsView: View {
     let clientName: String
     @State private var awards: [APIAward] = []
     @State private var loading = true
+    @State private var compose: CoachCompose? = nil
+    @ObservedObject private var congrats = CongratsLog.shared
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 if loading {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
                 } else if awards.isEmpty {
-                    Text("No awards yet.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                    Text("No awards yet.").font(BrandFont.body(14)).foregroundColor(Brand.mute)
                         .frame(maxWidth: .infinity).padding(.top, 30)
                 }
-
-                ForEach(awards) { a in
-                    HStack(spacing: 12) {
-                        Circle().fill(Brand.volt).frame(width: 38, height: 38)
-                            .overlay(
-                                Image(systemName: a.icon)
-                                    .font(.system(size: 17, weight: .bold))
-                                    .foregroundColor(Brand.black)
-                            )
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(a.title).font(BrandFont.body(14, .bold)).foregroundColor(.white)
-                            Text(a.blurb).font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                                .lineLimit(2)
+                ForEach(awards.sorted { $0.earnedAt > $1.earnedAt }) { a in
+                    let winId = "aw|\(clientId)|\(a.kind)"
+                    let done = congrats.done.contains(winId)
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: a.icon).font(.system(size: 18, weight: .bold)).foregroundColor(Brand.onVolt)
+                            .frame(width: 44, height: 44).background(Circle().fill(Brand.volt))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(a.title).font(BrandFont.body(15, .heavy)).foregroundColor(Brand.text)
+                            Text(a.blurb).font(BrandFont.body(12)).foregroundColor(Brand.mute).lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Unlocked \(a.earnedAt.formatted(.dateTime.month(.abbreviated).day()))")
+                                .font(BrandFont.body(10, .bold)).foregroundColor(Brand.voltText)
                         }
-                        Spacer()
-                        Text(a.earnedAt.formatted(date: .abbreviated, time: .omitted))
-                            .font(BrandFont.body(10)).foregroundColor(Brand.mute)
+                        Spacer(minLength: 4)
+                        if !done {
+                            Button {
+                                compose = CoachCompose(title: "Congrats to \(clientName.firstName)", subtitle: "Award · \(a.title)",
+                                                       clientId: clientId,
+                                                       starters: ["\(a.title) — congrats, \(clientName.firstName)!", "Love seeing this. Keep it rolling!", "Proud of you!"],
+                                                       initial: "\(a.title) — congrats, \(clientName.firstName)!", winId: winId)
+                            } label: {
+                                Image(systemName: "sparkles").font(.system(size: 14, weight: .bold)).foregroundColor(Brand.voltText)
+                                    .frame(width: 40, height: 40).overlay(Circle().stroke(Brand.voltLine, lineWidth: 1.5))
+                            }
+                            .accessibilityLabel("Send congrats")
+                        }
                     }
                     .padding(14)
-                    .background(Brand.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt, lineWidth: 1))
+                    .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.voltLine.opacity(0.45), lineWidth: 1))
                 }
             }
             .padding(.horizontal, 20).padding(.bottom, 30)
         }
         .task {
-            loading = true
             awards = (try? await APIClient.shared.trainerAwards(clientId: clientId)) ?? []
             loading = false
+        }
+        .sheet(item: $compose) { c in
+            CoachComposeSheet(title: c.title, subtitle: c.subtitle, clientId: c.clientId, starters: c.starters,
+                              initial: c.initial) { if let w = c.winId { congrats.mark(w) } }
         }
     }
 }
 
-// MARK: Progress photos — transformation review (trainer's eyes only)
+// MARK: Progress photos (your eyes only)
 
 struct TrainerPhotosView: View {
     let clientId: String
@@ -479,48 +389,44 @@ struct TrainerPhotosView: View {
     @State private var loading = true
     @State private var expandedPhoto: APIPhoto?
 
-    private let cols = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+    private let cols = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     var body: some View {
+        let cal = Calendar.training
+        let buckets = Dictionary(grouping: photos) { cal.startOfDay(for: $0.date) }
+            .map { (day: $0.key, photos: $0.value) }.sorted { $0.day > $1.day }
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 if loading {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
                 } else if photos.isEmpty {
-                    Text("No check-in photos yet.")
-                        .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                    Text("No progress photos yet.").font(BrandFont.body(14)).foregroundColor(Brand.mute)
                         .frame(maxWidth: .infinity).padding(.top, 30)
-                } else {
-                    Text("Newest first — tap to enlarge.")
-                        .font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                    LazyVGrid(columns: cols, spacing: 10) {
-                        ForEach(photos, id: \.id) { p in
-                            VStack(alignment: .leading, spacing: 4) {
-                                AuthedAsyncImage(url: APIClient.shared.trainerPhotoURL(photoId: p.id)) { img in
-                                    img.resizable().scaledToFill()
-                                } placeholder: { failed in
-                                    if failed {
-                                        Image(systemName: "photo").foregroundColor(Brand.mute)
-                                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    } else {
-                                        ProgressView().tint(Brand.volt)
-                                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    }
+                }
+                ForEach(buckets, id: \.day) { b in
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: b.day.formatted(.dateTime.month(.wide).day().year()).uppercased(),
+                                        subtitle: "\(b.photos.count) photo\(b.photos.count == 1 ? "" : "s")")
+                        LazyVGrid(columns: cols, spacing: 10) {
+                            ForEach(b.photos, id: \.id) { p in
+                                Button { expandedPhoto = p } label: {
+                                    PhotoFill(photo: p.toModel(), url: APIClient.shared.trainerPhotoURL(photoId: p.id))
+                                        .aspectRatio(0.8, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                                        .overlay(alignment: .bottomLeading) {
+                                            HStack(spacing: 4) {
+                                                Text(p.category.uppercased()).font(BrandFont.body(8, .heavy)).tracking(0.8)
+                                                if p.trainerComment != nil { Image(systemName: "bubble.left.fill").font(.system(size: 8)) }
+                                            }
+                                            .foregroundColor(Brand.text)
+                                            .padding(.horizontal, 6).padding(.vertical, 3)
+                                            .background(Capsule().fill(Color.black.opacity(0.6)))
+                                            .padding(6)
+                                        }
+                                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1))
                                 }
-                                .frame(height: 200)
-                                .clipped()
-                                .background(Brand.black)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-                                .contentShape(Rectangle())
-                                .onTapGesture { expandedPhoto = p }
-
-                                Text(p.date.formatted(date: .abbreviated, time: .omitted))
-                                    .font(BrandFont.body(10)).foregroundColor(Brand.mute)
-                                if !p.category.isEmpty {
-                                    Text(p.category.uppercased())
-                                        .font(BrandFont.body(8, .bold)).tracking(1).foregroundColor(Brand.volt)
-                                }
+                                .buttonStyle(PressableStyle())
+                                .accessibilityLabel("\(p.category) photo, \(p.date.formatted(date: .abbreviated, time: .omitted))")
                             }
                         }
                     }
@@ -529,18 +435,16 @@ struct TrainerPhotosView: View {
             .padding(.horizontal, 20).padding(.bottom, 30)
         }
         .task {
-            loading = true
             photos = (try? await APIClient.shared.trainerPhotos(clientId: clientId)) ?? []
             loading = false
         }
         .fullScreenCover(item: $expandedPhoto) { p in
-            FullScreenPhotoView(url: APIClient.shared.trainerPhotoURL(photoId: p.id),
-                                caption: p.category)
+            FullScreenPhotoView(url: APIClient.shared.trainerPhotoURL(photoId: p.id), caption: p.category)
         }
     }
 }
 
-// MARK: Private notes — trainer-only, one notepad per client
+// MARK: Private notes — yours only, one notepad per client
 
 struct TrainerNotesView: View {
     let clientId: String
@@ -554,44 +458,37 @@ struct TrainerNotesView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
                     Image(systemName: "lock.fill").font(.system(size: 11)).foregroundColor(Brand.mute)
-                    Text("Private to you — the client never sees this.")
-                        .font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                    Text("Private to you — the client never sees this.").font(BrandFont.body(12)).foregroundColor(Brand.mute)
                 }
-
                 if loading {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
                 } else {
                     TextEditor(text: $body_)
-                        .font(BrandFont.body(15)).foregroundColor(.white)
+                        .font(BrandFont.body(15)).foregroundColor(Brand.text)
                         .scrollContentBackground(.hidden)
                         .padding(12).frame(minHeight: 240)
-                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                    Button {
-                        save()
-                    } label: {
-                        HStack {
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Brand.black))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                    Button { save() } label: {
+                        HStack(spacing: 8) {
                             if saving { ProgressView().tint(Brand.black) }
-                            Text(savedAt != nil ? "Saved" : "Save note").font(BrandFont.body(15, .bold))
+                            Label(savedAt != nil ? "Saved" : "Save note", systemImage: savedAt != nil ? "checkmark" : "square.and.arrow.down")
                         }
-                        .frame(maxWidth: .infinity).padding(.vertical, 15)
-                        .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
                     }
+                    .buttonStyle(DSButtonStyle(kind: .primary))
                     .disabled(saving)
-
                     if let d = savedAt {
-                        Text("Saved \(d.formatted(date: .abbreviated, time: .shortened))")
-                            .font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                        Text("Saved \(d.formatted(date: .abbreviated, time: .shortened))").font(BrandFont.body(11)).foregroundColor(Brand.mute)
                     }
                 }
             }
             .padding(.horizontal, 20).padding(.bottom, 30)
         }
         .task {
-            loading = true
             if let n = try? await APIClient.shared.clientNote(clientId: clientId) { body_ = n.body }
             loading = false
         }
+        .onChange(of: body_) { _, _ in savedAt = nil }
         .tapToDismissKeyboard()
         .keyboardDoneButton()
     }
@@ -617,9 +514,9 @@ struct GoToChatShortcut: View {
         VStack(spacing: 16) {
             Spacer()
             Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 44)).foregroundColor(Brand.volt)
+                .font(.system(size: 44)).foregroundColor(Brand.voltText)
             Text("Messages live in the Chat tab")
-                .font(BrandFont.display(24)).foregroundColor(.white)
+                .font(BrandFont.display(24)).foregroundColor(Brand.text)
                 .multilineTextAlignment(.center)
             Text("Open \(clientName)'s threads or start a new one from there.")
                 .font(BrandFont.body(14)).foregroundColor(Brand.mute)
@@ -630,7 +527,7 @@ struct GoToChatShortcut: View {
                     Text("Go to Chat").font(BrandFont.body(15, .bold))
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 16)
-                .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
+                .background(Brand.volt).foregroundColor(Brand.onVolt).clipShape(Capsule())
             }
             .padding(.horizontal, 40).padding(.top, 8)
             Spacer()

@@ -1,10 +1,15 @@
 import SwiftUI
 import Charts
 
-// MARK: - Workouts list (upcoming first, scroll up for UPCOMING header, then past)
+// MARK: - Workouts list
+// Completed sits above (scroll up to reach it); the screen lands on Upcoming.
+// Today's workout is highlighted. Open a planned workout → the live session
+// screen; open a completed one → its summary with Apple Health vitals.
 struct WorkoutsView: View {
     @EnvironmentObject var store: AppStore
-    @State private var selected: Workout?
+    @AppStorage("bst_units") private var units = "lb"
+    @State private var selected: Workout?          // completed → summary
+    @State private var session: Workout?           // planned → live session
     @State private var showPreWorkoutPrompt = false
     @State private var preWorkoutDue: [Supplement] = []
     // Remembers the day we last showed the pre-workout drawer, so it appears at most
@@ -20,51 +25,34 @@ struct WorkoutsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    // COMPLETED workouts on top — user scrolls UP to reach these.
-                    // Oldest first so the most recent completed sits just above UPCOMING.
-                    Text("COMPLETED")
-                        .font(BrandFont.display(22)).foregroundColor(Brand.black)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .background(Brand.volt).clipShape(Capsule())
-
-                    ForEach(store.pastWorkouts.reversed()) { w in
-                        workoutRow(w, upcoming: false)
-                    }
+                    DSSectionHeader(title: "COMPLETED", subtitle: "\(store.pastWorkouts.count) sessions")
+                    ForEach(store.pastWorkouts.reversed()) { w in completedRow(w) }
                     if store.pastWorkouts.isEmpty {
-                        Text("No completed workouts yet.")
-                            .font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                        Text("No completed workouts yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
                             .padding(.vertical, 10)
                     }
 
-                    // UPCOMING header — this is where the view lands on open.
-                    Text("UPCOMING")
-                        .font(BrandFont.display(22)).foregroundColor(Brand.black)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .background(Brand.volt).clipShape(Capsule())
-                        .padding(.top, 8)
+                    // This is where the screen lands.
+                    DSScreenHeader(eyebrow: "Training", title: "Workouts")
+                        .padding(.top, 28)
                         .id("upcoming")
-
-                    ForEach(store.upcomingWorkouts) { w in
-                        workoutRow(w, upcoming: true)
-                    }
+                    DSSectionHeader(title: "UPCOMING", subtitle: store.upcomingWorkouts.isEmpty ? nil : "\(store.upcomingWorkouts.count) planned")
+                    ForEach(store.upcomingWorkouts) { w in upcomingRow(w) }
                     if store.upcomingWorkouts.isEmpty {
-                        Text("Nothing scheduled yet — check back soon.")
-                            .font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                        Text("Nothing scheduled yet — check back soon.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
                             .padding(.vertical, 10)
                     }
                 }
-                .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 20)
+                .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
             }
+            .background(Brand.bg.ignoresSafeArea())
+            .dsTopFade()
             .onAppear {
-                // Land on the upcoming section; completed is above, reachable by scrolling up.
                 DispatchQueue.main.async {
                     withAnimation(.none) { proxy.scrollTo("upcoming", anchor: .top) }
                 }
                 // Prompt ONLY when there's actually something to take before a workout
-                // today (see SupplementEngine.duePreWorkout), and only once per day —
-                // so browsing the Workouts tab doesn't keep re-opening the drawer.
+                // today (see SupplementEngine.duePreWorkout), and only once per day.
                 let today = Self.dayKey(Date())
                 guard lastPreWorkoutPromptDay != today else { return }
                 preWorkoutDue = SupplementEngine.shared.duePreWorkout(
@@ -77,36 +65,82 @@ struct WorkoutsView: View {
                 }
             }
         }
-        .sheet(item: $selected) { w in
-            WorkoutDetailView(workout: w)
-        }
+        .sheet(item: $selected) { w in WorkoutDetailView(workout: w) }
+        .fullScreenCover(item: $session) { w in WorkoutSessionView(workoutId: w.id) }
         .sheet(isPresented: $showPreWorkoutPrompt) {
             PreWorkoutSupplementPrompt(supplements: preWorkoutDue)
         }
         // Fires only when a logged set earns a throttled PR (see ProgressEngine).
-        .sheet(item: $store.prToCelebrate) { pr in
-            PRCelebrationView(pr: pr)
-        }
+        .sheet(item: $store.prToCelebrate) { pr in PRCelebrationView(pr: pr) }
     }
 
-    func workoutRow(_ w: Workout, upcoming: Bool) -> some View {
-        Button { selected = w } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(w.title).font(BrandFont.display(24)).foregroundColor(.white)
-                    Spacer()
-                    if !upcoming { Image(systemName: "checkmark.seal.fill").foregroundColor(Brand.volt) }
+    // MARK: Rows
+
+    private func upcomingRow(_ w: Workout) -> some View {
+        let cal = Calendar.current
+        let isToday = cal.isDateInToday(w.date)
+        let sets = w.exercises.reduce(0) { $0 + $1.sets.count }
+        let logged = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
+        return Button { session = w } label: {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(spacing: 0) {
+                    Text(w.date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
+                        .font(BrandFont.body(10, .heavy)).tracking(1)
+                    Text("\(cal.component(.day, from: w.date))").font(BrandFont.display(28))
                 }
-                Text("\(w.dayOfWeek.uppercased()) · \(w.dateLabel)")
-                    .font(BrandFont.body(11, .bold)).tracking(1).foregroundColor(Brand.volt)
-                Text(w.exerciseSummary)
-                    .font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                    .multilineTextAlignment(.leading).lineLimit(2)
+                .foregroundColor(isToday ? Brand.onVolt : Brand.text)
+                .frame(width: 54, height: 62)
+                .background(RoundedRectangle(cornerRadius: 14).fill(isToday ? Brand.volt : Brand.text.opacity(0.06)))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        if isToday { DSChip(text: "Today", color: Brand.volt, filled: true) }
+                        if logged > 0 { DSChip(text: "In progress · \(logged)/\(sets)", icon: "play.fill") }
+                    }
+                    Text(w.title).font(BrandFont.display(22)).foregroundColor(Brand.text).multilineTextAlignment(.leading)
+                    Text(w.exerciseSummary).font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                    Text("\(w.exercises.count) exercises · \(sets) sets").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(Brand.mute)
+                    .padding(.top, 4)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .card()
-            .opacity(upcoming ? 1 : 0.72)
+            .padding(14)
+            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(isToday ? Brand.voltLine.opacity(0.6) : Brand.line, lineWidth: isToday ? 1.5 : 1))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func completedRow(_ w: Workout) -> some View {
+        let cal = Calendar.current
+        let volume = w.exercises.flatMap { $0.sets }.compactMap { s -> Double? in
+            guard let r = s.loggedReps, let wt = s.loggedWeight else { return nil }
+            return Double(r) * wt
+        }.reduce(0, +)
+        let sets = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
+        let prs = store.personalRecords.filter { cal.isDate($0.date, inSameDayAs: w.date) }.count
+        return Button { selected = w } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundColor(Brand.onVolt)
+                    .frame(width: 28, height: 28).background(Circle().fill(Brand.volt))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(w.title).font(BrandFont.body(14, .bold)).foregroundColor(Brand.text).lineLimit(1)
+                    Text("\(w.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())) · \(sets) sets · \(StatsUnits.weightText(volume))")
+                        .font(BrandFont.body(11)).foregroundColor(Brand.mute).lineLimit(1)
+                }
+                Spacer()
+                if prs > 0 { DSChip(text: prs == 1 ? "PR" : "\(prs) PRs", icon: "trophy.fill") }
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundColor(Brand.mute)
+            }
+            .padding(12)
+            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
     }
 }
 
@@ -128,16 +162,32 @@ struct WorkoutDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("\(workout.dayOfWeek.uppercased()) · \(workout.dateLabel)")
-                        .font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
-                    Text(workout.title).font(BrandFont.display(34)).foregroundColor(.white)
+                        .font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                    Text(workout.title).font(BrandFont.display(34)).foregroundColor(Brand.text)
+
+                    if workout.completed {
+                        let sets = workout.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }
+                        let volume = sets.reduce(0.0) { $0 + $1.volume }
+                        let prs = store.personalRecords.filter { Calendar.training.isDate($0.date, inSameDayAs: workout.date) }.count
+                        HStack(spacing: 10) {
+                            DSStatTile(value: StatsUnits.weightText(volume, unit: false), label: "\(StatsUnits.weightLabel.uppercased()) MOVED")
+                            DSStatTile(value: "\(sets.count)", label: "SETS", color: Brand.text)
+                            DSStatTile(value: "\(prs)", label: prs == 1 ? "PR" : "PRS", color: prs > 0 ? Brand.volt : Brand.mute)
+                        }
+                        NavigationLink { StatsSessionView(workoutId: workout.id) } label: {
+                            DSListRow(title: "Full breakdown in Stats", subtitle: "Every set, rep-level bar speed and heart rate",
+                                      icon: "chart.line.uptrend.xyaxis")
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
 
                     LazyVGrid(columns: cols, spacing: 12) {
                         ForEach(workout.exercises) { ex in
                             Button { selectedExercise = ex } label: {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Image(systemName: "dumbbell.fill").foregroundColor(Brand.volt).font(.system(size: 20))
+                                    Image(systemName: "dumbbell.fill").foregroundColor(Brand.voltText).font(.system(size: 20))
                                     Spacer()
-                                    Text(ex.name).font(BrandFont.display(20)).foregroundColor(.white).multilineTextAlignment(.leading)
+                                    Text(ex.name).font(BrandFont.display(20)).foregroundColor(Brand.text).multilineTextAlignment(.leading)
                                     Text("\(ex.sets.count) sets · \(ex.muscleGroup)").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
@@ -156,7 +206,7 @@ struct WorkoutDetailView: View {
             .background(Brand.bg.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }.foregroundColor(Brand.volt)
+                    Button("Done") { dismiss() }.foregroundColor(Brand.voltText)
                 }
             }
             .sheet(item: $selectedExercise) { ex in
@@ -174,8 +224,8 @@ struct WorkoutDetailView: View {
     private var vitalsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "heart.fill").foregroundColor(Brand.volt).font(.system(size: 14))
-                Text("SESSION VITALS").font(BrandFont.body(12, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                Image(systemName: "heart.fill").foregroundColor(Brand.voltText).font(.system(size: 14))
+                Text("SESSION VITALS").font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
             }
             .padding(.top, 8)
 
@@ -209,8 +259,8 @@ struct WorkoutDetailView: View {
 
     private func vitalStat(_ value: String, _ label: String, _ icon: String) -> some View {
         VStack(spacing: 5) {
-            Image(systemName: icon).foregroundColor(Brand.volt).font(.system(size: 15))
-            Text(value).font(BrandFont.display(22)).foregroundColor(.white).minimumScaleFactor(0.6).lineLimit(1)
+            Image(systemName: icon).foregroundColor(Brand.voltText).font(.system(size: 15))
+            Text(value).font(BrandFont.display(22)).foregroundColor(Brand.text).minimumScaleFactor(0.6).lineLimit(1)
             Text(label).font(BrandFont.body(8, .bold)).tracking(0.5).foregroundColor(Brand.mute)
         }
         .frame(maxWidth: .infinity)
@@ -301,7 +351,7 @@ struct HeartRateSparkline: View {
                         else { p.addLine(to: CGPoint(x: x, y: y)) }
                     }
                 }
-                .stroke(Brand.volt, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                .stroke(Brand.voltLine, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
 
                 // X-axis time labels along the bottom.
                 HStack {
@@ -371,7 +421,7 @@ struct ExerciseDetailView: View {
             ForEach(setHRPoints) { p in
                 LineMark(x: .value("Set", p.setNumber), y: .value("Peak", p.peak),
                          series: .value("Metric", "Peak"))
-                    .foregroundStyle(Brand.volt).symbol(Circle()).symbolSize(40)
+                    .foregroundStyle(Brand.voltLine).symbol(Circle()).symbolSize(40)
                     .interpolationMethod(.catmullRom)
             }
             ForEach(setHRPoints) { p in
@@ -381,7 +431,7 @@ struct ExerciseDetailView: View {
                     .interpolationMethod(.catmullRom)
             }
         }
-        .chartForegroundStyleScale(["Peak": Brand.volt, "Avg": Color(hex: 0x3D9BE0)])
+        .chartForegroundStyleScale(["Peak": Brand.voltLine, "Avg": Color(hex: 0x3D9BE0)])
         .chartLegend(.hidden)
         .chartXAxis {
             AxisMarks(values: setHRPoints.map { $0.setNumber }) { value in
@@ -410,8 +460,8 @@ struct ExerciseDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(exercise.name).font(BrandFont.display(34)).foregroundColor(.white)
-                    Text(exercise.muscleGroup.uppercased()).font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text(exercise.name).font(BrandFont.display(34)).foregroundColor(Brand.text)
+                    Text(exercise.muscleGroup.uppercased()).font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
 
                     section("Description", exercise.description)
                     section("Coach Notes", exercise.coachNotes, highlight: true)
@@ -424,10 +474,10 @@ struct ExerciseDetailView: View {
                                 withAnimation(.easeInOut(duration: 0.25)) { showForm.toggle() }
                             } label: {
                                 HStack {
-                                    Image(systemName: "figure.strengthtraining.traditional").foregroundColor(Brand.volt)
-                                    Text("Proper Form").font(BrandFont.body(15, .bold)).foregroundColor(.white)
+                                    Image(systemName: "figure.strengthtraining.traditional").foregroundColor(Brand.voltText)
+                                    Text("Proper Form").font(BrandFont.body(15, .bold)).foregroundColor(Brand.text)
                                     Spacer()
-                                    Image(systemName: showForm ? "chevron.up" : "chevron.down").foregroundColor(Brand.volt)
+                                    Image(systemName: showForm ? "chevron.up" : "chevron.down").foregroundColor(Brand.voltText)
                                 }
                                 .padding(.vertical, 16).padding(.horizontal, 18)
                                 .background(Brand.black)
@@ -450,7 +500,7 @@ struct ExerciseDetailView: View {
                     }
 
                     // Sets
-                    Text("YOUR PLAN").font(BrandFont.body(12, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("YOUR PLAN").font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
                     ForEach($exercise.sets) { $set in
                         SetRow(set: $set,
                                number: (exercise.sets.firstIndex(where: {$0.id == set.id}) ?? 0) + 1,
@@ -460,7 +510,7 @@ struct ExerciseDetailView: View {
                     // Heart rate by set (shown once the exercise has been performed).
                     if !setHRPoints.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("HEART RATE BY SET").font(BrandFont.body(12, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                            Text("HEART RATE BY SET").font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
                             setHRChart.frame(height: 170)
                             HStack(spacing: 20) {
                                 legendDot(Brand.volt, "Peak BPM")
@@ -476,10 +526,10 @@ struct ExerciseDetailView: View {
                             withAnimation(.easeInOut(duration: 0.25)) { showHistory.toggle() }
                         } label: {
                             HStack {
-                                Image(systemName: "chart.line.uptrend.xyaxis").foregroundColor(Brand.volt)
-                                Text("History & Progress").font(BrandFont.body(15, .bold)).foregroundColor(.white)
+                                Image(systemName: "chart.line.uptrend.xyaxis").foregroundColor(Brand.voltText)
+                                Text("History & Progress").font(BrandFont.body(15, .bold)).foregroundColor(Brand.text)
                                 Spacer()
-                                Image(systemName: showHistory ? "chevron.up" : "chevron.down").foregroundColor(Brand.volt)
+                                Image(systemName: showHistory ? "chevron.up" : "chevron.down").foregroundColor(Brand.voltText)
                             }
                             .padding(.vertical, 16).padding(.horizontal, 18)
                             .background(Brand.black)
@@ -494,14 +544,14 @@ struct ExerciseDetailView: View {
 
                     // Client notes
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("YOUR NOTES").font(BrandFont.body(12, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                        Text("YOUR NOTES").font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
                         Text("Your coach can see these.").font(BrandFont.body(12)).foregroundColor(Brand.mute)
                         TextEditor(text: $exercise.clientNotes)
                             .frame(height: 100).scrollContentBackground(.hidden)
                             .padding(10).background(Brand.black)
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-                            .foregroundColor(.white)
+                            .foregroundColor(Brand.text)
                     }
                 }
                 .padding(20)
@@ -511,7 +561,7 @@ struct ExerciseDetailView: View {
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { save() }.foregroundColor(Brand.volt).fontWeight(.bold)
+                    Button("Save") { save() }.foregroundColor(Brand.voltText).fontWeight(.bold)
                 }
             }
             .keyboardDoneButton()
@@ -544,9 +594,9 @@ struct ExerciseDetailView: View {
 
     func section(_ title: String, _ body: String, highlight: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(BrandFont.body(12, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+            Text(title.uppercased()).font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
             if highlight {
-                Text(body).font(BrandFont.body(15)).foregroundColor(.white)
+                Text(body).font(BrandFont.body(15)).foregroundColor(Brand.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
                     .background(Brand.black)
@@ -572,7 +622,7 @@ struct SetRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("SET \(number)").font(BrandFont.display(20)).foregroundColor(.white)
+                Text("SET \(number)").font(BrandFont.display(20)).foregroundColor(Brand.text)
                 Spacer()
                 Text("Target: \(set.targetReps) × \(Int(set.targetWeight))lb")
                     .font(BrandFont.body(12, .semibold)).foregroundColor(Brand.mute)
@@ -587,14 +637,29 @@ struct SetRow: View {
             }
             // RPE 1-10
             VStack(alignment: .leading, spacing: 6) {
-                Text("DIFFICULTY (RPE 1-10)").font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
+                HStack {
+                    Text("DIFFICULTY (RPE 1-10)").font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
+                    Spacer()
+                    // Half steps: tap a number, then ½ to add half.
+                    if let r = set.rpe, r < 10 {
+                        Button { set.rpe = r == r.rounded() ? r + 0.5 : r.rounded(.down) } label: {
+                            Text(r == r.rounded() ? "+½" : "\(r.rpeText) ✓").font(BrandFont.body(11, .bold))
+                                .foregroundColor(r == r.rounded() ? Brand.voltText : Brand.onVolt)
+                                .padding(.horizontal, 10).frame(minHeight: 28)
+                                .background(Capsule().fill(r == r.rounded() ? Color.clear : Brand.volt))
+                                .overlay(Capsule().stroke(Brand.voltLine, lineWidth: 1))
+                        }
+                        .accessibilityLabel(r == r.rounded() ? "Add half a point" : "Remove the half point")
+                    }
+                }
                 HStack(spacing: 5) {
                     ForEach(1...10, id: \.self) { n in
-                        Button { set.rpe = n } label: {
+                        let on = set.rpe.map { Int($0) == n } ?? false
+                        Button { set.rpe = Double(n) } label: {
                             Text("\(n)").font(BrandFont.body(13, .bold))
-                                .foregroundColor(set.rpe == n ? Brand.black : Brand.white)
+                                .foregroundColor(on ? Brand.onVolt : Brand.white)
                                 .frame(width: 30, height: 30)
-                                .background(set.rpe == n ? Brand.volt : Brand.bg)
+                                .background(on ? Brand.volt : Brand.bg)
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(Brand.line, lineWidth: 1))
                         }
@@ -611,7 +676,7 @@ struct SetRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label.uppercased()).font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
             TextField("", text: value)
-                .keyboardType(.numberPad).foregroundColor(.white)
+                .keyboardType(.numberPad).foregroundColor(Brand.text)
                 .padding(10).background(Brand.bg)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))

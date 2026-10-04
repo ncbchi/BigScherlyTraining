@@ -11,7 +11,7 @@ struct LoginView: View {
 
     var body: some View {
         ZStack {
-            Brand.black.ignoresSafeArea()
+            BrandDark.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
                 Image("logo")            // add logo asset; text fallback below
@@ -21,10 +21,10 @@ struct LoginView: View {
 
                 Text("Big Scherly Training")
                     .font(BrandFont.display(30))
-                    .foregroundColor(Brand.white)
+                    .foregroundColor(BrandDark.white)
                 Text("Lets Get Big Together Queens")
                     .font(BrandFont.body(11, .bold))
-                    .tracking(3).foregroundColor(Brand.volt)
+                    .tracking(3).foregroundColor(BrandDark.volt)
                     .padding(.bottom, 40)
 
                 VStack(spacing: 14) {
@@ -32,7 +32,7 @@ struct LoginView: View {
                     styledField("Password", text: $password, secure: true)
                     if showError {
                         Text("Check your email and password.")
-                            .font(BrandFont.body(13)).foregroundColor(Brand.danger)
+                            .font(BrandFont.body(13)).foregroundColor(BrandDark.danger)
                     }
                     VoltButton(title: "Log In") {
                         // Both fields empty → offline demo account (App Store review). No network call.
@@ -95,15 +95,15 @@ struct LoginView: View {
                 } label: {
                     Text("Demo Mode")
                         .font(BrandFont.body(12, .semibold))
-                        .foregroundColor(Brand.volt)
+                        .foregroundColor(BrandDark.volt)
                         .padding(.horizontal, 16).padding(.vertical, 7)
-                        .overlay(Capsule().stroke(Brand.volt.opacity(0.35), lineWidth: 1))
+                        .overlay(Capsule().stroke(BrandDark.volt.opacity(0.35), lineWidth: 1))
                 }
                 .padding(.bottom, 14)
 
                 Text("LGBTQ+ owned · Since 2024")
                     .font(BrandFont.body(11, .semibold))
-                    .tracking(2).foregroundColor(Brand.mute)
+                    .tracking(2).foregroundColor(BrandDark.mute)
                     .padding(.bottom, 20)
             }
         }
@@ -119,13 +119,13 @@ struct LoginView: View {
         .autocorrectionDisabled()
         .foregroundColor(.white)
         .padding(15)
-        .background(Brand.black)
+        .background(BrandDark.black)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14).stroke(BrandDark.line, lineWidth: 1)
                 if text.wrappedValue.isEmpty {
-                    Text(placeholder).foregroundColor(Brand.mute)
+                    Text(placeholder).foregroundColor(BrandDark.mute)
                         .padding(.leading, 16).allowsHitTesting(false)
                 }
             }
@@ -142,7 +142,7 @@ struct WelcomeBoardView: View {
 
     var body: some View {
         ZStack {
-            Brand.black.ignoresSafeArea()
+            BrandDark.black.ignoresSafeArea()
 
             // Flat grid of tiles that flip to the next photo
             FlippingTileGrid(photos: store.boardPhotos)
@@ -248,7 +248,7 @@ struct FlipTile: View {
 
     private func tileFace(_ i: Int) -> some View {
         RoundedRectangle(cornerRadius: 6)
-            .fill(Brand.bg)
+            .fill(BrandDark.bg)
             .overlay(
                 Group {
                     if !photos.isEmpty, UIImage(named: photos[i % photos.count]) != nil {
@@ -256,9 +256,9 @@ struct FlipTile: View {
                     } else {
                         // fallback tile
                         ZStack {
-                            Brand.bg
+                            BrandDark.bg
                             Text("#bigscherlytraining")
-                                .font(BrandFont.body(8, .bold)).foregroundColor(Brand.mute)
+                                .font(BrandFont.body(8, .bold)).foregroundColor(BrandDark.mute)
                         }
                     }
                 }

@@ -20,30 +20,26 @@ struct ChatListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Eyebrow(text: "Talk To Coach")
-                        Text("Chat").font(BrandFont.display(48)).foregroundColor(.white)
-                    }
+                HStack(alignment: .bottom) {
+                    DSScreenHeader(eyebrow: "Talk To Coach", title: "Chat",
+                                   subtitle: store.unreadMessages > 0
+                                       ? "\(store.unreadMessages) unread from your coach"
+                                       : "Questions, form checks, anything.")
                     Spacer()
-                    Button { showNew = true } label: {
-                        Image(systemName: "square.and.pencil").foregroundColor(Brand.black)
-                            .padding(12).background(Brand.volt).clipShape(Capsule())
-                    }
+                    DSIconButton(systemName: "square.and.pencil", accessibilityLabel: "New conversation",
+                                 size: 48, tint: Brand.onVolt, fill: Brand.volt) { showNew = true }
                 }
 
-                // Category filter chips
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        chip("All", filter == nil) { filter = nil }
-                        ForEach(ChatCategory.allCases, id: \.self) { cat in
-                            chip(cat.rawValue, filter == cat) { filter = cat }
-                        }
-                    }
-                }
+                // Category filter: All in the middle, swipe either way
+                DSCarousel(options: [DSCarousel<String>.Option(id: "All", label: "All")]
+                                    + ChatCategory.allCases.map { DSCarousel<String>.Option(id: $0.rawValue, label: $0.rawValue) },
+                           selection: Binding(get: { filter?.rawValue ?? "All" },
+                                              set: { filter = ChatCategory(rawValue: $0) }),
+                           likely: "All", itemWidth: 116, accessibilityName: "Show conversations")
 
                 ForEach(filtered) { t in
                     Button { selected = t } label: { threadRow(t) }
+                        .buttonStyle(PressableStyle())
                 }
 
                 if filtered.isEmpty {
@@ -52,8 +48,10 @@ struct ChatListView: View {
                                message: "Tap the compose button to start a chat with your coach.")
                 }
             }
-            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 20)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
+        .background(Brand.bg.ignoresSafeArea())
+        .dsTopFade()
         .sheet(item: $selected) { t in ChatThreadView(thread: t).environmentObject(store) }
         .sheet(isPresented: $showNew) { NewChatSheet().environmentObject(store) }
     }
@@ -61,30 +59,52 @@ struct ChatListView: View {
     func chip(_ label: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label.uppercased()).font(BrandFont.body(11, .bold)).tracking(0.5)
-                .foregroundColor(on ? Brand.black : Brand.white)
+                .foregroundColor(on ? Brand.onVolt : Brand.white)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(on ? Brand.volt : Brand.black).clipShape(Capsule())
-                .overlay(Capsule().stroke(on ? Brand.volt : Brand.line, lineWidth: 1))
+                .overlay(Capsule().stroke(on ? Brand.voltLine : Brand.line, lineWidth: 1))
         }
     }
     func threadRow(_ t: ChatThread) -> some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(t.topic).font(BrandFont.display(20)).foregroundColor(.white)
-                    Text(t.category.rawValue.uppercased()).font(BrandFont.body(9, .bold)).tracking(0.5)
-                        .foregroundColor(Brand.volt).padding(.horizontal, 6).padding(.vertical, 2)
-                        .overlay(Capsule().stroke(Brand.volt.opacity(0.5), lineWidth: 1))
-                }
-                Text(t.preview).font(BrandFont.body(13)).foregroundColor(Brand.mute).lineLimit(1)
+        let icon: String = {
+            switch t.category {
+            case .general: return "bubble.left.fill"
+            case .form: return "figure.strengthtraining.traditional"
+            case .nutrition: return "fork.knife"
+            case .program: return "list.bullet.clipboard"
+            case .admin: return "person.text.rectangle"
             }
-            Spacer()
+        }()
+        let last = t.messages.last
+        return HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+                .foregroundColor(t.unread > 0 ? Brand.onVolt : Brand.voltText)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(t.unread > 0 ? Brand.volt : Brand.text.opacity(0.06)))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(t.topic).font(BrandFont.body(15, t.unread > 0 ? .heavy : .bold)).foregroundColor(Brand.text).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(t.lastActivity.formatted(.relative(presentation: .named)))
+                        .font(BrandFont.body(10)).foregroundColor(Brand.mute).lineLimit(1)
+                }
+                HStack(spacing: 6) {
+                    Text(t.category.rawValue.uppercased()).font(BrandFont.body(8, .bold)).tracking(0.6)
+                        .foregroundColor(Brand.voltText).padding(.horizontal, 6).padding(.vertical, 2)
+                        .overlay(Capsule().stroke(Brand.voltLine.opacity(0.5), lineWidth: 1))
+                    Text((last?.fromTrainer == true ? "Coach: " : "You: ") + t.preview)
+                        .font(BrandFont.body(13, t.unread > 0 ? .semibold : .regular))
+                        .foregroundColor(t.unread > 0 ? Brand.text : Brand.mute).lineLimit(1)
+                }
+            }
             if t.unread > 0 {
-                Text("\(t.unread)").font(BrandFont.body(11, .bold)).foregroundColor(Brand.black)
+                Text("\(t.unread)").font(BrandFont.body(11, .bold)).foregroundColor(Brand.onVolt)
                     .frame(width: 22, height: 22).background(Circle().fill(Brand.volt))
             }
         }
-        .card()
+        .padding(14)
+        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(t.unread > 0 ? Brand.voltLine.opacity(0.5) : Brand.line, lineWidth: 1))
     }
 }
 
@@ -123,10 +143,10 @@ struct ChatThreadView: View {
                 // Composer
                 HStack(spacing: 12) {
                     PhotosPicker(selection: $pickedItem, matching: .videos, photoLibrary: .shared()) {
-                        Image(systemName: "video.badge.plus").foregroundColor(Brand.volt).font(.system(size: 22))
+                        Image(systemName: "video.badge.plus").foregroundColor(Brand.voltText).font(.system(size: 22))
                     }
                     TextField("", text: $draft, prompt: Text("Message coach…").foregroundColor(Brand.mute))
-                        .foregroundColor(.white).padding(12).background(Brand.black)
+                        .foregroundColor(Brand.text).padding(12).background(Brand.black)
                         .overlay(Capsule().stroke(Brand.line, lineWidth: 1)).clipShape(Capsule())
                     Button {
                         guard !draft.isEmpty else { return }
@@ -137,7 +157,7 @@ struct ChatThreadView: View {
                             Task { try? await APIClient.shared.sendMessage(threadId: thread.id, text: text) }
                         }
                     } label: {
-                        Image(systemName: "arrow.up").foregroundColor(Brand.black).font(.system(size: 18, weight: .bold))
+                        Image(systemName: "arrow.up").foregroundColor(Brand.onVolt).font(.system(size: 18, weight: .bold))
                             .frame(width: 40, height: 40).background(Circle().fill(Brand.volt))
                     }
                 }
@@ -149,7 +169,7 @@ struct ChatThreadView: View {
             .navigationBarTitleDisplayMode(.inline)
             .tapToDismissKeyboard()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() }.foregroundColor(Brand.volt) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() }.foregroundColor(Brand.voltText) }
             }
             .task {
                 // Load full message history from the API when the thread opens
@@ -212,7 +232,7 @@ struct ChatThreadView: View {
                 if !m.text.isEmpty {
                     Text(m.text)
                         .font(BrandFont.body(15))
-                        .foregroundColor(m.fromTrainer ? .white : Brand.black)
+                        .foregroundColor(m.fromTrainer ? Brand.text : Brand.onVolt)
                         .padding(.horizontal, 16).padding(.vertical, 11)
                         .background(m.fromTrainer ? Brand.black : Brand.volt)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -245,7 +265,7 @@ struct ChatThreadView: View {
                     Image(systemName: "video.fill").foregroundColor(Brand.mute).font(.system(size: 26))
                 }
                 Image(systemName: "play.circle.fill")
-                    .font(.system(size: 46)).foregroundColor(.white.opacity(0.92)).shadow(radius: 6)
+                    .font(.system(size: 46)).foregroundColor(Brand.text.opacity(0.92)).shadow(radius: 6)
             }
             .frame(width: 210, height: 140)
             .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -289,27 +309,15 @@ struct NewChatSheet: View {
                 Text("Start a new conversation. Give it a topic so it stays organized.")
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("TOPIC").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("TOPIC").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                     TextField("", text: $topic, prompt: Text("e.g. Deadlift form").foregroundColor(Brand.mute))
-                        .foregroundColor(.white).padding(14).background(Brand.black)
+                        .foregroundColor(Brand.text).padding(14).background(Brand.black)
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("CATEGORY").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(ChatCategory.allCases, id: \.self) { c in
-                                Button { category = c } label: {
-                                    Text(c.rawValue.uppercased()).font(BrandFont.body(11, .bold))
-                                        .foregroundColor(category == c ? Brand.black : Brand.white)
-                                        .padding(.horizontal, 14).padding(.vertical, 8)
-                                        .background(category == c ? Brand.volt : Brand.black)
-                                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-                                }
-                            }
-                        }
-                    }
+                    Text("CATEGORY").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                    DSCarousel(options: ChatCategory.allCases.map { DSCarousel<ChatCategory>.Option(id: $0, label: $0.rawValue) },
+                               selection: $category, likely: .general, itemWidth: 116, accessibilityName: "Category")
                 }
                 VoltButton(title: "Start Chat") {
                     let trimmed = topic.trimmingCharacters(in: .whitespaces)
@@ -328,7 +336,7 @@ struct NewChatSheet: View {
             .navigationTitle("New Chat")
             .tapToDismissKeyboard()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.volt) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) }
             }
         }
     }

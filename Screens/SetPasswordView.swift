@@ -13,14 +13,14 @@ struct SetPasswordView: View {
 
     var body: some View {
         ZStack {
-            Brand.bg.ignoresSafeArea()
+            BrandDark.bg.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 18) {
                 Spacer()
                 Eyebrow(text: "One Quick Step")
                 Text("Set Your\nPassword")
                     .font(BrandFont.display(44)).foregroundColor(.white)
                 Text("You're logged in with a temporary password from your coach. Choose your own to continue.")
-                    .font(BrandFont.body(14)).foregroundColor(Brand.mute)
+                    .font(BrandFont.body(14)).foregroundColor(BrandDark.mute)
 
                 field("Temporary password", text: $current, secure: true)
                 field("New password (min 8 characters)", text: $newPass, secure: true)
@@ -41,15 +41,15 @@ struct SetPasswordView: View {
 
     private func field(_ label: String, text: Binding<String>, secure: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased()).font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
+            Text(label.uppercased()).font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(BrandDark.mute)
             Group {
                 if secure { SecureField("", text: text) } else { TextField("", text: text) }
             }
             .textInputAutocapitalization(.never)
             .foregroundColor(.white).padding(12)
-            .background(Brand.black)
+            .background(BrandDark.black)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(BrandDark.line, lineWidth: 1))
         }
     }
 

@@ -8,6 +8,9 @@ private let voltDim = Color(red: 0xED/255, green: 0xFF/255, blue: 0x3D/255).opac
 
 struct WatchWorkoutView: View {
     @EnvironmentObject var state: WatchState
+    @EnvironmentObject var session: WorkoutSessionManager
+    @EnvironmentObject var motion: MotionRecorder
+    @State private var confirmEnd = false
 
     private var totalSets: Int {
         state.activeWorkout?.exercises.reduce(0) { $0 + $1.sets.count } ?? 0
@@ -38,6 +41,8 @@ struct WatchWorkoutView: View {
                 .padding(.vertical, 2)
                 .listRowBackground(Color.clear)
 
+                sessionRow.listRowBackground(Color.clear)
+
                 ForEach(workout.exercises) { ex in
                     NavigationLink {
                         WatchExerciseView(exerciseId: ex.id)
@@ -45,6 +50,19 @@ struct WatchWorkoutView: View {
                         exerciseRow(ex)
                     }
                 }
+
+                if session.isRunning {
+                    Button(role: .destructive) { confirmEnd = true } label: {
+                        Label("End Session", systemImage: "stop.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                }
+            }
+            .confirmationDialog("End this session?", isPresented: $confirmEnd) {
+                Button("End & Save", role: .destructive) { Task { await session.end() } }
+                Button("Keep Going", role: .cancel) {}
+            } message: {
+                Text("It's saved to Apple Health as a strength workout.")
             }
         } else {
             VStack(spacing: 8) {
@@ -54,6 +72,55 @@ struct WatchWorkoutView: View {
                     .font(.system(size: 12)).foregroundColor(.gray).multilineTextAlignment(.center)
             }
             .padding()
+        }
+    }
+
+    // Start button before the session; live heart rate, timer and rep count during it.
+    @ViewBuilder
+    private var sessionRow: some View {
+        if session.isRunning {
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    Image(systemName: "heart.fill").font(.system(size: 11)).foregroundColor(.red)
+                    Text(session.heartRate.map { "\($0)" } ?? "--")
+                        .font(.system(size: 15, weight: .bold, design: .rounded)).monospacedDigit()
+                        .foregroundColor(.white)
+                }
+                if let start = session.startDate {
+                    Text(start, style: .timer)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .foregroundColor(.gray)
+                }
+                Spacer()
+                if let reps = motion.liveRepCount {
+                    Text("\(reps) rep\(reps == 1 ? "" : "s")")
+                        .font(.system(size: 13, weight: .bold, design: .rounded)).monospacedDigit()
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(volt))
+                } else {
+                    Image(systemName: "waveform.path")
+                        .font(.system(size: 12, weight: .semibold)).foregroundColor(volt)
+                }
+            }
+            .padding(.vertical, 4)
+        } else {
+            Button {
+                Task { await session.start() }
+            } label: {
+                VStack(spacing: 2) {
+                    Label("Start Session", systemImage: "play.fill")
+                        .font(.system(size: 15, weight: .bold)).foregroundColor(.black)
+                    Text("Tracks reps, bar speed & heart rate")
+                        .font(.system(size: 10)).foregroundColor(.black.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 8)
+                .background(Capsule().fill(volt))
+            }
+            .buttonStyle(.plain)
+            if let err = session.lastError {
+                Text(err).font(.system(size: 11)).foregroundColor(.orange)
+            }
         }
     }
 
@@ -134,6 +201,8 @@ struct WatchExerciseView: View {
                 }
             }
             .navigationTitle(ex.name)
+            .onAppear { state.focusedExerciseId = exerciseId }
+            .onDisappear { if state.focusedExerciseId == exerciseId { state.focusedExerciseId = nil } }
             .onReceive(tick) { _ in
                 if state.restEndDate != nil, state.restRemaining <= 0 { state.restEndDate = nil }
             }
@@ -201,7 +270,7 @@ struct WatchExerciseView: View {
                 Text("\(reps)×\(Int(set.loggedWeight ?? set.targetWeight))")
                     .font(.system(size: 13, weight: .bold, design: .rounded)).foregroundColor(volt)
                 if let rpe = set.rpe {
-                    Text("@\(rpe)").font(.system(size: 11)).foregroundColor(.gray)
+                    Text("@\(rpe == rpe.rounded() ? String(Int(rpe)) : String(format: "%.1f", rpe))").font(.system(size: 11)).foregroundColor(.gray)
                 }
             } else {
                 Text("\(set.targetReps)×\(Int(set.targetWeight))")
@@ -219,6 +288,10 @@ struct WatchSetLogView: View {
     let exerciseId: String
     let setId: String
     let setNumber: Int
+    /// When confirming an auto-detected set: its rep count and motion.
+    var detection: DetectedSet? = nil
+    /// Extra step after logging (the detected-set sheet uses it to close itself).
+    var onLogged: (() -> Void)? = nil
 
     @State private var reps: Double = 0
     @State private var weight: Double = 0
@@ -249,20 +322,27 @@ struct WatchSetLogView: View {
                     Text("SET \(setNumber)")
                         .font(.system(size: 10, weight: .black)).tracking(1.5)
                         .foregroundColor(volt)
+                    if let d = detection {
+                        Text(String(format: "Detected · %.2f m/s · %.0f in", d.meanVelocity, d.averageTravelM * 39.37))
+                            .font(.system(size: 10)).foregroundColor(.gray)
+                    }
                 }
 
                 sliderRow("REPS", value: $reps, range: 1...20, step: 1, display: "\(Int(reps))")
                 sliderRow("WEIGHT", value: $weight, range: weightRange, step: 5,
                           display: "\(Int(weight))")
-                sliderRow("RPE", value: $rpe, range: 1...10, step: 1, display: "\(Int(rpe))")
+                sliderRow("RPE", value: $rpe, range: 1...10, step: 0.5,
+                          display: rpe == rpe.rounded() ? "\(Int(rpe))" : String(format: "%.1f", rpe))
 
                 Button {
                     state.logSet(exerciseId: exerciseId, setId: setId,
-                                 reps: Int(reps), weight: weight, rpe: Int(rpe))
+                                 reps: Int(reps), weight: weight, rpe: rpe,
+                                 motion: detection)
                     if !isLastSet, let rest = exercise?.restSeconds, rest > 0 {
                         state.startRest(seconds: rest)
                     }
                     dismiss()
+                    onLogged?()
                 } label: {
                     Text(isLastSet ? "Log Set" : "Log & Rest")
                         .font(.system(size: 15, weight: .bold)).foregroundColor(.black)
@@ -280,11 +360,11 @@ struct WatchSetLogView: View {
         }
         .onAppear {
             guard !loaded, let s = set else { return }
-            reps = min(20, max(1, Double(s.loggedReps ?? s.targetReps)))
+            reps = min(20, max(1, Double(detection?.reps.count ?? s.loggedReps ?? s.targetReps)))
             targetWeight = s.targetWeight
             let w = s.loggedWeight ?? s.targetWeight
             weight = min(targetWeight + 50, max(max(0, targetWeight - 50), w))
-            rpe = Double(s.rpe ?? 7)
+            rpe = s.rpe ?? 7
             loaded = true
         }
     }

@@ -22,10 +22,9 @@ struct SupplementsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Eyebrow(text: "Protocol")
-                Text("Supplements").font(BrandFont.display(48)).foregroundColor(.white)
-                Text("Your stack, prescribed by coach. Confirm each dose so your coach can track it.")
-                    .font(BrandFont.body(14)).foregroundColor(Brand.mute).padding(.bottom, 4)
+                DSScreenHeader(eyebrow: "Protocol", title: "Supplements",
+                               subtitle: "Your stack, prescribed by your coach. Confirm each dose so your coach can track it.")
+                    .padding(.bottom, 4)
 
                 if !store.supplements.filter({ $0.isActive }).isEmpty {
                     adherenceCard
@@ -45,8 +44,10 @@ struct SupplementsView: View {
                     .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                     .padding(.top, 8)
             }
-            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 20)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
+        .background(Brand.bg.ignoresSafeArea())
+        .dsTopFade()
         .overlay { if !disclaimerAck { disclaimerGate } }
         .onAppear { SupplementEngine.shared.requestPermissionIfNeeded() }
     }
@@ -54,20 +55,25 @@ struct SupplementsView: View {
     // MARK: Adherence
     private var adherenceCard: some View {
         let a = SupplementEngine.shared.adherence(logs: store.supplementLogs)
-        return HStack(spacing: 20) {
-            stat("\(a.streakDays)", "day streak", "flame.fill")
-            Divider().frame(height: 34).overlay(Brand.line)
-            stat(a.percentLabel, "30-day adherence", "checkmark.seal.fill")
+        let active = store.supplements.filter { $0.isActive }
+        let takenToday = active.filter { todayStatus($0) == .taken }.count
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                DSStatTile(value: "\(takenToday)/\(active.count)", label: "TAKEN TODAY")
+                DSStatTile(value: "\(a.streakDays)", label: "DAY STREAK")
+                DSStatTile(value: a.percentLabel, label: "30-DAY", color: Brand.text)
+            }
+            DSProgressBar(fraction: active.isEmpty ? 0 : Double(takenToday) / Double(active.count))
+            if takenToday == active.count && !active.isEmpty {
+                Label("All done for today — nice work.", systemImage: "checkmark.circle.fill")
+                    .font(BrandFont.body(12, .semibold)).foregroundColor(Brand.voltText)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(18)
-        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
     }
     private func stat(_ value: String, _ label: String, _ icon: String) -> some View {
         VStack(spacing: 4) {
-            Image(systemName: icon).foregroundColor(Brand.volt).font(.system(size: 16))
-            Text(value).font(BrandFont.display(30)).foregroundColor(.white)
+            Image(systemName: icon).foregroundColor(Brand.voltText).font(.system(size: 16))
+            Text(value).font(BrandFont.display(30)).foregroundColor(Brand.text)
             Text(label).font(BrandFont.body(11)).foregroundColor(Brand.mute)
         }.frame(maxWidth: .infinity)
     }
@@ -77,13 +83,13 @@ struct SupplementsView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(stack?.name ?? "Individual")
-                    .font(BrandFont.body(13, .bold)).foregroundColor(Brand.volt)
+                    .font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText)
                     .textCase(.uppercase)
                 Spacer()
                 if items.count > 1, allPending(items) {
                     Button { for s in items { store.confirmSupplement(s) } } label: {
                         Text("Take all").font(BrandFont.body(12, .bold))
-                            .foregroundColor(Brand.black)
+                            .foregroundColor(Brand.onVolt)
                             .padding(.horizontal, 12).padding(.vertical, 6)
                             .background(Brand.volt).clipShape(Capsule())
                     }
@@ -110,14 +116,14 @@ struct SupplementsView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(s.name).font(BrandFont.body(16, .bold)).foregroundColor(.white)
+                        Text(s.name).font(BrandFont.body(16, .bold)).foregroundColor(Brand.text)
                         if s.isPrescription {
-                            Text("Rx").font(BrandFont.body(9, .bold)).foregroundColor(Brand.black)
+                            Text("Rx").font(BrandFont.body(9, .bold)).foregroundColor(Brand.card)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Brand.mute).clipShape(Capsule())
                         }
                     }
-                    Text(s.dose.display).font(BrandFont.body(14, .semibold)).foregroundColor(Brand.volt)
+                    Text(s.dose.display).font(BrandFont.body(14, .semibold)).foregroundColor(Brand.voltText)
                     Text(s.timing.summary).font(BrandFont.body(12)).foregroundColor(Brand.mute)
                     if let inst = s.instructions {
                         Text(inst).font(BrandFont.body(11)).foregroundColor(Brand.mute).italic()
@@ -136,11 +142,11 @@ struct SupplementsView: View {
         switch status {
         case .taken:
             Label("Taken", systemImage: "checkmark.circle.fill")
-                .font(BrandFont.body(13, .bold)).foregroundColor(Brand.volt)
+                .font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText)
                 .labelStyle(.titleAndIcon)
         default:
             Button { store.confirmSupplement(s) } label: {
-                Text("Mark taken").font(BrandFont.body(13, .bold)).foregroundColor(Brand.black)
+                Text("Mark taken").font(BrandFont.body(13, .bold)).foregroundColor(Brand.onVolt)
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(Brand.volt).clipShape(Capsule())
             }
@@ -154,7 +160,7 @@ struct SupplementsView: View {
             Spacer()
             if let urlStr = s.reorderURL, let url = URL(string: urlStr) {
                 Link(destination: url) {
-                    Text("Reorder").font(BrandFont.body(11, .bold)).foregroundColor(Brand.black)
+                    Text("Reorder").font(BrandFont.body(11, .bold)).foregroundColor(Brand.onVolt)
                         .padding(.horizontal, 10).padding(.vertical, 4)
                         .background(Brand.volt).clipShape(Capsule())
                 }
@@ -179,13 +185,13 @@ struct SupplementsView: View {
         ZStack {
             Brand.bg.ignoresSafeArea()
             VStack(spacing: 18) {
-                Image(systemName: "cross.case.fill").font(.system(size: 40)).foregroundColor(Brand.volt)
-                Text("Before you start").font(BrandFont.display(30)).foregroundColor(.white)
+                Image(systemName: "cross.case.fill").font(.system(size: 40)).foregroundColor(Brand.voltText)
+                Text("Before you start").font(BrandFont.display(30)).foregroundColor(Brand.text)
                 Text("The supplements here are prescribed by your coach for general training and wellness support. This is not medical advice. Consult your physician before starting any supplement, especially if you take medication or have a health condition.")
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
                     .multilineTextAlignment(.center)
                 Button { disclaimerAck = true } label: {
-                    Text("I understand").font(BrandFont.body(15, .bold)).foregroundColor(Brand.black)
+                    Text("I understand").font(BrandFont.body(15, .bold)).foregroundColor(Brand.onVolt)
                         .frame(maxWidth: .infinity).padding(.vertical, 15)
                         .background(Brand.volt).clipShape(RoundedRectangle(cornerRadius: 14))
                 }
@@ -242,14 +248,14 @@ struct PreWorkoutSupplementPrompt: View {
                     Circle().fill(Brand.volt).frame(width: 46, height: 46)
                     Image(systemName: "pills.fill")
                         .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(Brand.black)
+                        .foregroundColor(Brand.onVolt)
                 }
                 .scaleEffect(appear ? 1 : 0.6)
                 .animation(.spring(response: 0.45, dampingFraction: 0.55), value: appear)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Fuel up first")
-                        .font(BrandFont.display(26)).foregroundColor(.white)
+                        .font(BrandFont.display(26)).foregroundColor(Brand.text)
                     Text("Your coach set these for before you train.")
                         .font(BrandFont.body(13)).foregroundColor(Brand.mute)
                         .fixedSize(horizontal: false, vertical: true)
@@ -264,7 +270,7 @@ struct PreWorkoutSupplementPrompt: View {
                     Text("TAKEN").font(BrandFont.body(11, .semibold)).tracking(1).foregroundColor(Brand.mute)
                     Spacer()
                     Text("\(takenCount) of \(supplements.count)")
-                        .font(BrandFont.body(12, .semibold)).foregroundColor(Brand.volt)
+                        .font(BrandFont.body(12, .semibold)).foregroundColor(Brand.voltText)
                 }
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
@@ -304,7 +310,7 @@ struct PreWorkoutSupplementPrompt: View {
                     }
                 } label: {
                     Text(allTaken ? "Let's train" : "Mark all as taken")
-                        .font(BrandFont.body(16, .bold)).foregroundColor(Brand.black)
+                        .font(BrandFont.body(16, .bold)).foregroundColor(Brand.onVolt)
                         .frame(maxWidth: .infinity).padding(.vertical, 15)
                         .background(Brand.volt).clipShape(RoundedRectangle(cornerRadius: 14))
                 }
@@ -326,18 +332,18 @@ struct PreWorkoutSupplementPrompt: View {
             ZStack {
                 Circle().fill(Brand.volt).frame(width: 76, height: 76)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 34, weight: .bold)).foregroundColor(Brand.black)
+                    .font(.system(size: 34, weight: .bold)).foregroundColor(Brand.onVolt)
             }
             .scaleEffect(appear ? 1 : 0.6)
             .animation(.spring(response: 0.5, dampingFraction: 0.55), value: appear)
-            Text("You're all set").font(BrandFont.display(28)).foregroundColor(.white)
+            Text("You're all set").font(BrandFont.display(28)).foregroundColor(Brand.text)
             Text("No pre-workout supplements today. Go get after it.")
                 .font(BrandFont.body(14)).foregroundColor(Brand.mute)
                 .multilineTextAlignment(.center).padding(.horizontal, 40)
             Spacer(minLength: 24)
             Button { dismiss() } label: {
                 Text("Let's train")
-                    .font(BrandFont.body(16, .bold)).foregroundColor(Brand.black)
+                    .font(BrandFont.body(16, .bold)).foregroundColor(Brand.onVolt)
                     .frame(maxWidth: .infinity).padding(.vertical, 15)
                     .background(Brand.volt).clipShape(RoundedRectangle(cornerRadius: 14))
             }
@@ -356,13 +362,13 @@ struct PreWorkoutSupplementPrompt: View {
                 .overlay(
                     Image(systemName: "pills.fill")
                         .font(.system(size: 18))
-                        .foregroundColor(taken ? Brand.volt : Brand.mute)
+                        .foregroundColor(taken ? Brand.voltText : Brand.mute)
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(s.name).font(BrandFont.body(15, .semibold)).foregroundColor(.white)
+                Text(s.name).font(BrandFont.body(15, .semibold)).foregroundColor(Brand.text)
                 Text(s.dose.display + (s.instructions.map { " · \($0)" } ?? ""))
-                    .font(BrandFont.body(12)).foregroundColor(Brand.volt)
+                    .font(BrandFont.body(12)).foregroundColor(Brand.voltText)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -370,7 +376,7 @@ struct PreWorkoutSupplementPrompt: View {
             if taken {
                 Circle().fill(Brand.volt).frame(width: 30, height: 30)
                     .overlay(Image(systemName: "checkmark")
-                        .font(.system(size: 15, weight: .bold)).foregroundColor(Brand.black))
+                        .font(.system(size: 15, weight: .bold)).foregroundColor(Brand.onVolt))
                     .transition(.scale.combined(with: .opacity))
             } else {
                 Button {
@@ -378,7 +384,7 @@ struct PreWorkoutSupplementPrompt: View {
                         store.confirmSupplement(s)
                     }
                 } label: {
-                    Text("Took it").font(BrandFont.body(12, .bold)).foregroundColor(Brand.black)
+                    Text("Took it").font(BrandFont.body(12, .bold)).foregroundColor(Brand.onVolt)
                         .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(Brand.volt).clipShape(Capsule())
                 }
@@ -389,7 +395,7 @@ struct PreWorkoutSupplementPrompt: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(taken ? Brand.volt.opacity(0.4) : Brand.line, lineWidth: 1)
+                .stroke(taken ? Brand.voltLine.opacity(0.4) : Brand.line, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .onTapGesture {

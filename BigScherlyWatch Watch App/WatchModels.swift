@@ -20,5 +20,25 @@ struct WatchSet: Codable, Identifiable {
     var targetWeight: Double
     var loggedReps: Int?
     var loggedWeight: Double?
-    var rpe: Int?
+    var rpe: Double?
+}
+
+// A set the wrist detected on its own, waiting to be matched to a planned set.
+struct DetectedSet: Identifiable, Equatable {
+    let id = UUID()
+    let start: Date
+    let end: Date
+    let reps: [RepMotion]
+    /// Best guess at which planned set this was (nil if nothing is left to log).
+    var suggestedExerciseId: String?
+    var suggestedSetId: String?
+    /// True when it started right around the end of a rest timer.
+    var confident: Bool
+
+    var meanVelocity: Double {
+        reps.isEmpty ? 0 : reps.map { $0.meanVelocity }.reduce(0, +) / Double(reps.count)
+    }
+    var averageTravelM: Double {
+        reps.isEmpty ? 0 : reps.map { $0.travelM }.reduce(0, +) / Double(reps.count)
+    }
 }

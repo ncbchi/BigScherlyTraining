@@ -17,7 +17,7 @@ struct HistoryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Eyebrow(text: "Track Your Progress")
-                Text("History").font(BrandFont.display(48)).foregroundColor(.white)
+                Text("History").font(BrandFont.display(48)).foregroundColor(Brand.text)
                 Text("Pick a lift to see every session and your strength trend over time.")
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
 
@@ -25,9 +25,9 @@ struct HistoryView: View {
                 if !store.personalRecords.isEmpty {
                     let prs = store.personalRecords.sorted { $0.date > $1.date }
                     HStack {
-                        Image(systemName: "trophy.fill").foregroundColor(Brand.volt)
+                        Image(systemName: "trophy.fill").foregroundColor(Brand.voltText)
                         Text("PERSONAL RECORDS").font(BrandFont.body(12, .bold))
-                            .tracking(1.5).foregroundColor(Brand.volt)
+                            .tracking(1.5).headerPill()
                         Spacer()
                         Text("\(prs.count)").font(BrandFont.body(12, .bold)).foregroundColor(Brand.mute)
                     }
@@ -41,17 +41,17 @@ struct HistoryView: View {
                                         .font(BrandFont.body(10, .bold)).tracking(1)
                                         .foregroundColor(Brand.mute).lineLimit(1)
                                     Text("\(pr.reps)×\(Int(pr.weight))")
-                                        .font(BrandFont.display(26)).foregroundColor(Brand.volt)
+                                        .font(BrandFont.display(26)).foregroundColor(Brand.voltText)
                                     Text("\(Int(pr.estimatedOneRepMax)) lb 1RM")
-                                        .font(BrandFont.body(11)).foregroundColor(.white)
+                                        .font(BrandFont.body(11)).foregroundColor(Brand.text)
                                     Text(pr.isFirstEver ? "First record" : "+\(Int(pr.gain)) lb")
-                                        .font(BrandFont.body(10, .bold)).foregroundColor(Brand.volt)
+                                        .font(BrandFont.body(10, .bold)).foregroundColor(Brand.voltText)
                                 }
                                 .padding(14)
                                 .frame(width: 140, alignment: .leading)
                                 .background(Brand.black)
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.volt, lineWidth: 1))
+                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.voltLine, lineWidth: 1))
                             }
                         }
                     }
@@ -61,22 +61,22 @@ struct HistoryView: View {
                 let trends = ProgressEngine.trends(workouts: store.workouts)
                 if !trends.isEmpty {
                     Text("STRENGTH TREND").font(BrandFont.body(12, .bold))
-                        .tracking(1.5).foregroundColor(Brand.volt).padding(.top, 10)
+                        .tracking(1.5).headerPill().padding(.top, 10)
                     VStack(spacing: 0) {
                         ForEach(trends) { t in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.exercise).font(BrandFont.body(14, .semibold)).foregroundColor(.white)
+                                    Text(t.exercise).font(BrandFont.body(14, .semibold)).foregroundColor(Brand.text)
                                     Text("\(t.sessions) session\(t.sessions == 1 ? "" : "s")")
                                         .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    Text("\(Int(t.current)) lb").font(BrandFont.body(14, .bold)).foregroundColor(.white)
+                                    Text("\(Int(t.current)) lb").font(BrandFont.body(14, .bold)).foregroundColor(Brand.text)
                                     if t.change != 0 {
                                         Text("\(t.change > 0 ? "+" : "")\(Int(t.change)) lb")
                                             .font(BrandFont.body(11, .bold))
-                                            .foregroundColor(t.change > 0 ? Brand.volt : Brand.mute)
+                                            .foregroundColor(t.change > 0 ? Brand.voltText : Brand.mute)
                                     }
                                 }
                             }
@@ -100,15 +100,15 @@ struct HistoryView: View {
                             HStack {
                                 Image(systemName: "dumbbell.fill")
                                     .font(.system(size: 14))
-                                    .foregroundColor(selected == name ? Brand.black : Brand.volt)
+                                    .foregroundColor(selected == name ? Brand.onVolt : Brand.voltText)
                                 Text(name).font(BrandFont.body(13, .semibold))
-                                    .foregroundColor(selected == name ? Brand.black : .white)
+                                    .foregroundColor(selected == name ? Brand.onVolt : Brand.text)
                                     .lineLimit(1).minimumScaleFactor(0.7)
                                 Spacer()
                             }
                             .padding(.horizontal, 14).padding(.vertical, 14)
                             .background(selected == name ? Brand.volt : Brand.black).clipShape(Capsule())
-                            .overlay(Capsule().stroke(selected == name ? Brand.volt : Brand.line, lineWidth: 1))
+                            .overlay(Capsule().stroke(selected == name ? Brand.voltLine : Brand.line, lineWidth: 1))
                         }
                     }
                 }
@@ -116,7 +116,7 @@ struct HistoryView: View {
                 // Selected exercise history
                 if let name = selected {
                     Text(name.uppercased())
-                        .font(BrandFont.display(28)).foregroundColor(.white)
+                        .font(BrandFont.display(28)).foregroundColor(Brand.text)
                         .padding(.top, 12)
                     ExerciseHistoryView(exerciseName: name)
                 } else {

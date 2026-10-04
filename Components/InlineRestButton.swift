@@ -49,7 +49,7 @@ struct InlineRestButton: View {
                 Text("DONE — REST \(restLabel)")
             }
             .font(BrandFont.body(13, .bold)).tracking(0.5)
-            .foregroundColor(Brand.black)
+            .foregroundColor(Brand.onVolt)
             .frame(maxWidth: .infinity).padding(.vertical, 14)
             .background(Brand.volt)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -79,12 +79,12 @@ struct InlineRestButton: View {
                     Text(remaining == 0 ? "TAP TO CLOSE" : "SKIP")
                         .font(BrandFont.body(11, .bold)).tracking(0.5)
                 }
-                .foregroundColor(.white)
+                .foregroundColor(Brand.text)
                 .blendMode(.difference)   // stays legible over volt + black
                 .padding(.horizontal, 16)
             }
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.volt, lineWidth: 2))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.voltLine, lineWidth: 2))
             .contentShape(Rectangle())
             .onTapGesture { stop() }      // tap anywhere on the bar to skip/close
         }

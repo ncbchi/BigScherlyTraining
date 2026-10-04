@@ -68,7 +68,7 @@ struct ExerciseHistoryView: View {
             ForEach(hrTrend) { p in
                 LineMark(x: .value("Date", p.date), y: .value("Peak", p.peak),
                          series: .value("Metric", "Peak"))
-                    .foregroundStyle(Brand.volt).symbol(Circle()).symbolSize(28)
+                    .foregroundStyle(Brand.voltLine).symbol(Circle()).symbolSize(28)
                     .interpolationMethod(.catmullRom)
             }
             ForEach(hrTrend) { p in
@@ -78,7 +78,7 @@ struct ExerciseHistoryView: View {
                     .interpolationMethod(.catmullRom)
             }
         }
-        .chartForegroundStyleScale(["Peak": Brand.volt, "Avg": Color(hex: 0x3D9BE0)])
+        .chartForegroundStyleScale(["Peak": Brand.voltLine, "Avg": Color(hex: 0x3D9BE0)])
         .chartLegend(.hidden)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
@@ -98,7 +98,7 @@ struct ExerciseHistoryView: View {
         VStack(alignment: .leading, spacing: 18) {
             // Effort (heart rate during this lift)
             if let hr = exerciseHR {
-                Text("EFFORT").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                Text("EFFORT").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                 HStack(spacing: 10) {
                     effortStat("\(hr.avg)", "AVG BPM", "heart.fill")
                     effortStat("\(hr.peak)", "PEAK BPM", "bolt.heart.fill")
@@ -110,7 +110,7 @@ struct ExerciseHistoryView: View {
 
             // Heart-rate trend across sessions (avg + peak by date)
             if hrTrend.count > 1 {
-                Text("HEART RATE OVER TIME").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                Text("HEART RATE OVER TIME").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                 hrChart.frame(height: 180)
                 HStack(spacing: 20) {
                     legendDot(Brand.volt, "Peak BPM")
@@ -121,14 +121,14 @@ struct ExerciseHistoryView: View {
 
             // Progress chart
             if sessions.count > 1 {
-                Text("PROGRESS").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                Text("PROGRESS").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                 chart
                     .frame(height: 200)
                 legend
             }
 
             // Session table
-            Text("SESSION HISTORY").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+            Text("SESSION HISTORY").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
             historyTable
         }
         .task {
@@ -142,8 +142,8 @@ struct ExerciseHistoryView: View {
 
     private func effortStat(_ value: String, _ label: String, _ icon: String) -> some View {
         VStack(spacing: 5) {
-            Image(systemName: icon).foregroundColor(Brand.volt).font(.system(size: 15))
-            Text(value).font(BrandFont.display(22)).foregroundColor(.white).minimumScaleFactor(0.6).lineLimit(1)
+            Image(systemName: icon).foregroundColor(Brand.voltText).font(.system(size: 15))
+            Text(value).font(BrandFont.display(22)).foregroundColor(Brand.text).minimumScaleFactor(0.6).lineLimit(1)
             Text(label).font(BrandFont.body(8, .bold)).tracking(0.5).foregroundColor(Brand.mute)
         }
         .frame(maxWidth: .infinity)
@@ -171,7 +171,7 @@ struct ExerciseHistoryView: View {
                     y: .value("Est. 1RM", s.estimatedOneRepMax),
                     series: .value("Metric", "Est. 1RM")
                 )
-                .foregroundStyle(Brand.volt)
+                .foregroundStyle(Brand.voltText)
                 .symbol(Circle()).symbolSize(28)
                 .interpolationMethod(.catmullRom)
             }
@@ -213,7 +213,7 @@ struct ExerciseHistoryView: View {
             if let first = sessions.first, let last = sessions.last {
                 let gain = Int(last.estimatedOneRepMax - first.estimatedOneRepMax)
                 if gain > 0 {
-                    Text("+\(gain) lb 1RM").font(BrandFont.body(12, .bold)).foregroundColor(Brand.volt)
+                    Text("+\(gain) lb 1RM").font(BrandFont.body(12, .bold)).foregroundColor(Brand.voltText)
                 }
             }
         }
@@ -252,10 +252,10 @@ struct ExerciseHistoryView: View {
         .card()
     }
 
-    private func cell(_ t: String, _ align: Alignment, weight: Font.Weight = .medium, color: Color = .white) -> some View {
+    private func cell(_ t: String, _ align: Alignment, weight: Font.Weight = .medium, color: Color = Brand.text) -> some View {
         Text(t)
             .font(BrandFont.body(13, weight))
-            .foregroundColor(color)
+            .foregroundColor(Brand.readable(color))
             .frame(maxWidth: .infinity, alignment: align)
     }
     private func dateLabel(_ d: Date) -> String {

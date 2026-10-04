@@ -57,6 +57,28 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A585FBA730086679008E8BE1"
+               BuildableName = "BigScherlyWatch Watch AppUITests.xctest"
+               ReferencedContainer = "container:BigScherlyTraining.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A585FB9D30086678008E8BE1"
+               BuildableName = "BigScherlyWatch Watch AppTests.xctest"
+               ReferencedContainer = "container:BigScherlyTraining.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

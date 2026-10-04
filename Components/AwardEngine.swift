@@ -17,7 +17,7 @@ enum AwardEngine {
                          supplementLogs: [SupplementLog],
                          personalRecords: [PersonalRecord]) -> [Award] {
         var out: [Award] = []
-        let cal = Calendar.current
+        let cal = Calendar.training
         let done = workouts.filter { $0.completed }.sorted { $0.date < $1.date }
 
         // ---- Volume milestones ----
@@ -160,7 +160,7 @@ enum AwardEngine {
     // MARK: - Helpers
 
     private static func weekKey(_ d: Date) -> DateComponents {
-        Calendar.current.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)
+        Calendar.training.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)
     }
 
     /// Distinct weeks in which the client trained, sorted.
@@ -178,7 +178,7 @@ enum AwardEngine {
     private static func streakCount(_ weeks: [DateComponents]) -> Int {
         guard !weeks.isEmpty else { return 0 }
         var best = 1, run = 1
-        let cal = Calendar.current
+        let cal = Calendar.training
         for i in 1..<weeks.count {
             guard let prev = cal.date(from: weeks[i - 1]),
                   let cur = cal.date(from: weeks[i]),
@@ -194,7 +194,7 @@ enum AwardEngine {
     /// Date the client first reached a streak of `needed` consecutive weeks.
     private static func streakDate(_ weeks: [DateComponents], needed: Int) -> Date? {
         guard weeks.count >= needed else { return nil }
-        let cal = Calendar.current
+        let cal = Calendar.training
         var run = 1
         for i in 1..<weeks.count {
             guard let prev = cal.date(from: weeks[i - 1]),
@@ -212,7 +212,7 @@ enum AwardEngine {
     /// PRs on squat, bench and deadlift all inside one 12-week block.
     private static func tripleCrownDate(_ prs: [PersonalRecord]) -> Date? {
         let big = ["Back Squat", "Bench Press", "Deadlift"]
-        let cal = Calendar.current
+        let cal = Calendar.training
         let relevant = prs.filter { big.contains($0.exercise) }.sorted { $0.date < $1.date }
         for pr in relevant {
             guard let end = cal.date(byAdding: .weekOfYear, value: 12, to: pr.date) else { continue }
@@ -226,7 +226,7 @@ enum AwardEngine {
 
     /// A week where every main lift trained was heavier than the week before.
     private static func upAcrossTheBoardDate(workouts done: [Workout]) -> Date? {
-        let cal = Calendar.current
+        let cal = Calendar.training
         let weeks = trainingWeeks(done)
         guard weeks.count >= 2 else { return nil }
 
@@ -266,7 +266,7 @@ enum AwardEngine {
     private static func perfectWeek(workouts: [Workout],
                                     supplements: [Supplement],
                                     logs: [SupplementLog]) -> PerfectWeek? {
-        let cal = Calendar.current
+        let cal = Calendar.training
         let now = Date()
         let weeks = Set(workouts.filter { $0.date < now }.map { weekKey($0.date) })
 
@@ -295,7 +295,7 @@ enum AwardEngine {
 
     /// Current run of consecutive days with no missed dose (and at least one taken).
     private static func currentDoseStreak(logs: [SupplementLog]) -> Int {
-        let cal = Calendar.current
+        let cal = Calendar.training
         var streak = 0
         for off in 0..<120 {
             guard let day = cal.date(byAdding: .day, value: -off, to: Date()) else { break }

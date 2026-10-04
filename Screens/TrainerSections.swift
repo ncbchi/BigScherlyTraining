@@ -1,236 +1,161 @@
 import SwiftUI
 
-// MARK: - Today (landing / triage summary)
-// Opens the app on "who needs me right now" rather than a raw client list.
-
-struct TrainerTodayView: View {
-    @EnvironmentObject var store: AppStore
-
-    private var needsAttention: [RosterItem] { store.roster.filter { $0.needsAttention } }
-    private var drifting: [RosterItem] { store.roster.filter { $0.isDrifting } }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Eyebrow(text: greeting)
-                Text("Today").font(BrandFont.display(44)).foregroundColor(.white)
-
-                // Summary counters
-                HStack(spacing: 10) {
-                    summaryTile("\(store.totalUnread)", "UNREAD", .chat)
-                    summaryTile("\(store.pendingCheckInCount)", "CHECK-INS", .checkins)
-                    summaryTile("\(drifting.count)", "DRIFTING", .clients)
-                }
-
-                if needsAttention.isEmpty && drifting.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 40)).foregroundColor(Brand.volt)
-                        Text("All caught up.")
-                            .font(BrandFont.body(16, .bold)).foregroundColor(.white)
-                        Text("Nobody's waiting on you right now.")
-                            .font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 40)
-                }
-
-                if !needsAttention.isEmpty {
-                    Text("NEEDS YOU").font(BrandFont.body(11, .bold)).tracking(1.5)
-                        .foregroundColor(Brand.volt).padding(.top, 6)
-                    ForEach(needsAttention) { c in
-                        Button { store.selectedClient = c } label: { RosterRow(item: c) }
-                    }
-                }
-
-                if !drifting.isEmpty {
-                    Text("GOING QUIET").font(BrandFont.body(11, .bold)).tracking(1.5)
-                        .foregroundColor(.orange).padding(.top, 10)
-                    ForEach(drifting) { c in
-                        Button { store.selectedClient = c } label: { RosterRow(item: c) }
-                    }
-                }
-            }
-            .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 30)
-        }
-        .background(Brand.bg.ignoresSafeArea())
-        .refreshable { store.loadRoster() }
-        .sheet(item: $store.selectedClient) { c in TrainerClientView(client: c) }
-    }
-
-    private var greeting: String {
-        let h = Calendar.current.component(.hour, from: Date())
-        switch h { case 0..<12: return "Good Morning"; case 12..<17: return "Good Afternoon"; default: return "Good Evening" }
-    }
-
-    private func summaryTile(_ value: String, _ label: String, _ dest: TrainerTab) -> some View {
-        Button { store.trainerTab = dest } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(value).font(BrandFont.display(30)).foregroundColor(Brand.volt)
-                Text(label).font(BrandFont.body(9, .bold)).tracking(1).foregroundColor(Brand.mute)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(Brand.black)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-        }
-    }
-}
-
-// MARK: - Chat section (client list -> thread)
+// MARK: - Chat (every conversation, across the roster)
 
 struct TrainerChatSection: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var data = CoachData.shared
     @State private var query = ""
-    @State private var expanded: String? = nil          // clientId whose drawer is open
-    @State private var threadsByClient: [String: [APIChatThread]] = [:]
-    @State private var loadingClient: String? = nil
+    @State private var filter = "All"
+    @State private var pickClient = false
     @State private var newThreadClient: RosterItem? = nil
+    @State private var loaded = false
 
-    private var clients: [RosterItem] {
-        let base = store.roster.sorted { $0.unreadMessages > $1.unreadMessages }
-        guard !query.isEmpty else { return base }
-        return base.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    private struct Item: Identifiable {
+        let client: RosterItem
+        let thread: APIChatThread
+        var id: String { thread.id }
+    }
+
+    private var items: [Item] {
+        store.roster.flatMap { c in (data.threads[c.id] ?? []).map { Item(client: c, thread: $0) } }
+            .sorted { ($0.thread.unread > 0 ? 0 : 1, $1.thread.lastActivity) < ($1.thread.unread > 0 ? 0 : 1, $0.thread.lastActivity) }
     }
 
     var body: some View {
+        let all = items
+        let unread = all.filter { $0.thread.unread > 0 }
+        let shown = all.filter { i in
+            let f: Bool = filter.hasPrefix("Unread") ? i.thread.unread > 0
+                : (filter == "Form checks" ? i.thread.category == ChatCategory.form.rawValue : true)
+            let q = query.isEmpty || i.client.name.localizedCaseInsensitiveContains(query)
+                || i.thread.topic.localizedCaseInsensitiveContains(query) || i.thread.preview.localizedCaseInsensitiveContains(query)
+            return f && q
+        }
+        let options: [(label: String, color: Color)] = [("All", Brand.volt), ("Unread · \(unread.count)", Brand.volt), ("Form checks", Brand.volt)]
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Eyebrow(text: "Messages")
-                Text("Chat").font(BrandFont.display(44)).foregroundColor(.white)
+                DSScreenHeader(eyebrow: "Messages", title: "Chat",
+                               subtitle: unread.isEmpty ? "All caught up · newest first" : "\(unread.count) unread · newest first")
+                CoachSearchField(prompt: "Search clients or messages", text: $query)
+                CoachFilterChips(options: options, selected: Binding(
+                    get: { options.first { $0.label.hasPrefix(filter) }?.label ?? "All" },
+                    set: { filter = $0.hasPrefix("Unread") ? "Unread" : $0 }))
 
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundColor(Brand.mute).font(.system(size: 14))
-                    TextField("Search clients…", text: $query)
-                        .font(BrandFont.body(14)).foregroundColor(.white)
-                        .autocorrectionDisabled()
-                }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                ForEach(clients) { c in
-                    VStack(spacing: 0) {
-                        // Client header — tapping expands the drawer beneath it.
-                        Button { toggle(c) } label: {
-                            HStack(spacing: 12) {
-                                Rectangle().fill(c.unreadMessages > 0 ? Brand.volt : Brand.line).frame(width: 3)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(c.name).font(BrandFont.body(16, .bold)).foregroundColor(.white)
-                                    Text(c.unreadMessages > 0 ? "\(c.unreadMessages) unread" : "Tap to view threads")
-                                        .font(BrandFont.body(12))
-                                        .foregroundColor(c.unreadMessages > 0 ? Brand.volt : Brand.mute)
-                                }
-                                Spacer()
-                                if c.unreadMessages > 0 {
-                                    Text("\(c.unreadMessages)").font(BrandFont.body(11, .bold))
-                                        .foregroundColor(Brand.black)
-                                        .frame(minWidth: 20, minHeight: 20)
-                                        .background(Circle().fill(Brand.volt))
-                                }
-                                Image(systemName: expanded == c.id ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 12)).foregroundColor(Brand.mute)
-                            }
-                            .padding(.vertical, 14).padding(.trailing, 14)
-                        }
-
-                        // The drawer: this client's threads, by topic + category.
-                        if expanded == c.id {
-                            VStack(spacing: 8) {
-                                Rectangle().fill(Brand.line).frame(height: 1)
-                                    .padding(.bottom, 2)
-
-                                if loadingClient == c.id {
-                                    ProgressView().tint(Brand.volt).padding(.vertical, 12)
-                                } else {
-                                    let threads = threadsByClient[c.id] ?? []
-                                    if threads.isEmpty {
-                                        Text("No threads yet.")
-                                            .font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(.vertical, 10).padding(.leading, 15)
-                                    } else {
-                                        ForEach(threads, id: \.id) { t in
-                                            NavigationLink {
-                                                TrainerChatThreadScreen(
-                                                    clientId: c.id, clientName: c.name,
-                                                    threadId: t.id, categoryLabel: t.category)
-                                            } label: {
-                                                ThreadRow(thread: t)
-                                            }
-                                        }
-                                    }
-
-                                    // Start a fresh thread with this client.
-                                    Button {
-                                        newThreadClient = c
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "plus.circle.fill")
-                                                .font(.system(size: 16))
-                                            Text("New thread").font(BrandFont.body(13, .bold))
-                                        }
-                                        .foregroundColor(Brand.volt)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 10).padding(.leading, 15)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 12).padding(.bottom, 12)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
-                    .background(Brand.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(
-                        expanded == c.id ? Brand.volt.opacity(0.5) : Brand.line, lineWidth: 1))
-                }
-
-                if clients.isEmpty {
-                    Text(store.roster.isEmpty ? "No clients yet." : "No clients match.")
+                if !loaded && all.isEmpty {
+                    ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
+                } else if shown.isEmpty {
+                    Text(all.isEmpty ? "No conversations yet." : "Nothing here.")
                         .font(BrandFont.body(14)).foregroundColor(Brand.mute)
-                        .frame(maxWidth: .infinity).padding(.top, 40)
+                        .frame(maxWidth: .infinity).padding(.top, 30)
                 }
+                ForEach(shown) { i in
+                    NavigationLink {
+                        TrainerChatThreadScreen(clientId: i.client.id, clientName: i.client.name,
+                                                threadId: i.thread.id, categoryLabel: i.thread.category)
+                    } label: { row(i) }
+                    .buttonStyle(PressableStyle())
+                }
+
+                Button { pickClient = true } label: {
+                    DSListRow(title: "Start a conversation", subtitle: "Pick a client, topic and category", icon: "plus.bubble.fill")
+                }
+                .buttonStyle(PressableStyle())
             }
-            .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 30)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
         .background(Brand.bg.ignoresSafeArea())
-        .refreshable { store.loadRoster() }
+        .dsTopFade()
+        .refreshable {
+            store.loadRoster()
+            await data.loadAllThreads(store.roster, force: true)
+        }
+        // Reload on every appearance so unread counts are fresh after reading a thread.
+        .onAppear { Task { await data.loadAllThreads(store.roster, force: true); loaded = true } }
+        .onChange(of: store.roster.count) { _, _ in Task { await data.loadAllThreads(store.roster); loaded = true } }
         .tapToDismissKeyboard()
         .keyboardDoneButton()
+        .sheet(isPresented: $pickClient) {
+            ClientPickerSheet { c in
+                pickClient = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { newThreadClient = c }
+            }
+        }
         .sheet(item: $newThreadClient) { client in
-            NewTrainerThreadSheet(client: client) { created in
-                // Refresh this client's drawer so the new thread shows immediately.
-                Task {
-                    let t = (try? await APIClient.shared.trainerChats(clientId: client.id)) ?? []
-                    await MainActor.run {
-                        threadsByClient[client.id] = t
-                        expanded = client.id
-                    }
-                }
+            NewTrainerThreadSheet(client: client) { _ in
+                Task { await data.loadThreads(client.id, force: true) }
             }
         }
     }
 
-    private func toggle(_ c: RosterItem) {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-            if expanded == c.id { expanded = nil; return }
-            expanded = c.id
-        }
-        // Load this client's threads once, on first open.
-        if threadsByClient[c.id] == nil {
-            loadingClient = c.id
-            Task {
-                let t = (try? await APIClient.shared.trainerChats(clientId: c.id)) ?? []
-                await MainActor.run {
-                    threadsByClient[c.id] = t
-                    if loadingClient == c.id { loadingClient = nil }
+    private func row(_ i: Item) -> some View {
+        let unread = i.thread.unread > 0
+        return HStack(spacing: 12) {
+            CoachAvatar(name: i.client.name, size: 44, highlighted: unread)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(i.client.name).font(BrandFont.body(15, unread ? .heavy : .bold)).foregroundColor(Brand.text).lineLimit(1)
+                    Text(i.thread.category.uppercased()).font(BrandFont.body(8, .bold)).tracking(0.6)
+                        .foregroundColor(Brand.voltText).padding(.horizontal, 6).padding(.vertical, 2)
+                        .overlay(Capsule().stroke(Brand.voltLine.opacity(0.5), lineWidth: 1))
+                }
+                Text(i.thread.topic.isEmpty ? "Conversation" : i.thread.topic)
+                    .font(BrandFont.body(12, .bold)).foregroundColor(unread ? Brand.text : Brand.mute).lineLimit(1)
+                Text(i.thread.preview).font(BrandFont.body(12, unread ? .semibold : .regular))
+                    .foregroundColor(unread ? Brand.text : Brand.mute).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(i.thread.lastActivity.formatted(.relative(presentation: .named)))
+                    .font(BrandFont.body(10)).foregroundColor(Brand.mute).lineLimit(1)
+                if unread {
+                    Text("\(i.thread.unread)").font(BrandFont.body(11, .bold)).foregroundColor(Brand.onVolt)
+                        .frame(minWidth: 20, minHeight: 20).background(Circle().fill(Brand.volt))
                 }
             }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(unread ? Brand.voltLine.opacity(0.5) : Brand.line, lineWidth: 1))
+    }
+}
+
+/// Pick which client a new conversation is with.
+struct ClientPickerSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let pick: (RosterItem) -> Void
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 10) {
+                    CoachSearchField(prompt: "Search clients", text: $query)
+                    ForEach(store.roster.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { c in
+                        Button { pick(c) } label: {
+                            HStack(spacing: 12) {
+                                CoachAvatar(name: c.name, size: 38)
+                                Text(c.name).font(BrandFont.body(15, .bold)).foregroundColor(Brand.text)
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.system(size: 12)).foregroundColor(Brand.mute)
+                            }
+                            .padding(12)
+                            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
+                }
+                .padding(20)
+            }
+            .background(Brand.bg.ignoresSafeArea())
+            .navigationTitle("New conversation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) } }
         }
     }
 }
 
-// One thread row inside the drawer: topic + category chip + unread dot.
 // Trainer starts a new titled thread with a client. Creates the thread server-side,
 // then reports the created thread back so the drawer can refresh.
 struct NewTrainerThreadSheet: View {
@@ -250,29 +175,17 @@ struct NewTrainerThreadSheet: View {
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("TOPIC").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
+                    Text("TOPIC").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                     TextField("", text: $topic, prompt: Text("e.g. Deload week plan").foregroundColor(Brand.mute))
-                        .foregroundColor(.white).padding(14).background(Brand.black)
+                        .foregroundColor(Brand.text).padding(14).background(Brand.black)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("CATEGORY").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.volt)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(ChatCategory.allCases, id: \.self) { c in
-                                Button { category = c } label: {
-                                    Text(c.rawValue.uppercased()).font(BrandFont.body(11, .bold))
-                                        .foregroundColor(category == c ? Brand.black : Brand.white)
-                                        .padding(.horizontal, 14).padding(.vertical, 8)
-                                        .background(category == c ? Brand.volt : Brand.black)
-                                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-                                }
-                            }
-                        }
-                    }
+                    Text("CATEGORY").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                    DSCarousel(options: ChatCategory.allCases.map { DSCarousel<ChatCategory>.Option(id: $0, label: $0.rawValue) },
+                               selection: $category, likely: .general, itemWidth: 116, accessibilityName: "Category")
                 }
 
                 if failed {
@@ -288,7 +201,7 @@ struct NewTrainerThreadSheet: View {
                         Text("Start thread").font(BrandFont.body(15, .bold))
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
+                    .background(Brand.volt).foregroundColor(Brand.onVolt).clipShape(Capsule())
                 }
                 .disabled(creating)
 
@@ -300,7 +213,7 @@ struct NewTrainerThreadSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .tapToDismissKeyboard()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.volt) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) }
             }
             .keyboardDoneButton()
         }
@@ -324,36 +237,6 @@ struct NewTrainerThreadSheet: View {
                 await MainActor.run { creating = false; failed = true }
             }
         }
-    }
-}
-
-private struct ThreadRow: View {
-    let thread: APIChatThread
-    var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(thread.topic.isEmpty ? "Conversation" : thread.topic)
-                    .font(BrandFont.body(14, .semibold)).foregroundColor(.white)
-                    .lineLimit(1)
-                Text(thread.category.uppercased())
-                    .font(BrandFont.body(9, .bold)).tracking(1)
-                    .foregroundColor(Brand.volt)
-                    .padding(.horizontal, 8).padding(.vertical, 2)
-                    .overlay(Capsule().stroke(Brand.volt, lineWidth: 1))
-            }
-            Spacer()
-            if thread.unread > 0 {
-                Text("\(thread.unread)").font(BrandFont.body(10, .bold))
-                    .foregroundColor(Brand.black)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(Circle().fill(Brand.volt))
-            }
-            Image(systemName: "chevron.right").font(.system(size: 11)).foregroundColor(Brand.mute)
-        }
-        .padding(.vertical, 11).padding(.horizontal, 14)
-        .background(Brand.bg)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
     }
 }
 
@@ -381,162 +264,353 @@ struct CheckInQueueView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Eyebrow(text: "Review Queue")
-                Text("Check-Ins").font(BrandFont.display(44)).foregroundColor(.white)
-
+                DSScreenHeader(eyebrow: "Review queue", title: "Check-Ins",
+                               subtitle: store.checkInQueue.isEmpty ? nil : "\(store.checkInQueue.count) waiting · oldest first")
                 if store.checkInQueue.isEmpty {
                     VStack(spacing: 8) {
-                        Image(systemName: "tray").font(.system(size: 38)).foregroundColor(Brand.line)
-                        Text("Queue's empty").font(BrandFont.body(16, .bold)).foregroundColor(.white)
-                        Text("No check-ins waiting for a response.")
-                            .font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                        Image(systemName: "checkmark.seal.fill").font(.system(size: 34)).foregroundColor(Brand.voltText)
+                        Text("Queue's empty").font(BrandFont.body(16, .bold)).foregroundColor(Brand.text)
+                        Text("No check-ins waiting for a response.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 40)
-                } else {
-                    Text("\(store.checkInQueue.count) waiting")
-                        .font(BrandFont.body(14, .bold)).foregroundColor(Brand.volt)
-
-                    ForEach(store.checkInQueue) { q in
-                        Button { openFor = q } label: {
-                            HStack(spacing: 12) {
-                                Rectangle().fill(Brand.volt).frame(width: 3)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(q.clientName).font(BrandFont.body(16, .bold)).foregroundColor(.white)
-                                    Text(q.checkIn.date.formatted(date: .abbreviated, time: .omitted))
-                                        .font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.system(size: 12)).foregroundColor(Brand.mute)
+                }
+                ForEach(store.checkInQueue.sorted { $0.checkIn.date < $1.checkIn.date }) { q in
+                    Button { openFor = q } label: {
+                        HStack(spacing: 12) {
+                            CoachAvatar(name: q.clientName, size: 42, highlighted: true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(q.clientName).font(BrandFont.body(15, .heavy)).foregroundColor(Brand.text)
+                                Text("Sent \(q.checkIn.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))"
+                                     + (q.checkIn.photoIds.isEmpty ? "" : " · \(q.checkIn.photoIds.count) photo\(q.checkIn.photoIds.count == 1 ? "" : "s")"))
+                                    .font(BrandFont.body(12)).foregroundColor(Brand.mute)
                             }
-                            .padding(.vertical, 14).padding(.trailing, 14)
-                            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                            Spacer()
+                            Text("Review").font(BrandFont.body(12, .heavy)).foregroundColor(Brand.onVolt)
+                                .padding(.horizontal, 12).frame(minHeight: 34).background(Capsule().fill(Brand.volt))
                         }
+                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                     }
+                    .buttonStyle(PressableStyle())
                 }
             }
-            .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 30)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
         .background(Brand.bg.ignoresSafeArea())
+        .dsTopFade()
         .refreshable { store.loadRoster() }
         .sheet(item: $openFor) { q in
-            QueuedCheckInSheet(queued: q)
+            CoachCheckInReview(clientId: q.clientId, clientName: q.clientName, checkIn: q.checkIn)
         }
     }
 }
 
-// Respond to a single queued check-in without leaving the queue.
-struct QueuedCheckInSheet: View {
+// MARK: - Check-in review (week over week, their words, photos, respond)
+
+struct CoachCheckInReview: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    let queued: QueuedCheckIn
+    @ObservedObject private var data = CoachData.shared
+    let clientId: String
+    let clientName: String
+    let checkIn: APICheckIn
+
     @State private var response = ""
     @State private var sending = false
+    @State private var failed = false
+    @State private var photos: [APIPhoto] = []
+    @State private var photoCategory: String? = nil
+    @State private var photoComment: APIPhoto? = nil
+    @State private var commentText = ""
+
+    private var previous: APICheckIn? {
+        (data.checkIns[clientId] ?? []).filter { $0.date < checkIn.date && $0.id != checkIn.id && $0.status != "draft" }
+            .max { $0.date < $1.date }
+    }
+
+    private struct Delta: Identifiable {
+        let id: String; let label: String; let now: Double; let prev: Double?; let unit: String; let better: Bool?
+    }
+
+    private func deltas() -> [Delta] {
+        checkIn.fields.compactMap { f in
+            guard let v = Double(f.value) else { return nil }
+            let q = CheckInSchema.questions.first { $0.label == f.cleanLabel }
+            let prev = previous?.fields.first { $0.cleanLabel == f.cleanLabel }.flatMap { Double($0.value) }
+            let isWeight = q?.id == "weight" || f.cleanLabel.lowercased().contains("weight")
+            return Delta(id: f.id, label: shortLabel(f.cleanLabel), now: isWeight ? StatsUnits.weight(v) : v,
+                         prev: prev.map { isWeight ? StatsUnits.weight($0) : $0 },
+                         unit: isWeight ? " \(StatsUnits.weightLabel)" : "",
+                         better: isWeight ? nil : (q?.higherIsBetter ?? true))
+        }
+    }
+
+    private func shortLabel(_ l: String) -> String {
+        let map = ["Nutrition adherence": "NUTRITION", "Workout consistency": "CONSISTENCY", "Sleep quality": "SLEEP",
+                   "Energy / fatigue": "ENERGY", "Stress load": "STRESS", "Soreness / recovery": "RECOVERY"]
+        return (map[l] ?? l).uppercased()
+    }
 
     var body: some View {
+        let ds = deltas()
+        let words = checkIn.fields.filter { Double($0.value) == nil && !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        let ups = ds.filter { d in guard let p = d.prev, let b = d.better else { return false }; return b ? d.now > p : d.now < p }.count
+        let scored = ds.filter { $0.prev != nil && $0.better != nil }.count
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(queued.clientName).font(BrandFont.display(30)).foregroundColor(.white)
-                    Text(queued.checkIn.date.formatted(date: .abbreviated, time: .omitted))
-                        .font(BrandFont.body(13)).foregroundColor(Brand.mute)
-
-                    ForEach(queued.checkIn.fields, id: \.id) { f in
-                        HStack {
-                            Text(f.cleanLabel).font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                            Spacer()
-                            Text(f.value).font(BrandFont.body(13, .bold)).foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        CoachAvatar(name: clientName, size: 52, highlighted: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(clientName).font(BrandFont.display(32)).foregroundColor(Brand.text)
+                            Text("Sent \(checkIn.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))"
+                                 + (previous.map { " · vs \($0.date.formatted(.dateTime.month(.abbreviated).day()))" } ?? " · first check-in"))
+                                .font(BrandFont.body(12)).foregroundColor(Brand.mute)
                         }
-                        .padding(.vertical, 4)
                     }
 
-                    Text("YOUR RESPONSE").font(BrandFont.body(10, .bold)).tracking(1.4)
-                        .foregroundColor(Brand.volt).padding(.top, 6)
-                    TextEditor(text: $response)
-                        .font(BrandFont.body(15)).foregroundColor(.white)
-                        .scrollContentBackground(.hidden)
-                        .padding(10).frame(height: 120)
-                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                    Button {
-                        send()
-                    } label: {
-                        HStack {
-                            if sending { ProgressView().tint(Brand.black) }
-                            Text("Send response").font(BrandFont.body(15, .bold))
+                    if !ds.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("WEEK OVER WEEK").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                                Spacer()
+                                if scored > 0 { Text("\(ups) of \(scored) scores up").font(BrandFont.body(11, .bold)).foregroundColor(Brand.voltText) }
+                            }
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                                ForEach(ds) { d in tile(d) }
+                            }
                         }
-                        .frame(maxWidth: .infinity).padding(.vertical, 15)
-                        .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
+                        .card(padding: 16)
                     }
-                    .disabled(response.isEmpty || sending)
+
+                    if !words.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("IN THEIR WORDS").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                            ForEach(words, id: \.id) { f in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(f.cleanLabel).font(BrandFont.body(11, .heavy)).foregroundColor(Brand.mute)
+                                    Text("“\(f.value)”").font(BrandFont.body(14, .medium)).foregroundColor(Brand.text)
+                                        .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .card(padding: 16)
+                    }
+
+                    photoCompare
+
+                    if let r = checkIn.trainerResponse, !r.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("YOUR RESPONSE").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                            Text(r).font(BrandFont.body(14)).foregroundColor(Brand.text).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .card(padding: 16)
+                    } else {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("YOUR RESPONSE").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                            QuickReplies(options: ["Great week!", "Proud of the consistency.", "Let's bump protein a little.",
+                                                   "Sleep is the next lever.", "Let's talk this week."]) { s in
+                                response = response.isEmpty ? s : response + " " + s
+                            }
+                            TextEditor(text: $response)
+                                .font(BrandFont.body(15)).foregroundColor(Brand.text)
+                                .scrollContentBackground(.hidden)
+                                .padding(10).frame(minHeight: 120)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.voltLine, lineWidth: 1.5))
+                            if failed {
+                                Text("Couldn't send. Check your connection and try again.").font(BrandFont.body(12)).foregroundColor(.orange)
+                            }
+                            Button { send() } label: {
+                                HStack(spacing: 8) {
+                                    if sending { ProgressView().tint(Brand.black) }
+                                    Label("Send response & mark reviewed", systemImage: "checkmark")
+                                }
+                            }
+                            .buttonStyle(DSButtonStyle(kind: .primary))
+                            .disabled(sending || response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        .card(padding: 16)
+                    }
                 }
                 .padding(20)
             }
             .background(Brand.bg.ignoresSafeArea())
+            .navigationTitle("Check-in")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() }.foregroundColor(Brand.voltText) } }
             .tapToDismissKeyboard()
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close") { dismiss() }.foregroundColor(Brand.volt)
-                }
-            }
             .keyboardDoneButton()
+            .task {
+                await data.loadCheckIns(clientId)
+                photos = (try? await APIClient.shared.trainerPhotos(clientId: clientId)) ?? []
+            }
+            .alert("Comment on this photo", isPresented: Binding(get: { photoComment != nil }, set: { if !$0 { photoComment = nil } })) {
+                TextField("Your comment", text: $commentText)
+                Button("Save") {
+                    if let p = photoComment {
+                        let t = commentText
+                        Task {
+                            try? await APIClient.shared.trainerCommentPhoto(photoId: p.id, comment: t)
+                            photos = (try? await APIClient.shared.trainerPhotos(clientId: clientId)) ?? photos
+                        }
+                    }
+                    photoComment = nil
+                }
+                Button("Cancel", role: .cancel) { photoComment = nil }
+            } message: { Text("Shows under the photo in their app.") }
+        }
+    }
+
+    private func tile(_ d: Delta) -> some View {
+        let diff = d.prev.map { d.now - $0 }
+        let color: Color = {
+            guard let diff, diff != 0, let good = d.better else { return Brand.mute }
+            return (diff > 0) == good ? Brand.volt : .orange
+        }()
+        let fmt: (Double) -> String = { v in v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v) }
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(d.label).font(BrandFont.body(8, .bold)).tracking(0.8).foregroundColor(Brand.mute).lineLimit(1)
+            Text(fmt(d.now) + d.unit).font(BrandFont.body(17, .heavy)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.7)
+            Text(diff.map { $0 == 0 ? "· same" : "\($0 > 0 ? "▲" : "▼") \(fmt(abs($0))) vs last" } ?? "first one")
+                .font(BrandFont.body(10, .bold)).foregroundColor(Brand.readable(color)).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Brand.text.opacity(0.06)))
+    }
+
+    /// Before = this pose's earliest photo; after = the one from this check-in (or the latest).
+    @ViewBuilder
+    private var photoCompare: some View {
+        let cal = Calendar.training
+        let models = photos.map { $0.toModel() }
+        let cats = Array(Set(models.map { $0.category })).sorted { a, b in
+            let order = ["Front", "Side", "Back"]
+            return (order.firstIndex(of: a) ?? 99, a) < (order.firstIndex(of: b) ?? 99, b)
+        }.filter { c in Set(models.filter { $0.category == c }.map { cal.startOfDay(for: $0.date) }).count >= 2 }
+        if let cat = photoCategory ?? cats.first {
+            let ps = models.filter { $0.category == cat }.sorted { $0.date < $1.date }
+            let after = ps.last { cal.isDate($0.date, inSameDayAs: checkIn.date) } ?? ps.last
+            if let before = ps.first, let after, before.id != after.id {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("PHOTOS · \(cat.uppercased())").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
+                        Spacer()
+                        let weeks = max(1, (cal.dateComponents([.day], from: before.date, to: after.date).day ?? 0) / 7)
+                        Text("\(weeks) week\(weeks == 1 ? "" : "s") apart").font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                    }
+                    PhotoRevealSlider(before: before, after: after, urlFor: { APIClient.shared.trainerPhotoURL(photoId: $0.id) })
+                        .id(cat)
+                    HStack(spacing: 6) {
+                        Button {
+                            commentText = photos.first { $0.id == after.id }?.trainerComment ?? ""
+                            photoComment = photos.first { $0.id == after.id }
+                        } label: { Label("Comment on this photo", systemImage: "text.bubble") }
+                            .font(BrandFont.body(12, .bold)).foregroundColor(Brand.voltText)
+                        Spacer()
+                        ForEach(cats.prefix(3), id: \.self) { c in
+                            Button { photoCategory = c } label: {
+                                Text(c).font(BrandFont.body(11, .bold)).foregroundColor(c == cat ? Brand.onVolt : Brand.mute)
+                                    .padding(.horizontal, 10).frame(minHeight: 30)
+                                    .background(Capsule().fill(c == cat ? Brand.volt : Color.clear))
+                                    .overlay(Capsule().stroke(c == cat ? Brand.voltLine : Brand.line, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    if let c = after.trainerComment, !c.isEmpty {
+                        Text("Your comment: “\(c)”").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                    }
+                }
+                .card(padding: 16)
+            }
         }
     }
 
     private func send() {
-        sending = true
+        sending = true; failed = false
+        let text = response.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
-            try? await APIClient.shared.trainerRespondCheckIn(checkInId: queued.checkIn.id, response: response)
-            store.loadRoster()
-            await MainActor.run { sending = false; dismiss() }
+            do {
+                try await APIClient.shared.trainerRespondCheckIn(checkInId: checkIn.id, response: text)
+                await data.loadCheckIns(clientId, force: true)
+                await MainActor.run {
+                    sending = false
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    store.loadRoster()
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run { sending = false; failed = true }
+            }
         }
     }
 }
 
-// MARK: - Insights (roll-up stats)
+extension APIClient {
+    func trainerCommentPhoto(photoId: String, comment: String) async throws {
+        _ = try await request("/admin/photos/\(photoId)/comment", method: "POST",
+                              body: try JSONSerialization.data(withJSONObject: ["comment": comment]))
+    }
+}
+
+// MARK: - Insights (roster totals)
 
 struct TrainerInsightsView: View {
     @EnvironmentObject var store: AppStore
-    private var i: RosterInsights { store.insights }
 
     var body: some View {
+        let i = store.insights
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Eyebrow(text: "State of the Business")
-                Text("Insights").font(BrandFont.display(44)).foregroundColor(.white)
-
-                let cols = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-                LazyVGrid(columns: cols, spacing: 10) {
-                    stat("\(i.totalClients)", "ACTIVE CLIENTS")
-                    stat("\(i.workoutsThisWeek)", "WORKOUTS THIS WEEK")
-                    stat("\(i.needingAttention)", "NEED ATTENTION", i.needingAttention > 0 ? Brand.volt : nil)
-                    stat("\(i.drifting)", "DRIFTING", i.drifting > 0 ? .orange : nil)
-                    stat("\(i.awardsThisWeek)", "AWARDS THIS WEEK")
-                    stat(i.avgDaysSinceTrained > 90 ? "—" : "\(i.avgDaysSinceTrained)d", "AVG SINCE TRAINED")
+            VStack(alignment: .leading, spacing: 16) {
+                DSScreenHeader(eyebrow: "State of the business", title: "Insights", subtitle: "Across your whole roster")
+                HStack(spacing: 10) {
+                    DSStatTile(value: "\(i.totalClients)", label: "ACTIVE CLIENTS", color: Brand.text)
+                    DSStatTile(value: "\(i.workoutsThisWeek)", label: "WORKOUTS THIS WEEK")
                 }
-
-                Text("Insights update from your roster each time it loads. Pull to refresh on Clients or Today.")
-                    .font(BrandFont.body(12)).foregroundColor(Brand.mute).padding(.top, 6)
+                HStack(spacing: 10) {
+                    DSStatTile(value: "\(i.needingAttention)", label: "NEED YOU")
+                    DSStatTile(value: "\(i.drifting)", label: "GOING QUIET", color: .orange)
+                }
+                HStack(spacing: 10) {
+                    DSStatTile(value: "\(i.awardsThisWeek)", label: "AWARDS THIS WEEK")
+                    DSStatTile(value: i.avgDaysSinceTrained > 90 ? "—" : "\(i.avgDaysSinceTrained)d", label: "AVG SINCE TRAINED", color: Brand.text)
+                }
+                if i.totalClients > 0 {
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: "WHERE YOUR CREW IS")
+                        let fine = max(0, i.totalClients - i.needingAttention - i.drifting)
+                        bar("Need you", i.needingAttention, i.totalClients, Brand.volt)
+                        bar("Going quiet", i.drifting, i.totalClients, .orange)
+                        bar("On track", fine, i.totalClients, Brand.text.opacity(0.6))
+                    }
+                    .card(padding: 16)
+                }
+                Text("Updates from your roster each time it loads. Pull down to refresh. Full client data lives in the web console.")
+                    .font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 30)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
         .background(Brand.bg.ignoresSafeArea())
+        .dsTopFade()
         .refreshable { store.loadRoster() }
     }
 
-    private func stat(_ value: String, _ label: String, _ color: Color? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(value).font(BrandFont.display(34)).foregroundColor(color ?? Brand.volt)
-            Text(label).font(BrandFont.body(9, .bold)).tracking(1).foregroundColor(Brand.mute)
+    private func bar(_ label: String, _ n: Int, _ total: Int, _ color: Color) -> some View {
+        HStack(spacing: 10) {
+            Text(label).font(BrandFont.body(12, .bold)).foregroundColor(Brand.text).frame(width: 90, alignment: .leading)
+            DSProgressBar(fraction: total > 0 ? Double(n) / Double(total) : 0, height: 8, color: color)
+            Text("\(n)").font(BrandFont.body(12, .heavy)).foregroundColor(Brand.text).frame(width: 28, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Brand.black)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+        .accessibilityElement(children: .combine)
     }
 }
 
-// MARK: - Announcements (one post to all clients)
+// MARK: - Announcements (one post, every client)
 
 struct AnnouncementsComposerView: View {
     @EnvironmentObject var store: AppStore
@@ -544,100 +618,118 @@ struct AnnouncementsComposerView: View {
     @State private var messageBody = ""
     @State private var posting = false
     @State private var posted = false
+    @State private var failed = false
     @State private var existing: [APIAnnouncement] = []
     @State private var loading = true
+    @State private var confirmDelete: APIAnnouncement? = nil
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Eyebrow(text: "From Coach")
-                Text("Announcements").font(BrandFont.display(44)).foregroundColor(.white)
-                Text("Post an update every client sees in their Announcements tab — gym news, program drops, schedule changes.")
-                    .font(BrandFont.body(13)).foregroundColor(Brand.mute)
+            VStack(alignment: .leading, spacing: 18) {
+                DSScreenHeader(eyebrow: "One post, every client", title: "Announcements",
+                               subtitle: "Shows on every client's Home and Announcements.")
 
-                // Composer
-                Text("TITLE").font(BrandFont.body(10, .bold)).tracking(1.4)
-                    .foregroundColor(Brand.volt).padding(.top, 8)
-                TextField("", text: $title, prompt: Text("New PR Challenge Starts Monday").foregroundColor(Brand.mute))
-                    .font(BrandFont.body(16, .semibold)).foregroundColor(.white)
-                    .padding(12)
-                    .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                Text("MESSAGE").font(BrandFont.body(10, .bold)).tracking(1.4)
-                    .foregroundColor(Brand.volt).padding(.top, 4)
-                TextEditor(text: $messageBody)
-                    .font(BrandFont.body(15)).foregroundColor(.white)
-                    .scrollContentBackground(.hidden)
-                    .padding(10).frame(height: 120)
-                    .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
-
-                if posted {
-                    Text("Posted to all clients. 👑")
-                        .font(BrandFont.body(13, .bold)).foregroundColor(Brand.volt)
-                }
-
-                Button { post() } label: {
-                    HStack {
-                        if posting { ProgressView().tint(Brand.black) }
-                        Text("Post announcement").font(BrandFont.body(15, .bold))
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("TITLE").font(BrandFont.body(10, .bold)).tracking(1.4).headerPill()
+                    TextField("", text: $title, prompt: Text("New PR Challenge Starts Monday").foregroundColor(Brand.mute))
+                        .font(BrandFont.body(16, .semibold)).foregroundColor(Brand.text)
+                        .padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.voltLine, lineWidth: 1.5))
+                    Text("MESSAGE").font(BrandFont.body(10, .bold)).tracking(1.4).headerPill()
+                    TextEditor(text: $messageBody)
+                        .font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        .scrollContentBackground(.hidden)
+                        .padding(10).frame(minHeight: 120)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
+                    if posted { Text("Posted to all clients. 👑").font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText) }
+                    if failed { Text("Couldn't post. Check your connection and try again.").font(BrandFont.body(12)).foregroundColor(.orange) }
+                    Button { post() } label: {
+                        HStack(spacing: 8) {
+                            if posting { ProgressView().tint(Brand.black) }
+                            Label("Post to all clients", systemImage: "megaphone.fill")
+                        }
                     }
-                    .frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(Brand.volt).foregroundColor(Brand.black).clipShape(Capsule())
+                    .buttonStyle(DSButtonStyle(kind: .primary))
+                    .disabled(title.isEmpty || messageBody.isEmpty || posting)
+                    .opacity(title.isEmpty || messageBody.isEmpty ? 0.5 : 1)
                 }
-                .disabled(title.isEmpty || messageBody.isEmpty || posting)
-                .opacity(title.isEmpty || messageBody.isEmpty ? 0.5 : 1)
+                .card(padding: 16)
 
-                // Existing announcements, newest first, with delete.
-                if !existing.isEmpty || loading {
-                    Text("POSTED").font(BrandFont.body(10, .bold)).tracking(1.4)
-                        .foregroundColor(Brand.mute).padding(.top, 16)
-                }
-                if loading {
-                    ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 8)
-                } else {
-                    ForEach(existing, id: \.id) { a in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(a.createdAt.formatted(date: .abbreviated, time: .omitted))
-                                    .font(BrandFont.body(11, .bold)).foregroundColor(Brand.volt)
-                                Spacer()
-                                Button { remove(a) } label: {
-                                    Image(systemName: "trash").font(.system(size: 13)).foregroundColor(Brand.mute)
-                                }
+                if !title.isEmpty || !messageBody.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PREVIEW · WHAT CLIENTS SEE").font(BrandFont.body(10, .bold)).tracking(1.4).foregroundColor(Brand.mute)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "megaphone.fill").font(.system(size: 12)).foregroundColor(Brand.voltText)
+                                Text("TODAY").font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
+                                DSChip(text: "New", color: Brand.volt, filled: true)
                             }
-                            Text(a.title).font(BrandFont.body(16, .bold)).foregroundColor(.white)
-                            Text(a.body).font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                            Text(title.isEmpty ? "Your title" : title).font(BrandFont.display(26)).foregroundColor(Brand.text)
+                            Text(messageBody.isEmpty ? "Your message" : messageBody).font(BrandFont.body(14)).foregroundColor(Brand.text.opacity(0.8))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
-                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                        .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 18))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Brand.voltLine.opacity(0.5), lineWidth: 1))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    DSSectionHeader(title: "POSTED")
+                    if loading { ProgressView().tint(Brand.volt).frame(maxWidth: .infinity) }
+                    else if existing.isEmpty { Text("Nothing posted yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute) }
+                    ForEach(existing, id: \.id) { a in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(a.createdAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased())
+                                    .font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
+                                Spacer()
+                                Button { confirmDelete = a } label: {
+                                    Image(systemName: "trash").font(.system(size: 13)).foregroundColor(Brand.mute)
+                                        .frame(width: 36, height: 36)
+                                }
+                                .accessibilityLabel("Delete \(a.title)")
+                            }
+                            Text(a.title).font(BrandFont.body(16, .bold)).foregroundColor(Brand.text)
+                            Text(a.body).font(BrandFont.body(13)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .card(padding: 16)
                     }
                 }
             }
-            .padding(.top, 70).padding(.horizontal, 20).padding(.bottom, 30)
+            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
         }
         .background(Brand.bg.ignoresSafeArea())
+        .dsTopFade()
         .task { await loadExisting() }
         .tapToDismissKeyboard()
         .keyboardDoneButton()
+        .confirmationDialog("Delete this announcement?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { if let a = confirmDelete { remove(a) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("It disappears from every client's app.") }
     }
 
     private func loadExisting() async {
         loading = true
-        existing = ((try? await APIClient.shared.adminAnnouncements()) ?? [])
-            .sorted { $0.createdAt > $1.createdAt }
+        existing = ((try? await APIClient.shared.adminAnnouncements()) ?? []).sorted { $0.createdAt > $1.createdAt }
         loading = false
     }
 
     private func post() {
-        posting = true; posted = false
+        posting = true; posted = false; failed = false
         let t = title, b = messageBody
         Task {
-            try? await APIClient.shared.createAnnouncement(title: t, body: b)
-            await loadExisting()
-            await MainActor.run {
-                posting = false; posted = true
-                title = ""; messageBody = ""
+            do {
+                try await APIClient.shared.createAnnouncement(title: t, body: b)
+                await loadExisting()
+                await MainActor.run { posting = false; posted = true; title = ""; messageBody = "" }
+            } catch {
+                await MainActor.run { posting = false; failed = true }
             }
         }
     }

@@ -1,7 +1,5 @@
 import Foundation
 
-import Foundation
-
 extension Notification.Name {
     // Posted when an API call returns 401 (expired/invalid token) so the app logs out.
     static let bstUnauthorized = Notification.Name("bstUnauthorized")
@@ -120,7 +118,7 @@ final class APIClient {
 
     // MARK: Client actions
     func logSet(workoutId: String, exerciseId: String, setId: String,
-                reps: Int?, weight: Double?, rpe: Int?, loggedAt: Date? = nil) async throws {
+                reps: Int?, weight: Double?, rpe: Double?, loggedAt: Date? = nil) async throws {
         var body: [String: Any] = [:]
         if let reps { body["loggedReps"] = reps }
         if let weight { body["loggedWeight"] = weight }
@@ -207,8 +205,22 @@ final class APIClient {
     var authToken: String? { token }
 
     // MARK: Generic helpers
-    private func request(_ path: String, method: String, body: Data? = nil) async throws -> Data {
-        var req = URLRequest(url: base.appendingPathComponent(path))
+    /// Builds the full URL. A query ("?days=30") is attached as a query — appendingPathComponent
+    /// alone would escape the "?" and the server would never see it.
+    private func url(_ path: String) -> URL {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let u = base.appendingPathComponent(String(parts[0]))
+        guard parts.count == 2, var c = URLComponents(url: u, resolvingAgainstBaseURL: false) else { return u }
+        c.percentEncodedQuery = String(parts[1])
+        return c.url ?? u
+    }
+
+    /// HTTP status of the last failed request (404 vs 500 vs offline) — sync uses it to
+    /// decide whether to retry or drop an item.
+    struct HTTPStatusError: Error { let status: Int }
+
+    func request(_ path: String, method: String, body: Data? = nil) async throws -> Data {
+        var req = URLRequest(url: url(path))
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -220,8 +232,9 @@ final class APIClient {
             await MainActor.run { NotificationCenter.default.post(name: .bstUnauthorized, object: nil) }
             throw APIError(message: "Session expired")
         }
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError(message: "Request failed")
+        guard let http = resp as? HTTPURLResponse else { throw APIError(message: "Request failed") }
+        guard (200..<300).contains(http.statusCode) else {
+            throw HTTPStatusError(status: http.statusCode)
         }
         return data
     }
@@ -317,7 +330,7 @@ final class APIClient {
         _ = try await request(path, method: "POST", body: try JSONSerialization.data(withJSONObject: body))
     }
 
-    private var decoder: JSONDecoder {
+    var decoder: JSONDecoder {
         let d = JSONDecoder()
         // ASP.NET Core (System.Text.Json) outputs camelCase by default, which matches
         // our Swift property names — so use default keys (no conversion).

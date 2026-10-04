@@ -31,11 +31,11 @@ struct FullScreenPhotoView: View {
                     } placeholder: { failed in
                         if failed {
                             VStack(spacing: 8) {
-                                Image(systemName: "photo").font(.system(size: 40)).foregroundColor(Brand.mute)
-                                Text("Couldn't load photo").font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                                Image(systemName: "photo").font(.system(size: 40)).foregroundColor(BrandDark.mute)
+                                Text("Couldn't load photo").font(BrandFont.body(13)).foregroundColor(BrandDark.mute)
                             }
                         } else {
-                            ProgressView().tint(Brand.volt)
+                            ProgressView().tint(BrandDark.volt)
                         }
                     }
                 }

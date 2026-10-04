@@ -3,17 +3,29 @@ import SwiftUI
 // MARK: - App entry point
 @main
 struct BigScherlyTrainingApp: App {
-    @StateObject private var store = AppStore()
+    // One store for the app's lifetime. Created here (not lazily by SwiftUI) so a
+    // Lock Screen Live Activity button can log a set even when iOS launches the app
+    // in the background just to run it.
+    @StateObject private var store = AppStore.shared
+
+    init() {
+        LiveSessionController.shared.attach(AppStore.shared)
+        WidgetBridge.shared.attach(AppStore.shared)        // keeps Home & Lock Screen widgets current
+    }
+
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store)
-                .preferredColorScheme(.dark)
+            ThemeHost { RootView().environmentObject(store) }    // Settings ▸ Appearance
         }
         .onChange(of: scenePhase) { _, phase in
             // Keep the Watch's glance + complication current whenever the phone
             // comes to the foreground.
-            if phase == .active { store.syncToWatch() }
+            if phase == .active {
+                WidgetBridge.shared.mergeWidgetTicks()        // supplements ticked on a widget → your log
+                store.syncToWatch()
+                ServerSync.shared.flushSoon(after: 1)   // send anything queued while away/offline
+            }
         }
     }
 }
@@ -21,6 +33,8 @@ struct BigScherlyTrainingApp: App {
 // MARK: - Root routing
 struct RootView: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var theme = ThemeStore.shared
+    @Environment(\.colorScheme) private var scheme
     @State private var showBoard = true
     @State private var showSplash = true
 
@@ -32,13 +46,13 @@ struct RootView: View {
                 LoginView()
             } else if store.isTrainer {
                 // Trainers get an entirely different app — triage, not training.
-                TrainerShell()
+                TrainerShell().id(theme.signature(scheme))   // redraw once on a theme change
             } else if store.mustChangePassword {
                 SetPasswordView()
             } else if showBoard {
                 WelcomeBoardView(showBoard: $showBoard)
             } else {
-                MainShell()
+                MainShell().id(theme.signature(scheme))
             }
 
             // Animated splash sits on top at launch, then fades to reveal login
@@ -50,6 +64,11 @@ struct RootView: View {
         }
         .onChange(of: store.isLoggedIn) { _, newValue in
             if newValue { showBoard = true }   // show board fresh on each login
+        }
+        // A widget was tapped: skip the welcome board and go where it points.
+        .onOpenURL { url in
+            showBoard = false
+            WidgetBridge.shared.handle(url)
         }
     }
 }
@@ -65,7 +84,7 @@ struct MainShell: View {
                 switch store.activeTab {
                 case .dashboard: DashboardView()
                 case .workouts: WorkoutsView()
-                case .history: HistoryView()
+                case .history: StatsView()
                 case .macros: MacrosView()
                 case .supplements: SupplementsView()
                 case .awards: AwardsView()

@@ -94,10 +94,10 @@ struct MetallicRainbowText: View {
                     // Static rainbow UNDERLAY — guarantees the letters are ALWAYS fully colored.
                     // Even if the moving gradient below slides an edge past the text at an
                     // extreme tilt, what shows through is rainbow, never bare white.
-                    LinearGradient(colors: Brand.rainbow, startPoint: .leading, endPoint: .trailing)
+                    LinearGradient(colors: BrandDark.rainbow, startPoint: .leading, endPoint: .trailing)
 
                     // Moving rainbow that scrolls the colors across the letters with tilt.
-                    LinearGradient(colors: Array(repeating: Brand.rainbow, count: 5).flatMap { $0 },
+                    LinearGradient(colors: Array(repeating: BrandDark.rainbow, count: 5).flatMap { $0 },
                                    startPoint: .leading, endPoint: .trailing)
                         .frame(width: geo.size.width * 5)
                         .offset(x: -geo.size.width * 0.5 + geo.size.width * 0.5 * shift)

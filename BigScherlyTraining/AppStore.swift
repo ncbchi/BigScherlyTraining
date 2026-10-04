@@ -5,6 +5,8 @@ import Combine
 // Single source of truth for the prototype's in-memory state. In production this
 // becomes the layer that calls the API and caches responses.
 final class AppStore: ObservableObject {
+    static let shared = AppStore()
+
     @Published var isLoggedIn = false
     @Published var showTray = false
     @Published var mustChangePassword = false    // forces the set-password screen after login
@@ -14,9 +16,15 @@ final class AppStore: ObservableObject {
     var isLive: Bool { !APIConfig.useMock && !isDemoMode }
 
     init() {
+        // Demo Mode survives a restart (iOS may relaunch the app in the background for a
+        // Lock Screen tap); otherwise the app would think it's a real account with no login.
+        if UserDefaults.standard.bool(forKey: "bst_demoMode") {
+            enterDemo()
+            isLoggedIn = true
+        }
         // Auto-login: if a saved token exists from a previous session, restore it
         // and skip the login screen. The user stays logged in until they log out.
-        if !APIConfig.useMock {
+        if !APIConfig.useMock && !isDemoMode {
             APIClient.shared.loadToken()
             if APIClient.shared.authToken != nil {
                 // Restore role too, or a trainer would come back into the client shell
@@ -48,6 +56,7 @@ final class AppStore: ObservableObject {
             self?.applyWatchSetLog(workoutId: workoutId, exerciseId: exerciseId, setId: setId,
                                    reps: reps, weight: weight, rpe: rpe)
         }
+        ServerSync.shared.attach(self)   // v1.1: lets the outbox check live/demo/trainer state
     }
 
     @Published var client = MockData.client
@@ -62,7 +71,9 @@ final class AppStore: ObservableObject {
     @Published var supplementStacks: [SupplementStack] = MockData.supplementStacks
     @Published var supplementLogs: [SupplementLog] = MockData.supplementLogs
 
-    @Published var activeTab: AppTab = .dashboard
+    @Published var activeTab: AppTab = AppTab(rawValue: UserDefaults.standard.string(forKey: "bst_launch_tab") ?? "") ?? .dashboard   // Settings ▸ Open on launch
+    /// A workout to open straight into (a widget's Start button); Home presents it.
+    @Published var openSessionId: String? = nil
     // Direction of the last tab change, so MainShell can slide the right way.
     @Published private(set) var tabForward = true
 
@@ -224,7 +235,7 @@ final class AppStore: ObservableObject {
     // Consecutive-week training streak: count back from this week while each week
     // has at least one completed workout.
     var weekStreak: Int {
-        let cal = Calendar.current
+        let cal = Calendar.training
         func weekKey(_ d: Date) -> Int {
             cal.component(.weekOfYear, from: d) * 100 + cal.component(.yearForWeekOfYear, from: d)
         }
@@ -294,7 +305,7 @@ final class AppStore: ObservableObject {
     // Apply a set edit that arrived from the Watch, through the same save path a
     // phone edit uses (updates the model, persists, checks PRs, re-syncs the Watch).
     func applyWatchSetLog(workoutId: String, exerciseId: String, setId: String,
-                          reps: Int?, weight: Double?, rpe: Int?) {
+                          reps: Int?, weight: Double?, rpe: Double?) {
         guard let wi = workouts.firstIndex(where: { $0.id == workoutId }),
               let ei = workouts[wi].exercises.firstIndex(where: { $0.id == exerciseId }),
               let si = workouts[wi].exercises[ei].sets.firstIndex(where: { $0.id == setId }) else { return }
@@ -341,11 +352,12 @@ final class AppStore: ObservableObject {
     // populated app without a real account or a reachable backend.
     func enterDemo() {
         isDemoMode = true
+        UserDefaults.standard.set(true, forKey: "bst_demoMode")   // survive a background restart (Live Activity taps)
         mustChangePassword = false
         // Reset to the sample set so the demo is always fully populated, regardless
         // of any prior real-login state that may still be in memory.
         client = MockData.client
-        workouts = MockData.workouts
+        workouts = MacroPlanStore.shared.applyMoves(to: MockData.workouts)
         macroDays = MockData.macroDays
         checkIns = MockData.checkIns
         photos = MockData.photos
@@ -386,8 +398,10 @@ final class AppStore: ObservableObject {
             // Workouts come as summaries; fetch full detail for each so exercises/sets load
             let summaries = await w
             var fullWorkouts: [Workout] = []
+            var apiWorkouts: [APIWorkout] = []
             for s in summaries {
                 if let full = try? await APIClient.shared.workout(s.id) {
+                    apiWorkouts.append(full)
                     fullWorkouts.append(full.toModel())
                 }
             }
@@ -417,7 +431,7 @@ final class AppStore: ObservableObject {
                     self.shareStats = ShareStats(totalWeight: st.totalWeight, duration: st.duration,
                                                  setCount: st.setCount, topLift: st.topLift, date: st.date)
                 }
-                self.workouts = fullWorkouts
+                self.workouts = MacroPlanStore.shared.applyMoves(to: Self.keepLocalLogs(server: fullWorkouts, local: self.workouts))
                 self.macroDays = macros.map { $0.toModel() }
                 self.checkIns = checkins.map { $0.toModel() }
                 self.photos = photos.map { $0.toModel() }
@@ -435,6 +449,10 @@ final class AppStore: ObservableObject {
                 self.refreshPRs()
                 self.refreshAwards(announce: false)
             }
+            // v1.1: restore notes/motion/plan from the server if this phone lacks them,
+            // queue anything only on this phone, then send the outbox.
+            let me = await MainActor.run { self.client.id }
+            await ServerSync.shared.afterLoad(apiWorkouts: apiWorkouts, clientId: me)
         }
     }
 
@@ -499,6 +517,28 @@ final class AppStore: ObservableObject {
 
     /// Push every logged set for an exercise up to the server, so the trainer's
     /// logged-vs-target view reflects what actually happened. No-op in demo/mock.
+    /// A reload replaces workouts with the server's copy — but a set just logged on the phone
+    /// (say from the Lock Screen) may not have reached the server yet. Keep those.
+    static func keepLocalLogs(server: [Workout], local: [Workout]) -> [Workout] {
+        let byId = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return server.map { sw in
+            guard let lw = byId[sw.id] else { return sw }
+            var w = sw
+            for ei in w.exercises.indices {
+                guard let le = lw.exercises.first(where: { $0.id == w.exercises[ei].id }) else { continue }
+                for si in w.exercises[ei].sets.indices where w.exercises[ei].sets[si].loggedReps == nil {
+                    if let ls = le.sets.first(where: { $0.id == w.exercises[ei].sets[si].id }), ls.loggedReps != nil {
+                        w.exercises[ei].sets[si].loggedReps = ls.loggedReps
+                        w.exercises[ei].sets[si].loggedWeight = ls.loggedWeight
+                        w.exercises[ei].sets[si].rpe = ls.rpe
+                        w.exercises[ei].sets[si].loggedAt = ls.loggedAt
+                    }
+                }
+            }
+            return w
+        }
+    }
+
     func saveLoggedSets(workoutId: String, exercise: Exercise) {
         guard isLive else { return }
         Task {
@@ -636,12 +676,21 @@ final class AppStore: ObservableObject {
         isLoggedIn = false; showTray = false; activeTab = .dashboard
         mustChangePassword = false
         isDemoMode = false
+        UserDefaults.standard.removeObject(forKey: "bst_demoMode")
         isTrainer = false
         roster = []; recentAwards = []; selectedClient = nil
         client = MockData.client   // reset identity so no stale name lingers
         UserDefaults.standard.removeObject(forKey: "bst_isTrainer")
         UserDefaults.standard.removeObject(forKey: "bst_userName")
         APIClient.shared.clearToken()   // forget the saved login
+        SetMotionStore.shared.reset()   // Watch motion data belongs to whoever was signed in
+        ShareLog.shared.reset()         // …and so does the record of what they shared
+        WorkoutNoteStore.shared.reset() // …and their workout notes
+        MacroPlanStore.shared.reset()   // …and their macro-day changes and logged activities
+        ServerSync.shared.reset()       // …and anything still waiting to upload
+        CoachData.shared.reset()        // coach: cached client data
+        LiveSessionController.shared.endAll()   // close any workout Live Activity
+        CongratsLog.shared.reset()
     }
 
     func clearAnnouncement(_ id: String) {
@@ -668,7 +717,7 @@ final class AppStore: ObservableObject {
 enum AppTab: String, CaseIterable, Identifiable {
     case dashboard   = "Home"
     case workouts    = "Workouts"
-    case history     = "History"
+    case history     = "Stats"       // was History; case name kept so nothing else changes
     case macros      = "Macros"
     case supplements = "Supplements"
     case awards      = "Awards"

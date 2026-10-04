@@ -81,7 +81,8 @@ SAFETY
                 ExerciseSet(id: "s\(i)", targetReps: reps, targetWeight: w,
                             loggedReps: logged ? reps : nil,
                             loggedWeight: logged ? w : nil,
-                            rpe: logged ? Int.random(in: 6...9) : nil)
+                            // Fixed (not random) so the demo looks the same on every launch.
+                            rpe: logged ? [7.0, 8.0, 8.5, 9.0][i % 4] : nil)
             }
         }
         func ex(_ id: String, _ name: String, _ mg: String, _ reps: Int, _ w: Double, _ n: Int, logged: Bool) -> Exercise {
@@ -149,7 +150,7 @@ SAFETY
             (0..<n).map { i in
                 ExerciseSet(id: "ps\(i)", targetReps: reps, targetWeight: w,
                             loggedReps: reps, loggedWeight: w,
-                            rpe: min(10, 7 + (i == n - 1 ? 2 : i % 2)))
+                            rpe: Double(min(10, 7 + (i == n - 1 ? 2 : i % 2))))
             }
         }
         func pex(_ id: String, _ name: String, _ mg: String, _ reps: Int, _ w: Double, _ n: Int) -> Exercise {
@@ -264,7 +265,7 @@ SAFETY
     // MARK: Announcements
     static let announcements: [Announcement] = [
         Announcement(id:"a1", date: day(-1), title:"New PR Challenge Starts Monday",
-                     body:"We're running a 4-week strength push. Hit a PR on any main lift and tag #bigscherlytraining to get featured. Let's get big together, queens 👑"),
+                     body:"We're running a 4-week strength push. Hit a PR on any main lift and tag #bigscherlytraining to get featured. Let's get big together 👑"),
         Announcement(id:"a2", date: day(-8), title:"Holiday Schedule",
                      body:"Check-ins move to Sunday this week due to the holiday. Get your submissions in by 8pm."),
         Announcement(id:"a3", date: day(-20), title:"Welcome to the App!",
