@@ -49,6 +49,7 @@ final class SupplementEngine {
     // Cancels everything and reschedules all active supplements from scratch.
     func rescheduleAll(supplements: [Supplement], logs: [SupplementLog], workouts: [Workout]) {
         cancelAll()
+        guard NotifPrefs.shared.s.isOn(.supplements) else { return }     // Settings ▸ Notifications
         let usualMin = usualWorkoutMinutes(from: workouts)
         let trainDays = usualTrainingWeekdays(from: workouts)
 
@@ -85,7 +86,7 @@ final class SupplementEngine {
             content.title = i == 0 ? "Time for \(s.name)" : "Still need your \(s.name)"
             content.body = "\(s.dose.display)" + (s.instructions.map { " · \($0)" } ?? "")
                 + " — open the app to confirm you took it."
-            content.sound = .default
+            content.sound = AudioOutput.notificationSound(NotifPrefs.shared.s.sound(.supplements))
             content.interruptionLevel = .timeSensitive         // PRIORITY: pierces Focus
             content.categoryIdentifier = "SUPPLEMENT_DUE"
             content.userInfo = ["supplementId": s.id, "kind": "supplement"]
@@ -98,13 +99,14 @@ final class SupplementEngine {
 
     // After-workout dose: called when a workout is marked complete.
     func scheduleAfterWorkout(_ supplements: [Supplement]) {
+        guard NotifPrefs.shared.s.isOn(.supplements) else { return }
         let center = UNUserNotificationCenter.current()
         for s in supplements where s.isActive && s.timing.kind == .afterWorkout {
             for i in 0...followUpCount {
                 let content = UNMutableNotificationContent()
                 content.title = i == 0 ? "Post-workout: \(s.name)" : "Still need your \(s.name)"
                 content.body = "\(s.dose.display) — open the app to confirm you took it."
-                content.sound = .default
+                content.sound = AudioOutput.notificationSound(NotifPrefs.shared.s.sound(.supplements))
                 content.interruptionLevel = .timeSensitive
                 content.categoryIdentifier = "SUPPLEMENT_DUE"
                 content.userInfo = ["supplementId": s.id, "kind": "supplement"]

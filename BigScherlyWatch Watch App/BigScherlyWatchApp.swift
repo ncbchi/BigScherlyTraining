@@ -21,6 +21,7 @@ struct BigScherlyWatchApp: App {
     @StateObject private var state = WatchState.shared
     @StateObject private var session = WorkoutSessionManager.shared
     @StateObject private var motion = MotionRecorder.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -28,12 +29,13 @@ struct BigScherlyWatchApp: App {
                 .environmentObject(state)
                 .environmentObject(session)
                 .environmentObject(motion)
-                .overlay { PauseCountdownOverlay() }       // Phase 3: the pause buzz countdown
-                .sheet(item: $state.presentedDetection) { d in
-                    WatchDetectedSetView(detection: d)
-                        .environmentObject(state)
-                        .environmentObject(session)
-                        .environmentObject(motion)
+                // The pause countdown, over any screen — except the card, whose tile shows the hold.
+                .overlay { if !state.cardVisible && state.setup == nil { PauseCountdownOverlay() } }
+                // The first-time setup, over everything while it runs (the phone drives it).
+                .overlay { if state.setup != nil { WatchSetupView() } }
+                // (A detected set now appears on the card's tile as "Log set", not a pop-up.)
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { state.requestCard() }      // pick up the phone's card as it is now
                 }
         }
     }

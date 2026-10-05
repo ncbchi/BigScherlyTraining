@@ -299,7 +299,8 @@ final class AppStore: ObservableObject {
                                  loggedReps: s.loggedReps, loggedWeight: s.loggedWeight, rpe: s.rpe)
                     },
                     pauseTarget: PauseTarget.forWatch(ex))     // Settings ▸ Apple Watch ▸ Pause buzz
-            })
+            },
+            haptics: NotifPrefs.shared.watchHaptics)           // Settings ▸ Notifications ▸ Watch buzzes
         WatchBridge.shared.sendActiveWorkout(payload)
     }
 
@@ -307,6 +308,13 @@ final class AppStore: ObservableObject {
     // phone edit uses (updates the model, persists, checks PRs, re-syncs the Watch).
     func applyWatchSetLog(workoutId: String, exerciseId: String, setId: String,
                           reps: Int?, weight: Double?, rpe: Double?) {
+        // The workout that's live: the same path as the Lock Screen card's Save, so rest starts
+        // and the card moves on everywhere (Watch, Lock Screen, app).
+        if LiveSessionController.shared.workoutId == workoutId, let reps, let weight {
+            _ = LiveSessionController.shared.log(workoutId: workoutId, exerciseId: exerciseId, setId: setId,
+                                                 reps: reps, weight: weight, rpe: rpe)
+            return
+        }
         guard let wi = workouts.firstIndex(where: { $0.id == workoutId }),
               let ei = workouts[wi].exercises.firstIndex(where: { $0.id == exerciseId }),
               let si = workouts[wi].exercises[ei].sets.firstIndex(where: { $0.id == setId }) else { return }
@@ -324,7 +332,10 @@ final class AppStore: ObservableObject {
         announcements.filter { !$0.cleared }.sorted { $0.date > $1.date }
     }
 
-    func login() { withAnimation(.easeOut(duration: 0.4)) { isLoggedIn = true } }
+    func login() {
+        withAnimation(.easeOut(duration: 0.4)) { isLoggedIn = true }
+        PushCenter.shared.start(self)    // ask for notifications once, then register this phone
+    }
 
     // MARK: - Supplements
     // Reschedule all reminders from the current protocol + workout history.
@@ -509,6 +520,9 @@ final class AppStore: ObservableObject {
             let top = fresh.max(by: { $0.gain < $1.gain })
             prToCelebrate = top
             lastPRForShare = top
+            if let top {                                    // earned on the Watch or Lock Screen, app closed
+                LocalReminders.announcePR(exercise: top.exercise, oneRepMax: top.estimatedOneRepMax, gain: top.gain)
+            }
         }
         // Awards are evaluated after PRs, since some depend on them (First PR, Triple
         // Crown). If a PR is already celebrating, the award waits its turn — the
@@ -674,6 +688,7 @@ final class AppStore: ObservableObject {
     }
 
     func logout() {
+        PushCenter.shared.signOut(self)  // first, while still signed in: stop this phone's notifications
         isLoggedIn = false; showTray = false; activeTab = .dashboard
         mustChangePassword = false
         isDemoMode = false

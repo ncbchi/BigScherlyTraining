@@ -7,6 +7,7 @@ struct BigScherlyTrainingApp: App {
     // Lock Screen Live Activity button can log a set even when iOS launches the app
     // in the background just to run it.
     @StateObject private var store = AppStore.shared
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate     // push: iOS hands the token here
 
     init() {
         BrandFont.registerFonts()                          // the display face, before anything draws
@@ -17,7 +18,11 @@ struct BigScherlyTrainingApp: App {
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
-            ThemeHost { RootView().environmentObject(store) }    // Settings ▸ Appearance
+            ThemeHost {
+                RootView().environmentObject(store)                  // Settings ▸ Appearance
+                    // Push: register on launch too — a saved session is restored without login().
+                    .task { PushCenter.shared.start(store) }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             // Keep the Watch's glance + complication current whenever the phone
@@ -26,6 +31,11 @@ struct BigScherlyTrainingApp: App {
                 WidgetBridge.shared.mergeWidgetTicks()        // supplements ticked on a widget → your log
                 store.syncToWatch()
                 ServerSync.shared.flushSoon(after: 1)   // send anything queued while away/offline
+                PushCenter.shared.start(store)          // keep this phone registered for notifications
+                LocalReminders.refresh(store)           // check-in and workout reminders
+                LiveSessionController.shared.appBecameActive()     // card back if closed; rest alerts here
+            } else if phase == .background {
+                LiveSessionController.shared.appWentToBackground() // rest alerts go into the card
             }
         }
     }

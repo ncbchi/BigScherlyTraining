@@ -1,13 +1,15 @@
 import SwiftUI
 import Combine
 
-private let volt = Color(red: 0xED/255, green: 0xFF/255, blue: 0x3D/255)
 private let card = Color.white.opacity(0.07)
 
 // The Watch glance: streak/status, next workout, unread messages, and — when a rest
 // timer is running — a live countdown ring you can cancel from the wrist.
 struct WatchHomeView: View {
     @EnvironmentObject var state: WatchState
+    /// Your theme accent (from the phone), and the text colour that reads on it.
+    private var volt: Color { state.accentColor }
+    private var ink: Color { state.inkColor }
     @State private var now = Date()
     @State private var path: [String] = []
     @State private var lastAutoNavId: String? = nil
@@ -37,13 +39,16 @@ struct WatchHomeView: View {
                     streakCard
                     nextWorkoutCard
                     if state.unreadMessages > 0 { messagesCard }
+                    Text("Watch app \(WatchBuild.tag)")             // so an out-of-date Watch is obvious
+                        .font(.system(size: 9, weight: .semibold)).foregroundColor(Color(white: 0.4))
+                        .padding(.top, 4)
                 }
                 .padding(.horizontal, 3)
                 .padding(.bottom, 6)
                 .opacity(appeared ? 1 : 0)
                 .offset(y: appeared ? 0 : 10)
             }
-            .navigationDestination(for: String.self) { _ in WatchWorkoutView() }
+            .navigationDestination(for: String.self) { _ in WatchCardHost() }      // the card, on your wrist
             .onAppear {
                 withAnimation(.easeOut(duration: 0.35)) { appeared = true }
                 if let id = state.activeWorkout?.id, path.isEmpty {
@@ -75,31 +80,31 @@ struct WatchHomeView: View {
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
                 Image(systemName: "dumbbell.fill")
-                    .font(.system(size: 15, weight: .bold)).foregroundColor(.black)
+                    .font(.system(size: 15, weight: .bold)).foregroundColor(ink)
                 Text(started ? "CONTINUE" : "START")
                     .font(.system(size: 9, weight: .black)).tracking(1.4)
-                    .foregroundColor(.black.opacity(0.75))
+                    .foregroundColor(ink.opacity(0.75))
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .black)).foregroundColor(.black.opacity(0.55))
+                    .font(.system(size: 11, weight: .black)).foregroundColor(ink.opacity(0.55))
             }
             Text(workout.title)
-                .font(.system(size: 16, weight: .bold)).foregroundColor(.black)
+                .font(.system(size: 16, weight: .bold)).foregroundColor(ink)
                 .lineLimit(2).multilineTextAlignment(.leading)
 
             if totalSets > 0 {
                 HStack(spacing: 6) {
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
-                            Capsule().fill(Color.black.opacity(0.22))
-                            Capsule().fill(Color.black)
+                            Capsule().fill(ink.opacity(0.22))
+                            Capsule().fill(ink)
                                 .frame(width: max(frac > 0 ? 4 : 0, g.size.width * frac))
                         }
                     }
                     .frame(height: 5)
                     Text("\(doneSets)/\(totalSets)")
                         .font(.system(size: 10, weight: .black, design: .rounded))
-                        .foregroundColor(.black.opacity(0.8)).monospacedDigit()
+                        .foregroundColor(ink.opacity(0.8)).monospacedDigit()
                 }
             }
         }
@@ -138,7 +143,7 @@ struct WatchHomeView: View {
 
             Button { state.cancelRest() } label: {
                 Text("Skip")
-                    .font(.system(size: 12, weight: .bold)).foregroundColor(.black)
+                    .font(.system(size: 12, weight: .bold)).foregroundColor(ink)
                     .frame(maxWidth: .infinity).padding(.vertical, 6)
                     .background(volt).clipShape(Capsule())
             }

@@ -14,6 +14,7 @@ struct WorkoutSessionView: View {
     @ObservedObject private var watch = WatchBridge.shared
     // Rest + logging live in the session controller, shared with the Lock Screen Live Activity.
     @ObservedObject private var live = LiveSessionController.shared
+    @ObservedObject private var setup = SetupEngine.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("bst_units") private var units = "lb"
 
@@ -95,6 +96,8 @@ struct WorkoutSessionView: View {
                     store.activeWorkoutId = w.id
                     if openExercises.isEmpty, let c = currentExercise(w) { openExercises = [c.id] }
                     live.begin(workoutId: w.id)            // starts the Lock Screen Live Activity
+                    SetVideoRecorder.shared.screenVisible = true   // set videos only film on this screen
+                    SetupEngine.shared.considerOffering(workout: w)   // first-time Watch setup
                     // Settings ▸ Keep screen awake (on unless turned off)
                     UIApplication.shared.isIdleTimerDisabled = UserDefaults.standard.object(forKey: "bst_keep_awake") as? Bool ?? true
                 }
@@ -106,9 +109,20 @@ struct WorkoutSessionView: View {
                         openExercises.insert(new)
                     }
                 }
+                // The Watch setup: offered between sets — the body setup first, then a lift's the
+                // first time it's up next (squat, bench, deadlift). Your theme, the elements in your accent.
+                .onChange(of: live.revision) { _, _ in SetupEngine.shared.considerOffering(workout: w) }
+                .onReceive(WatchBridge.shared.$watchSessionActive) { _ in SetupEngine.shared.considerOffering(workout: w) }
+                .sheet(item: $setup.request) { _ in
+                    SetupSheet()                                   // sizes itself to its content
+                        .presentationBackground(Brand.bg)
+                        .presentationDragIndicator(.visible)
+                        .interactiveDismissDisabled()
+                }
                 .onDisappear {
                     if store.activeWorkoutId == w.id { store.activeWorkoutId = nil }
                     UIApplication.shared.isIdleTimerDisabled = false
+                    SetVideoRecorder.shared.screenVisible = false   // set videos only film on this screen
                 }
                 .confirmationDialog("Finish this workout?", isPresented: $confirmFinish, titleVisibility: .visible) {
                     Button("Finish anyway") { finish(w) }
@@ -770,6 +784,19 @@ enum CoachNotes {
         let reps = motion?.reps ?? []
         let fmt = { (v: Double) in String(format: "%.1f s", v) }
 
+        // Short of the range set in the first-time setup — the same true depth (chest touch,
+        // lockout) every rep, or it gets flagged.
+        if let cal = LiftCalibration.forExercise(ex.name), cal.fullTravelM > 0, !reps.isEmpty {
+            let short = reps.filter { $0.travelM < 0.92 * cal.fullTravelM }
+            if !short.isEmpty {
+                let list = short.map { "\($0.index)" }.joined(separator: ", ")
+                let pct = Int(((short.map(\.travelM).min() ?? 0) / cal.fullTravelM * 100).rounded())
+                out.append(CoachNote(kind: .fix, icon: "arrow.down.to.line",
+                                     title: short.count == 1 ? "Rep \(list) was short" : "Reps \(list) were short",
+                                     detail: "Down to \(pct)% of your full range — \(cal.lift.standard), every rep."))
+            }
+        }
+
         // A new estimated PR
         if let r = set.loggedReps, let w = set.loggedWeight, r > 0, w > 0 {
             let e = epley(w, r)
@@ -976,6 +1003,7 @@ struct LiveSetCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Start set \(next?.2 ?? 1)")
+                .onAppear { if !compact { SetVideoRecorder.shared.warm() } }   // camera ready for the set
             },
             title: next?.0.name ?? "", kicker: setOf(next), kickerColor: Brand.mute,
             value: next.map { LiveCardData.setText(reps: $0.1.targetReps, weightLb: $0.1.targetWeight) } ?? "",
@@ -1001,6 +1029,8 @@ struct LiveSetCard: View {
         }
         .onChange(of: remaining) { _, r in
             if r == 0 && !compact { RestTimerEngine.shared.fireForegroundBell() }   // once: the card, not the pinned bar
+            if r == 10 && !compact { RestTimerEngine.shared.fireForegroundWarning() }
+            if r == 12 && !compact { SetVideoRecorder.shared.warm() }          // camera ready for the next set
         }
     }
 
@@ -1060,6 +1090,7 @@ struct LiveSetCard: View {
                                        value: String, valueColor: Color, @ViewBuilder accessory: () -> A) -> some View {
         HStack(alignment: .center, spacing: 12) {
             tile().frame(width: tileSize.width, height: tileSize.height)
+            SetVideoToggle(compact: compact)            // set videos: film each set (front camera)
             Spacer(minLength: 6)
             VStack(alignment: .trailing, spacing: compact ? 1 : 3) {
                 Text(title).font(BrandFont.body(compact ? 13 : 16, .heavy)).foregroundColor(Brand.text)

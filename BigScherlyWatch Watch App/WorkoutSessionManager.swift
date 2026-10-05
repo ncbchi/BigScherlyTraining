@@ -15,6 +15,8 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
     @Published private(set) var startDate: Date? = nil
     @Published private(set) var heartRate: Int? = nil
     @Published private(set) var lastError: String? = nil
+    /// A demo session (the phone's Demo Mode): thrown away at the end, never saved to Health.
+    var discardOnEnd = false
 
     private let store = HKHealthStore()
     private var session: HKWorkoutSession?
@@ -67,7 +69,8 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
         s.end()
         do {
             try await b.endCollection(at: Date())
-            _ = try await b.finishWorkout()
+            if discardOnEnd { b.discardWorkout() }       // demo: nothing saved to Health
+            else { _ = try await b.finishWorkout() }
         } catch {
             // The session still ends; Health just may not get the saved workout.
         }
@@ -97,6 +100,7 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
 
     private func reset() {
         WatchState.sendLive(["sessionActive": false])
+        discardOnEnd = false
         session = nil
         builder = nil
         isRunning = false

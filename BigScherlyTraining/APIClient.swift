@@ -315,6 +315,45 @@ final class APIClient {
         URL(string: "\(APIConfig.baseURL)/admin/photos/\(photoId)/file")!
     }
 
+    // MARK: Push notifications — this phone gets the signed-in person's notifications
+
+    func getNotificationPrefs() async throws -> APINotifPrefs { try await get("/notification-prefs") }
+
+    // MARK: Rest alerts inside the workout card — the server sends each at its moment
+
+    func scheduleCardAlerts(_ alerts: [CardAlert]) async throws {
+        let iso = ISO8601DateFormatter()
+        let events: [[String: Any]] = try alerts.map { a in
+            guard let data = a.json else { throw APIError(message: "Couldn't prepare the card alert") }
+            return ["at": iso.string(from: a.at), "token": a.token, "payload": try JSONSerialization.jsonObject(with: data)]
+        }
+        _ = try await request("/live/schedule", method: "PUT", body: try JSONSerialization.data(withJSONObject: ["events": events]))
+    }
+
+    func cancelCardAlerts() async throws {
+        _ = try await request("/live/schedule", method: "DELETE")
+    }
+
+    func putNotificationPrefs(_ p: APINotifPrefs) async throws {
+        _ = try await request("/notification-prefs", method: "PUT", body: try JSONEncoder().encode(p))
+    }
+
+    func registerDevice(apnsToken: String) async throws {
+        _ = try await request("/devices", method: "POST",
+                              body: try JSONSerialization.data(withJSONObject: ["apnsToken": apnsToken]))
+    }
+
+    /// Built now (while still signed in) and sent in the background, so a log-out straight
+    /// after can't clear the login before it goes.
+    func unregisterDevice(apnsToken: String) {
+        var req = URLRequest(url: url("/devices"))
+        req.httpMethod = "DELETE"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["apnsToken": apnsToken])
+        Task { _ = try? await URLSession.shared.data(for: req) }
+    }
+
     func get<T: Decodable>(_ path: String) async throws -> T {
         let data = try await request(path, method: "GET")
         return try decoder.decode(T.self, from: data)

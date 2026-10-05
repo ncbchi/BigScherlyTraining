@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>instagram-stories</string>
@@ -11,17 +9,11 @@
 		<string>instagram</string>
 		<string>fb</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>Big Scherly Training uses the camera so you can take a photo for your workout share card. Photos stay on your device unless you choose to share them.</string>
-	<key>NSHealthShareUsageDescription</key>
-	<string>Big Scherly Training reads your heart rate, active energy, and body weight from Apple Health so it can show what your body did during each workout and share that with your coach.</string>
-	<key>NSHealthUpdateUsageDescription</key>
-	<string>Big Scherly Training&apos;s Apple Watch app saves your training sessions to Apple Health as strength-training workouts, so they count toward your Activity rings. It doesn&apos;t change any other Health data.</string>
-	<key>NSSupportsLiveActivities</key>
-	<true/>
-	<key>CFBundleIdentifier</key>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string></string>
-	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
-	<true/>
 </dict>
 </plist>

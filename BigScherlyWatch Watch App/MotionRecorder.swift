@@ -37,6 +37,8 @@ final class MotionRecorder: ObservableObject {
     @Published private(set) var pauseStart: Date? = nil
     @Published private(set) var pauseTarget: Double = 0       // 0 = off
     @Published private(set) var pauseReached = false
+    /// From the phone (Settings ▸ Notifications ▸ Watch buzzes).
+    var haptics = WatchHaptics(pauseStrength: 1, pauseTicks: false, slowRepOn: true, slowRepPct: 20, slowRepPattern: 0)
     /// Every rep so far in the set in progress (speed, lowering, pause, lifting, travel) —
     /// sent on to the phone's live card as each one is counted.
     var onLiveReps: (([RepMotion]) -> Void)?
@@ -48,6 +50,37 @@ final class MotionRecorder: ObservableObject {
     private var announcedStart = false
 
     private let processor = MotionProcessor()
+
+    // MARK: Calibration (first-time setup) — reps go to the setup flow, not to a "set"
+    /// While true: no "set started" for the phone, no slow-rep buzz, no set detection —
+    /// reps and the set's end go to `onCalibReps` / `onCalibEnded` instead.
+    var calibrating = false
+    private var calibEndPending = false
+    var onCalibReps: (([RepMotion]) -> Void)?
+    var onCalibEnded: ((_ reps: [RepMotion], _ start: Date, _ end: Date) -> Void)?
+    /// Briefly after setup, a set ending is still setup motion — ignore it.
+    private var ignoreSetsUntil: Date?
+    private var stillDone: ((Double, Double) -> Void)?
+
+    /// Setup finished. If a set is still open, stay in setup mode until it closes, so its tail
+    /// can't be mistaken for a real set.
+    func endCalibration() {
+        ignoreSetsUntil = Date().addingTimeInterval(10)
+        if liveRepCount == nil { calibrating = false } else { calibEndPending = true }
+    }
+
+    /// "Hold still": measure how much the Watch moves (vertical shake m/s², rotation rad/s).
+    func beginStillProbe() { processor.beginStillProbe() }
+    func endStillProbe(_ done: @escaping (Double, Double) -> Void) {
+        stillDone = done
+        processor.endStillProbe { shake, rot in
+            Task { @MainActor in MotionRecorder.shared.finishStill(shake, rot) }
+        }
+    }
+    private func finishStill(_ shake: Double, _ rot: Double) {
+        stillDone?(shake, rot)
+        stillDone = nil
+    }
 
     private init() {
         // The recorder is a singleton, so the callbacks reach it through `shared`
@@ -70,6 +103,12 @@ final class MotionRecorder: ObservableObject {
     }
 
     private func applyLive(reps: [RepMotion], buzz: Bool) {
+        if calibrating {                                 // setup reps: to the setup flow only
+            liveRepCount = reps.count
+            liveLastVelocity = reps.last?.meanVelocity
+            onCalibReps?(reps)
+            return
+        }
         let velocities = reps.map { $0.meanVelocity }
         let count = velocities.count
         // First counted rep (not just movement — unracking or walking doesn't count).
@@ -80,7 +119,39 @@ final class MotionRecorder: ObservableObject {
         liveRepCount = count
         liveLastVelocity = velocities.last
         if count >= 1 { onLiveReps?(reps) }
-        if buzz { WKInterfaceDevice.current().play(.directionDown) }
+        if buzz { slowRepBuzz() }
+    }
+
+    /// The slow-rep buzz, in the pattern chosen on the phone.
+    private func slowRepBuzz() {
+        let device = WKInterfaceDevice.current()
+        switch haptics.slowRepPattern {
+        case 1:
+            device.play(.directionDown)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { device.play(.directionDown) }
+        case 2:
+            device.play(.notification)
+        default:
+            device.play(.directionDown)
+        }
+    }
+
+    /// The pause tap, at the strength chosen on the phone.
+    private func pauseTap() {
+        let device = WKInterfaceDevice.current()
+        switch haptics.pauseStrength {
+        case 0: device.play(.click)
+        case 2:
+            device.play(.notification)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { device.play(.click) }
+        default: device.play(.success)
+        }
+    }
+
+    /// A light tick each whole second while held (if switched on).
+    func pauseTick() {
+        guard haptics.pauseTicks else { return }
+        WKInterfaceDevice.current().play(.click)
     }
 
     /// The exercise you're on asks for this bottom pause (nil or 0 = off).
@@ -95,7 +166,7 @@ final class MotionRecorder: ObservableObject {
         guard let bottomAt else { pauseStart = nil; pauseReached = false; return }
         pauseStart = Date(timeIntervalSince1970: bottomAt)
         pauseReached = reached
-        if reached { WKInterfaceDevice.current().play(.success) }     // the tap: drive up
+        if reached { pauseTap() }                                   // the tap: drive up
     }
 
     private func applySetEnded(reps: [RepMotion], start: Date, end: Date) {
@@ -103,6 +174,12 @@ final class MotionRecorder: ObservableObject {
         pauseStart = nil; pauseReached = false
         liveRepCount = nil
         liveLastVelocity = nil
+        if calibrating {
+            if calibEndPending { calibrating = false; calibEndPending = false }
+            else { onCalibEnded?(reps, start, end) }
+            return
+        }
+        if let until = ignoreSetsUntil, Date() < until { return }   // the tail of setup motion
         if !reps.isEmpty { onSetDetected?(reps, start, end) }
     }
 
@@ -162,6 +239,25 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
     private var descendFor = 0.0
     private var bottomAt: TimeInterval? = nil
     private var pauseReached = false
+
+    // "Hold still" probe: vertical acceleration and rotation while it runs (touched only on `queue`).
+    private var probe: [(av: Double, rot: Double)]? = nil
+
+    func beginStillProbe() { queue.addOperation { [self] in self.probe = [] } }
+
+    /// Shake = standard deviation of vertical acceleration (m/s²); rot = mean rotation (rad/s).
+    func endStillProbe(_ done: @escaping @Sendable (Double, Double) -> Void) {
+        queue.addOperation { [self] in
+            let p = self.probe ?? []
+            self.probe = nil
+            guard p.count > 10 else { done(9, 9); return }          // no data: treat as moved
+            let n = Double(p.count)
+            let mean = p.reduce(0) { $0 + $1.av } / n
+            let variance = p.reduce(0) { $0 + ($1.av - mean) * ($1.av - mean) } / n
+            let rot = p.reduce(0) { $0 + $1.rot } / n
+            done(variance.squareRoot(), rot)
+        }
+    }
 
     func setPauseTarget(_ s: Double) {
         queue.addOperation { [self] in
@@ -230,7 +326,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         let rr = m.rotationRate
         let rot = (rr.x * rr.x + rr.y * rr.y + rr.z * rr.z).squareRoot()
         let t = m.timestamp + bootOffset
-
+        if probe != nil { probe?.append((av: av, rot: rot)) }
         buffer.append(MotionSample(t: t, av: av, h1: h1, h2: h2, rot: rot))
 
         // Activity (≈0.3 s smoothing).
@@ -346,6 +442,7 @@ struct PauseCountdownOverlay: View {
                 let target = motion.pauseTarget
                 let held = max(0, ctx.date.timeIntervalSince(start))
                 let done = motion.pauseReached || held >= target
+                let second = Int(held)
                 ZStack {
                     Color.black.opacity(0.9).ignoresSafeArea()
                     if done {
@@ -366,6 +463,7 @@ struct PauseCountdownOverlay: View {
                         }
                     }
                 }
+                .onChange(of: second) { _, s in if s > 0 && !done { motion.pauseTick() } }   // countdown ticks
             }
             .allowsHitTesting(false)
             .transition(.opacity)

@@ -66,6 +66,10 @@ final class WatchBridge: NSObject, ObservableObject {
 
     @Published private(set) var liveHeartRate: Int? = nil
     @Published private(set) var watchSessionActive = false
+    /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
+    @Published private(set) var watchBuild: String?
+    /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
+    static let expectedWatchBuild = "2026-10-05.1"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -146,6 +150,43 @@ final class WatchBridge: NSObject, ObservableObject {
 
     // Push the currently-active workout to the Watch as JSON (application context,
     // so the Watch always has the latest even if it reconnects).
+    /// The live card for the Watch (see LiveSessionController.pushCardToWatch). Live only:
+    /// when the Watch isn't reachable it asks for the latest when it comes back.
+    func sendCard(_ data: Data, extras: [String: Any]) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        var msg = extras
+        msg["card"] = data
+        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// No card on the Watch. `endSession`: the workout finished, so the Watch ends its session
+    /// too (saved for real workouts, discarded for demos). Without it, just "no card right now".
+    func sendCardEnd(endSession: Bool) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["cardEnd": true, "endSession": endSession]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: nil) { _ in
+                if endSession { WCSession.default.transferUserInfo(msg) }
+            }
+        } else if endSession {
+            WCSession.default.transferUserInfo(msg)            // arrives when the Watch is back
+        }
+    }
+
+    /// The Watch setup's steps (see WatchSetup.swift).
+    func sendSetup(_ msg: [String: Any]) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// A paired Watch with the app installed (so the phone can open it into a workout).
+    var watchAppAvailable: Bool {
+        WCSession.isSupported() && WCSession.default.activationState == .activated
+            && WCSession.default.isPaired && WCSession.default.isWatchAppInstalled
+    }
+
     func sendActiveWorkout(_ workout: WatchWorkout?) {
         #if canImport(WatchConnectivity)
         guard let session, session.activationState == .activated else { return }
@@ -166,6 +207,14 @@ struct WatchWorkout: Codable, Identifiable {
     var id: String
     var title: String
     var exercises: [WatchExercise]
+    var haptics: WatchHaptics? = nil       // Settings ▸ Notifications ▸ Watch buzzes
+}
+struct WatchHaptics: Codable {
+    var pauseStrength: Int                 // 0 light · 1 medium · 2 strong
+    var pauseTicks: Bool
+    var slowRepOn: Bool
+    var slowRepPct: Double
+    var slowRepPattern: Int                // 0 single · 1 double · 2 long
 }
 struct WatchExercise: Codable, Identifiable {
     var id: String
@@ -189,6 +238,15 @@ extension WatchBridge: WCSessionDelegate {
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
+    /// The Watch app came back in reach: catch it up (the card, and a waiting setup step).
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        guard session.isReachable else { return }
+        Task { @MainActor in
+            LiveSessionController.shared.pushCardToWatch()
+            SetupEngine.shared.resendIfActive()
+        }
+    }
+
     // A set was logged from the wrist → apply it through the phone's save path.
     // Live message when the phone was reachable…
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
@@ -205,6 +263,54 @@ extension WatchBridge: WCSessionDelegate {
         if message["sessionActive"] != nil || message["liveHR"] != nil || message["detectedSet"] != nil
             || message["setStarted"] != nil || message["liveRepsData"] != nil {
             DispatchQueue.main.async { self.applyLive(message) }
+            return
+        }
+        // The Watch's card buttons go through the same path as the Lock Screen card's.
+        if let action = message["cardAction"] as? String {
+            Task { @MainActor in
+                let live = LiveSessionController.shared
+                switch action {
+                case "startSet": await live.handle(.startSet)
+                case "rest30": await live.handle(.rest(seconds: 30))
+                case "skipRest": await live.handle(.rest(seconds: 0))
+                default: break
+                }
+            }
+            return
+        }
+        // Watch setup: Go tapped, the hold done, or the setup set captured.
+        if message["setupGo"] as? Bool == true {
+            let wrist = message["wrist"] as? String, crown = message["crown"] as? String
+            Task { @MainActor in SetupEngine.shared.watchWentGo(wrist: wrist, crown: crown) }
+            return
+        }
+        if let data = message["setupLive"] as? Data {
+            let reps = (try? JSONDecoder().decode([RepMotion].self, from: data)) ?? []
+            Task { @MainActor in SetupEngine.shared.watchLive(reps) }
+            return
+        }
+        if message["setupStillDone"] as? Bool == true {
+            Task { @MainActor in SetupEngine.shared.watchStillDone() }
+            return
+        }
+        if let data = message["setupReps"] as? Data {
+            let reps = (try? JSONDecoder().decode([RepMotion].self, from: data)) ?? []
+            Task { @MainActor in SetupEngine.shared.watchCaptured(reps) }
+            return
+        }
+        // The Watch tapped your wrist (10 seconds, rest's up): the phone plays the sound.
+        if let cue = message["cue"] as? String {
+            Task { @MainActor in RestTimerEngine.shared.playWatchCue(cue) }
+            return
+        }
+        // The Watch (re)opened: send it the card as it is now.
+        if message["cardRequest"] as? Bool == true {
+            let build = message["watchBuild"] as? String
+            Task { @MainActor in
+                WatchBridge.shared.watchBuild = build
+                LiveSessionController.shared.pushCardToWatch()
+                SetupEngine.shared.resendIfActive()           // and the setup step, if one's waiting
+            }
             return
         }
         if let data = message["setMotion"] as? Data {

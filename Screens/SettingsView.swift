@@ -22,6 +22,9 @@ struct SettingsView: View {
     @AppStorage("bst_live_activity") private var liveActivity = true
     @AppStorage("bst_weight_step") private var weightStep = "standard"
     @AppStorage("bst_pause_buzz") private var pauseBuzz = true
+    @ObservedObject private var push = PushCenter.shared
+    @State private var showNotifications = false
+    @State private var redoSetupDone = false
     @AppStorage("bst_stats_window") private var statsWindow = StatsWindow.w12.rawValue
     @State private var editingMenu = false
     @State private var customPick: Color = Color(hex: 0x00E5FF)
@@ -60,7 +63,6 @@ struct SettingsView: View {
                 notifications
                 preferences
                 workoutPrefs
-                appleWatch
                 navigation
                 statsDefaults
                 about
@@ -78,6 +80,7 @@ struct SettingsView: View {
         .dsTopFade()
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $editingMenu) { MenuOrderEditor() }
+        .sheet(isPresented: $showNotifications) { NotificationSettingsView().environmentObject(store) }
         .confirmationDialog("Delete your account?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Account", role: .destructive) { performDelete() }
             Button("Cancel", role: .cancel) {}
@@ -141,11 +144,21 @@ struct SettingsView: View {
 
     private var notifications: some View {
         section("Notifications") {
-            toggleRow("Check-in reminders", $notifCheckins)
-            rowDivider
-            toggleRow("Coach messages", $notifMessages)
-            rowDivider
-            toggleRow("Supplement reminders", $notifSupplements)
+            Button { showNotifications = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "bell.badge.fill").foregroundColor(Brand.voltText).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notifications").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text(push.registered ? "Sounds, reminders, rest timer, Watch buzzes" : "Push: \(push.status)")
+                            .font(BrandFont.body(11)).foregroundColor(Brand.mute).lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundColor(Brand.mute)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -307,9 +320,20 @@ struct SettingsView: View {
         section("Workouts") {
             subToggle("Keep screen awake", "While the workout screen is open", $keepAwake)
             rowDivider
-            subToggle("Start rest automatically", "When you log a set", $autoRest)
-            rowDivider
-            subToggle("Lock Screen card", "The Live Activity during workouts", $liveActivity)
+            Button { SetupEngine.resetAll(); redoSetupDone = true } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Redo Watch setup").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text(redoSetupDone ? "Done — it runs again at your next workout" : "The first-time setup, and each lift's")
+                            .font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.counterclockwise").foregroundColor(Brand.voltText)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             rowDivider
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -337,19 +361,6 @@ struct SettingsView: View {
         }
         .tint(Brand.volt)
         .padding(.horizontal, 16).padding(.vertical, 10)
-    }
-
-    // MARK: Apple Watch
-
-    private var appleWatch: some View {
-        section("Apple Watch") {
-            subToggle("Pause buzz", "Taps your wrist when your bottom pause reaches its target", $pauseBuzz)
-            rowDivider
-            Text("Targets come from your programme (\"2-sec pause\", tempo 3-2-1-0). Change one from the Pause view on the workout screen.")
-                .font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                .padding(.horizontal, 16).padding(.vertical, 12)
-        }
-        .onChange(of: pauseBuzz) { _, _ in store.sendActiveWorkoutToWatch() }
     }
 
     // MARK: Navigation
