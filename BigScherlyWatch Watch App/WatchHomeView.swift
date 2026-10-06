@@ -61,6 +61,8 @@ struct WatchHomeView: View {
                     withAnimation { state.restEndDate = nil }
                 }
             }
+            // The workout's over on the phone (finished, card swiped away, app closed): back to Home.
+            .onChange(of: state.workoutEndedAt) { _, _ in path = [] }
             .onChange(of: state.activeWorkout?.id) { _, newId in
                 if let id = newId {
                     if id != lastAutoNavId { lastAutoNavId = id; path = [id] }

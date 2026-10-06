@@ -86,6 +86,7 @@ nonisolated struct WorkoutActivityAttributes: ActivityAttributes {
         var accentInkWhite: Bool? = nil   // text on the accent: white (dark accents) or black
         var available: [LiveView] = []
         var afterSet: Bool = false     // showing the set you just did (until the next set starts)
+        var liveSet: Bool? = nil       // the sensor views show the set in progress, rep by rep (optional: older payloads decode)
 
         // Heart rate (Apple Watch)
         var hr: Int? = nil

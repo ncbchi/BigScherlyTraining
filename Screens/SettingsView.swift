@@ -22,9 +22,11 @@ struct SettingsView: View {
     @AppStorage("bst_live_activity") private var liveActivity = true
     @AppStorage("bst_weight_step") private var weightStep = "standard"
     @AppStorage("bst_pause_buzz") private var pauseBuzz = true
+    @ObservedObject private var setupEngine = SetupEngine.shared
+    @AppStorage(SetupEngine.remindKey) private var setupRemind = true
+    @AppStorage(SetupEngine.cameraKey) private var setupCamera = true
     @ObservedObject private var push = PushCenter.shared
     @State private var showNotifications = false
-    @State private var redoSetupDone = false
     @AppStorage("bst_stats_window") private var statsWindow = StatsWindow.w12.rawValue
     @State private var editingMenu = false
     @State private var customPick: Color = Color(hex: 0x00E5FF)
@@ -63,6 +65,7 @@ struct SettingsView: View {
                 notifications
                 preferences
                 workoutPrefs
+                watchSetup
                 navigation
                 statsDefaults
                 about
@@ -78,6 +81,16 @@ struct SettingsView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
+        // Leaving Settings withdraws a setup started here (it had nowhere else to show its card).
+        .onDisappear { setupEngine.withdraw(from: .settings) }
+        // Recalibrate opens the setup card right here, over Settings.
+        .sheet(item: Binding(get: { setupEngine.origin == .settings ? setupEngine.request : nil },
+                             set: { setupEngine.request = $0 })) { _ in
+            SetupSheet()
+                .presentationBackground(Brand.bg)
+                .presentationDragIndicator(.visible)
+                .interactiveDismissDisabled()
+        }
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $editingMenu) { MenuOrderEditor() }
         .sheet(isPresented: $showNotifications) { NotificationSettingsView().environmentObject(store) }
@@ -314,19 +327,33 @@ struct SettingsView: View {
         return RGBColor(r: Double(r), g: Double(g), b: Double(b)).hex
     }
 
-    // MARK: Workouts
+    // MARK: Apple Watch Setup
 
-    private var workoutPrefs: some View {
-        section("Workouts") {
-            subToggle("Keep screen awake", "While the workout screen is open", $keepAwake)
+    /// Each calibration's status, Recalibrate (opens the setup card right away), and the options.
+    private var watchSetup: some View {
+        section("Apple Watch setup") {
+            setupRow("Body setup",
+                     SetupEngine.bodyDone ? "Done — hold still, presses, air squats to depth" : "Not done yet — about 60 seconds",
+                     done: SetupEngine.bodyDone) { setupEngine.recalibrate(.body) }
+            ForEach(SetupLift.allCases, id: \.self) { lift in
+                rowDivider
+                let c = LiftCalibration.saved(lift)
+                setupRow(lift.title,
+                         c.map { "Your range \(Self.rangeText($0.fullTravelM)) · set \($0.date.formatted(.dateTime.month(.abbreviated).day()))" }
+                            ?? "Not set up — just the bar, the first time it's up",
+                         done: c != nil) { setupEngine.recalibrate(.lift(lift)) }
+            }
             rowDivider
-            Button { SetupEngine.resetAll(); redoSetupDone = true } label: {
+            subToggle("Remind me until it's done", "Offer setup between sets until each one is finished", $setupRemind)
+            rowDivider
+            subToggle("Check squat depth with the camera", "Prop the phone side-on — nothing is recorded", $setupCamera)
+            rowDivider
+            Button {
+                SetupEngine.resetAll()
+                setupEngine.recalibrate(.body)
+            } label: {
                 HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Redo Watch setup").font(BrandFont.body(15)).foregroundColor(Brand.text)
-                        Text(redoSetupDone ? "Done — it runs again at your next workout" : "The first-time setup, and each lift's")
-                            .font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                    }
+                    Text("Recalibrate everything").font(BrandFont.body(15)).foregroundColor(Brand.voltText)
                     Spacer()
                     Image(systemName: "arrow.counterclockwise").foregroundColor(Brand.voltText)
                 }
@@ -334,6 +361,37 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    private func setupRow(_ title: String, _ status: String, done: Bool, recalibrate: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 18, weight: .semibold)).foregroundColor(done ? Brand.voltText : Brand.mute)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(BrandFont.body(15)).foregroundColor(Brand.text)
+                Text(status).font(BrandFont.body(11)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button(action: recalibrate) {
+                Text(done ? "Recalibrate" : "Set up").font(BrandFont.body(13, .heavy)).foregroundColor(Brand.onVolt)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(Brand.volt))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    private static func rangeText(_ m: Double) -> String {
+        StatsUnits.isKg ? "\(Int((m * 100).rounded())) cm" : "\(Int((m * 39.37).rounded())) in"
+    }
+
+    // MARK: Workouts
+
+    private var workoutPrefs: some View {
+        section("Workouts") {
+            subToggle("Keep screen awake", "While the workout screen is open", $keepAwake)
             rowDivider
             HStack {
                 VStack(alignment: .leading, spacing: 2) {

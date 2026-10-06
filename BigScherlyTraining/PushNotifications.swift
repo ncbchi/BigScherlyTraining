@@ -137,8 +137,15 @@ extension PushCenter: UNUserNotificationCenterDelegate {
 
 /// The small UIKit hook iOS uses to hand over the push token.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// You closed the app (iOS calls this when the app's running at the time): close the live workout.
+    func applicationWillTerminate(_ application: UIApplication) {
+        LiveSessionController.shared.closeForTermination()
+    }
+
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Diagnostics: a Lock Screen button wakes the app in the background to run its action.
+        print("[App] launched · \(application.applicationState == .background ? "in the background" : "in the foreground")")
         // Set before launch finishes, so tapping a notification that opens the app still routes.
         UNUserNotificationCenter.current().delegate = PushCenter.shared
         NotifActions.register()                         // Reply, +30 s, Start set, Taken ✓, Snooze, Share

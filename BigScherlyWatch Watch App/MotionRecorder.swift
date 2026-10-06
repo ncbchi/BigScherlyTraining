@@ -60,7 +60,7 @@ final class MotionRecorder: ObservableObject {
     var onCalibEnded: ((_ reps: [RepMotion], _ start: Date, _ end: Date) -> Void)?
     /// Briefly after setup, a set ending is still setup motion — ignore it.
     private var ignoreSetsUntil: Date?
-    private var stillDone: ((Double, Double) -> Void)?
+    private var stillDone: ((Double, Double, Int) -> Void)?
 
     /// Setup finished. If a set is still open, stay in setup mode until it closes, so its tail
     /// can't be mistaken for a real set.
@@ -71,14 +71,14 @@ final class MotionRecorder: ObservableObject {
 
     /// "Hold still": measure how much the Watch moves (vertical shake m/s², rotation rad/s).
     func beginStillProbe() { processor.beginStillProbe() }
-    func endStillProbe(_ done: @escaping (Double, Double) -> Void) {
+    func endStillProbe(_ done: @escaping (Double, Double, Int) -> Void) {
         stillDone = done
-        processor.endStillProbe { shake, rot in
-            Task { @MainActor in MotionRecorder.shared.finishStill(shake, rot) }
+        processor.endStillProbe { shake, rot, n in
+            Task { @MainActor in MotionRecorder.shared.finishStill(shake, rot, n) }
         }
     }
-    private func finishStill(_ shake: Double, _ rot: Double) {
-        stillDone?(shake, rot)
+    private func finishStill(_ shake: Double, _ rot: Double, _ n: Int) {
+        stillDone?(shake, rot, n)
         stillDone = nil
     }
 
@@ -245,17 +245,21 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
 
     func beginStillProbe() { queue.addOperation { [self] in self.probe = [] } }
 
-    /// Shake = standard deviation of vertical acceleration (m/s²); rot = mean rotation (rad/s).
-    func endStillProbe(_ done: @escaping @Sendable (Double, Double) -> Void) {
+    /// The steady part of the hold: shake = spread of vertical acceleration (m/s², the largest 5% of
+    /// deviations ignored, so one stray bump doesn't fail it); rot = median rotation (rad/s).
+    /// Also the sample count — 0 means the Watch wasn't measuring at all.
+    func endStillProbe(_ done: @escaping @Sendable (Double, Double, Int) -> Void) {
         queue.addOperation { [self] in
             let p = self.probe ?? []
             self.probe = nil
-            guard p.count > 10 else { done(9, 9); return }          // no data: treat as moved
-            let n = Double(p.count)
-            let mean = p.reduce(0) { $0 + $1.av } / n
-            let variance = p.reduce(0) { $0 + ($1.av - mean) * ($1.av - mean) } / n
-            let rot = p.reduce(0) { $0 + $1.rot } / n
-            done(variance.squareRoot(), rot)
+            guard p.count >= 30 else { done(0, 0, p.count); return }
+            let avs = p.map { $0.av }.sorted()
+            let median = avs[avs.count / 2]
+            let dev = avs.map { abs($0 - median) }.sorted()
+            let kept = dev.prefix(max(1, Int(Double(dev.count) * 0.95)))
+            let shake = (kept.reduce(0) { $0 + $1 * $1 } / Double(kept.count)).squareRoot()
+            let rots = p.map { $0.rot }.sorted()
+            done(shake, rots[rots.count / 2], p.count)
         }
     }
 

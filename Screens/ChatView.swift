@@ -311,7 +311,8 @@ struct NewChatSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("TOPIC").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
                     TextField("", text: $topic, prompt: Text("e.g. Deadlift form").foregroundColor(Brand.mute))
-                        .foregroundColor(Brand.text).padding(14).background(Brand.black)
+                        .foregroundColor(Brand.text).padding(14)
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Brand.black))   // fill inside the corners
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
                 }
                 VStack(alignment: .leading, spacing: 8) {

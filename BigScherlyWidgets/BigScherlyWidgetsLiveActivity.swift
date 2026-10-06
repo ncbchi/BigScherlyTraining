@@ -497,14 +497,12 @@ private struct RightPane: View {
         }
     }
 
-    /// One icon of the selector: a switch (always "off" between taps) if the view has data,
-    /// otherwise a dimmed, inactive icon.
+    /// One icon of the selector: always a switch (always "off" between taps). A view with no data
+    /// yet is dimmed but still tappable — it shows what's coming (sensor views fill in rep by rep).
     @ViewBuilder
     private func selector(_ v: LiveView, style: ViewSwitchStyle) -> some View {
-        if !s.available.contains(v) {
-            style.icon(lit: false, enabled: false)
-        } else if x.isPreview {
-            style.icon(lit: s.view == v)
+        if x.isPreview {
+            style.icon(lit: s.view == v, enabled: s.available.contains(v))
         } else {
             switch v {
             case .heartRate: Toggle(isOn: false, intent: LiveSelectHeartRateIntent()) { EmptyView() }.toggleStyle(style)
@@ -540,7 +538,7 @@ private struct ViewSwitchStyle: ToggleStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let current = s.view == view
-        return icon(lit: configuration.isOn || current)
+        return icon(lit: configuration.isOn || current, enabled: s.available.contains(view))
             .overlay(alignment: .topLeading) {
                 if configuration.isOn && !current {
                     ViewContent(s: s, view: view)
@@ -565,10 +563,21 @@ private struct ViewContent: View {
                 if s.afterSet && view == s.view {
                     Text("AFTER SET").font(.system(size: 6.5, weight: .heavy)).foregroundStyle(C.onVolt)
                         .padding(.horizontal, 4).padding(.vertical, 1).background(Capsule().fill(C.volt))
+                } else if s.liveSet == true && view.isSensor && s.available.contains(view) {
+                    Text("LIVE").font(.system(size: 6.5, weight: .heavy)).foregroundStyle(C.onVolt)
+                        .padding(.horizontal, 4).padding(.vertical, 1).background(Capsule().fill(C.volt))
                 }
             }
-            ViewBody(s: s, view: view)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if s.available.contains(view) {
+                ViewBody(s: s, view: view)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                // No data yet: say what's coming (instead of a blank, or a dead button).
+                Text(view.isSensor ? "Fills in rep by rep as you lift with your Watch."
+                                   : "Appears once your Watch is tracking.")
+                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(C.mute)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
         }
         .padding(.horizontal, 2)
     }

@@ -14,6 +14,6 @@
 		<string>audio</string>
 	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string></string>
+	<string>Big Scherly Training saves your set videos to your Camera Roll.</string>
 </dict>
 </plist>

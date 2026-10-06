@@ -32,12 +32,16 @@ struct WatchSetupView: View {
                                 Text(m).font(.system(size: 10.5, weight: .bold)).fixedSize(horizontal: false, vertical: true)
                             }
                             .padding(.horizontal, 4)
+                            if let d = state.setupDiag {                     // DIAGNOSTIC (temporary)
+                                Text(d).font(.system(size: 8.5, weight: .semibold, design: .rounded)).monospacedDigit()
+                                    .foregroundColor(Color(white: 0.45)).multilineTextAlignment(.center)
+                            }
                         } else {
                             Text(hint(step)).font(.system(size: 9.5, weight: .bold)).foregroundColor(mute)
                                 .multilineTextAlignment(.center)
                         }
                         // A way out on the wrist, in case the phone's gone (the phone has its own Skip).
-                        Button { state.setupEnd() } label: {
+                        Button { state.setupExit() } label: {
                             Text("Exit setup").font(.system(size: 11, weight: .semibold)).foregroundColor(mute)
                         }
                         .buttonStyle(.plain)
@@ -56,7 +60,8 @@ struct WatchSetupView: View {
 
     private func hint(_ s: WatchState.SetupStep) -> String {
         switch state.setupPhase {
-        case "ready": return s.kind == "still" ? "Tap, then stand completely still" : "Tap right before you touch the bar"
+        case "ready": return s.kind == "still" ? "Tap, lower your arm — 3 seconds to get set" : "Tap, then get set — 3 seconds before it measures"
+        case "countdown": return s.kind == "still" ? "Arm down, stand tall…" : "Get into position…"
         case "holding": return "Don't move…"
         case "checking": return "Checking your numbers on the phone"
         case "ok": return "Got it"
@@ -71,6 +76,13 @@ struct WatchSetupView: View {
             filled(VStack(spacing: 1) {
                 Text("Go").font(.system(size: 30, weight: .black))
                 Text(s.caps).font(.system(size: 8, weight: .heavy)).tracking(1.1).opacity(0.7).lineLimit(1)
+            })
+        case "countdown":
+            let left = max(0, (state.countdownEnds ?? now).timeIntervalSince(now))
+            border((3 - left) / 3, VStack(spacing: 0) {
+                Text("GET SET").font(.system(size: 8.5, weight: .heavy)).tracking(1.4).foregroundColor(state.accentColor)
+                Text("\(max(1, Int(left.rounded(.up))))").font(.system(size: 34, weight: .heavy, design: .rounded))
+                Text(s.kind == "still" ? "ARM DOWN" : "INTO POSITION").font(.system(size: 7.5, weight: .heavy)).tracking(1).foregroundColor(mute)
             })
         case "holding":
             let held = now.timeIntervalSince(state.holdStarted ?? now)

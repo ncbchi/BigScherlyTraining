@@ -81,7 +81,21 @@ final class LiveSessionController: ObservableObject {
         var lastDetectionSeen: Date?
     }
     private let savedKey = "bst_live_session"
+    /// The workout whose live session you closed (by closing the app) — never revived from a card.
+    private let closedKey = "bst_live_closed"
+
+    /// The workout of the saved live session, if one's saved (finishing a workout deletes it).
+    private func savedWorkoutId() -> String? {
+        guard let data = UserDefaults.standard.data(forKey: savedKey),
+              let sv = try? JSONDecoder().decode(Saved.self, from: data) else { return nil }
+        return sv.workout.id
+    }
     private var pushTask: Task<Void, Never>?
+    /// When a set was last logged (Lock Screen, app or Watch) — a Watch "set ended" just after is its tail.
+    private var lastLoggedAt: Date?
+    private var pushSerial = 0
+    private var lastCardUpdate = Date.distantPast
+    private var cardUpdates = 0
 
     private init() {}
 
@@ -90,12 +104,24 @@ final class LiveSessionController: ObservableObject {
     /// Called once at app launch (before any Lock Screen button can fire).
     func attach(_ store: AppStore) {
         self.store = store
-        LiveIntentRouter.handler = { action in await LiveSessionController.shared.handle(action) }
+        LiveIntentRouter.handler = { action in
+            print("[Live] Lock Screen button → \(action)")        // diagnostics: the tap reached the app
+            await LiveSessionController.shared.handle(action)
+        }
+        print("[Live] launch · cards: " + (Activity<WorkoutActivityAttributes>.activities
+            .map { "\($0.id.prefix(8)) \($0.activityState)" }.joined(separator: ", ")).ifEmpty("none"))
         WatchBridge.shared.$liveHeartRate
             .sink { [weak self] bpm in self?.heartRate(bpm) }
             .store(in: &bag)
+        // Each rep from the Watch, while you're lifting: the card's sensor views fill in as you go.
+        WatchBridge.shared.$liveRepMotions
+            .dropFirst()
+            .filter { _ in !SetupEngine.shared.active }
+            .sink { [weak self] _ in if self?.setStart != nil { self?.push(now: true) } }
+            .store(in: &bag)
         SetMotionStore.shared.$bySet
             .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)   // a reload of many sets = one update
             .sink { [weak self] _ in self?.push(now: true) }
             .store(in: &bag)
         // The Watch counted the first rep → lifting.
@@ -112,11 +138,35 @@ final class LiveSessionController: ObservableObject {
             .store(in: &bag)
         // Re-adopt a card left running if the app was relaunched mid-workout, and pick up
         // exactly where the session was (rest, set timer, chosen view, the workout itself).
-        if let a = Activity<WorkoutActivityAttributes>.activities.first {
+        // Only carry on with a card that's still live. iOS ends a card after 8 hours (e.g. a workout
+        // left open overnight); an ended card stays on the Lock Screen but can't take taps — every
+        // tap just opens the app. Clear those away (the workout's session is still restored).
+        let cards = Activity<WorkoutActivityAttributes>.activities
+        let closed = UserDefaults.standard.string(forKey: closedKey)
+        let saved = savedWorkoutId()
+        for old in cards where !Self.isLive(old) || old.attributes.workoutId == closed {
+            print("[Live] clearing card \(old.id.prefix(8)) (\(old.activityState))")
+            Task { await old.end(nil, dismissalPolicy: .immediate) }
+        }
+        if let a = cards.first(where: { Self.isLive($0) && $0.attributes.workoutId != closed }) {
             activity = a
             workoutId = a.attributes.workoutId
             restore()
             watch(a)
+        } else if let ended = cards.first(where: { !Self.isLive($0) && $0.attributes.workoutId == saved }) {
+            // iOS ended the card (its 8-hour limit) but the workout's still going (its session is saved):
+            // carry on, and a fresh card starts on open. A finished workout has no saved session, so it
+            // isn't revived — that was bringing finished workouts back onto the Watch.
+            workoutId = ended.attributes.workoutId
+            restore()
+        } else if saved != nil, cards.isEmpty,
+                  UserDefaults.standard.object(forKey: "bst_live_activity") as? Bool ?? true,
+                  ActivityAuthorizationInfo().areActivitiesEnabled {
+            // A saved session with no card at all: you swiped the card away while the app was asleep.
+            // That closes the live workout — the Watch clears and ends its session too.
+            print("[Live] the card was swiped away — closing the live workout")
+            UserDefaults.standard.removeObject(forKey: savedKey)
+            WatchBridge.shared.sendCardEnd(endSession: true)
         }
         // A card the server started (brought back after you closed it): adopt it.
         Task { [weak self] in
@@ -140,6 +190,7 @@ final class LiveSessionController: ObservableObject {
     /// The workout screen opened. Starts (or re-adopts) the Live Activity.
     func begin(workoutId id: String) {
         LocalReminders.cancelWorkout(id)                 // started: no "today's workout" nudge
+        UserDefaults.standard.removeObject(forKey: closedKey)
         // Open the Watch straight into its workout session: it stays on your wrist (every raise
         // brings the card back), taps for rest, and the phone keeps quiet. Once per workout.
         if watchLaunchedFor != id, !isDemo || Self.demoStartsWatch,
@@ -157,8 +208,8 @@ final class LiveSessionController: ObservableObject {
             restEnd = nil; restStart = nil; restTotal = 0
             Task { maxHR = await HealthActivityReader.observedMaxHR(demo: isDemo) ?? 190 }
         }
-        if let a = activity, a.attributes.workoutId != id {
-            Task { await a.end(nil, dismissalPolicy: .immediate) }
+        if let a = activity, a.attributes.workoutId != id || !Self.isLive(a) {
+            Task { await a.end(nil, dismissalPolicy: .immediate) }   // another workout's, or one iOS has ended
             activity = nil
             activityToken = nil
         }
@@ -167,9 +218,14 @@ final class LiveSessionController: ObservableObject {
         let cardOn = UserDefaults.standard.object(forKey: "bst_live_activity") as? Bool ?? true
         if !cardOn, let a = activity { activity = nil; activityToken = nil; Task { await a.end(nil, dismissalPolicy: .immediate) } }
         if cardOn, activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled, let state = makeState() {
-            activity = try? Activity.request(attributes: WorkoutActivityAttributes(workoutId: id, title: w.title),
-                                             content: ActivityContent(state: state, staleDate: staleDate()),
-                                             pushType: .token)          // so the server can send rest alerts into it
+            do {
+                activity = try Activity.request(attributes: WorkoutActivityAttributes(workoutId: id, title: w.title),
+                                                content: ActivityContent(state: state, staleDate: staleDate()),
+                                                pushType: .token)          // so the server can send rest alerts into it
+                print("[Live] card started \(activity.map { String($0.id.prefix(8)) } ?? "?")")
+            } catch {
+                print("[Live] couldn't start the card: \(error)")
+            }
             if let a = activity { watch(a) }
         }
         push(now: true)
@@ -203,7 +259,7 @@ final class LiveSessionController: ObservableObject {
     }
 
     /// Workout finished (or abandoned): close the card.
-    func end() {
+    func end(dismissal: ActivityUIDismissalPolicy = .default) {
         SetVideoRecorder.shared.stopAll()
         endRest()
         let a = activity
@@ -214,7 +270,16 @@ final class LiveSessionController: ObservableObject {
         watchLaunchedFor = nil
         WatchBridge.shared.sendCardEnd(endSession: true)       // the Watch ends its session too
         UserDefaults.standard.removeObject(forKey: savedKey)
-        Task { await a?.end(nil, dismissalPolicy: .default) }
+        Task { await a?.end(nil, dismissalPolicy: dismissal) }
+    }
+
+    /// You closed the app: the live workout closes with it — the Lock Screen card, and the Watch's
+    /// card and session. (iOS only tells the app when it's running; closed while asleep, the Lock
+    /// Screen card stays — and swiping that away closes everything.)
+    func closeForTermination() {
+        guard let wid = workoutId else { return }
+        UserDefaults.standard.set(wid, forKey: closedKey)
+        end(dismissal: .immediate)
     }
 
     /// Logout: close any card immediately.
@@ -294,6 +359,7 @@ final class LiveSessionController: ObservableObject {
             store.workouts[wi].exercises[ei].sets[si].loggedAt = Date()
         }
         let ex = store.workouts[wi].exercises[ei]
+        if !wasLogged { lastLoggedAt = Date() }
         store.saveLoggedSets(workoutId: wid, exercise: ex)
         store.checkForPRs(in: store.workouts[wi])
         store.sendActiveWorkoutToWatch()        // the Watch attaches its detected motion to this set
@@ -348,6 +414,11 @@ final class LiveSessionController: ObservableObject {
     private func setEnded(reps: Int, workoutId wid: String, at: Date) {
         guard wid == workoutId, lastDetectionSeen != at, Date().timeIntervalSince(at) < 120 else { return }
         lastDetectionSeen = at
+        // The Watch reports a set's end after ~7 s of stillness. If you've already logged that set
+        // (rest is running and no new set has started, or you saved moments ago), this is its tail —
+        // don't reopen the editor for the next set.
+        if resting && setStart == nil { return }
+        if let l = lastLoggedAt, at.timeIntervalSince(l) < 15 { return }
         if setStart == nil { setStart = at }
         logNeeded = true
         SetVideoRecorder.shared.setEnded()          // the Watch saw you rack it: stop filming
@@ -553,9 +624,28 @@ final class LiveSessionController: ObservableObject {
     private func sendNow() async {
         pushTask?.cancel()
         pushTask = nil
-        guard let a = activity, let s = makeState() else { return }
+        guard let a = activity else { return }
+        guard Self.isLive(a) else { replaceDeadCard(a); return }
+        guard let s = makeState() else { return }
         persist()
         await a.update(ActivityContent(state: s, staleDate: staleDate()))
+    }
+
+    /// A card iOS can still show and take taps on.
+    static func isLive(_ a: Activity<WorkoutActivityAttributes>) -> Bool {
+        switch a.activityState {
+        case .active, .stale: return true
+        default: return false
+        }
+    }
+
+    /// The card was ended by iOS: stop updating it, clear it away, and start a fresh one if the
+    /// app's open (a new card can only be started from the foreground — otherwise on next open).
+    private func replaceDeadCard(_ a: Activity<WorkoutActivityAttributes>) {
+        print("[Live] card \(a.id.prefix(8)) is \(a.activityState) — replacing it")
+        if activity?.id == a.id { activity = nil; activityToken = nil }
+        Task { await a.end(nil, dismissalPolicy: .immediate) }
+        if UIApplication.shared.applicationState == .active, let id = workoutId { begin(workoutId: id) }
     }
 
     /// Coalesced: at most one update every ~2 s unless `now`.
@@ -563,11 +653,27 @@ final class LiveSessionController: ObservableObject {
         revision &+= 1                                  // the in-app card redraws now
         scheduleCardToWatch(now: now)                   // the Watch mirrors the same card
         guard activity != nil else { return }
+        // One card update at a time, at most about once a second. Every update makes iOS redraw the
+        // Lock Screen card: a flood of them makes taps land mid-redraw — and can get the app killed —
+        // so the card's buttons stop working. A routine update that finds one already on its way
+        // rides along with it (it'll carry the latest state); an urgent one replaces it.
+        if !now, pushTask != nil { return }
         pushTask?.cancel()
+        pushSerial &+= 1
+        let serial = pushSerial
+        let since = Date().timeIntervalSince(lastCardUpdate)
+        let delay = now ? max(0, 1.0 - since) : max(2.0, 1.0 - since)
         pushTask = Task { [weak self] in
-            if !now { try? await Task.sleep(nanoseconds: 2_000_000_000) }
-            guard !Task.isCancelled, let self, let a = self.activity, let s = self.makeState() else { return }
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard !Task.isCancelled, let self else { return }
+            if self.pushSerial == serial { self.pushTask = nil }
+            guard let a = self.activity else { return }
+            guard Self.isLive(a) else { self.replaceDeadCard(a); return }
+            guard let s = self.makeState() else { return }
             self.persist()
+            self.lastCardUpdate = Date()
+            self.cardUpdates += 1
+            print("[Live] card update #\(self.cardUpdates)\(now ? "" : " (routine)")")
             await a.update(ActivityContent(state: s, staleDate: self.staleDate()))
             if self.alertsOnServer, self.resting, Date().timeIntervalSince(self.lastAlertUpload) > 20 {
                 self.rescheduleRestAlerts()
@@ -593,16 +699,30 @@ final class LiveSessionController: ObservableObject {
     /// (the coach note during rest, reps as they arrive, the weight step, the 10-second warning).
     /// In Demo Mode this is the phone's demo, so the Watch shows it live too.
     func pushCardToWatch() {
-        guard workoutId != nil, let s = makeState(), let data = try? JSONEncoder().encode(s) else {
+        guard let (data, extras) = watchCardParts() else {
             WatchBridge.shared.sendCardEnd(endSession: false)  // no card right now (doesn't end a session)
             return
         }
+        WatchBridge.shared.sendCard(data, extras: extras)
+    }
+
+    /// The card as one message — the same keys the Watch already handles. Used to answer the
+    /// Watch's pull (which works even when the phone thinks the Watch isn't reachable).
+    func watchCardPayload() -> [String: Any] {
+        guard let (data, extras) = watchCardParts() else { return ["cardEnd": true, "endSession": false] }
+        var p = extras
+        p["card"] = data
+        return p
+    }
+
+    private func watchCardParts() -> (Data, [String: Any])? {
+        guard workoutId != nil, let s = makeState(), let data = try? JSONEncoder().encode(s) else { return nil }
         var extras: [String: Any] = ["cardDemo": isDemo, "cardStep": displayStep,
                                      "cardWarn": NotifPrefs.shared.s.restWarning]
         if let note = coachNoteForWatch() { extras["cardNote"] = note }
         let live = WatchBridge.shared.liveRepMotions.map(\.meanVelocity)
         if setStart != nil, !live.isEmpty { extras["cardLive"] = live }
-        WatchBridge.shared.sendCard(data, extras: extras)
+        return (data, extras)
     }
 
     /// The last set's top coach note, while it's useful: during rest and just after the set.
@@ -627,11 +747,24 @@ final class LiveSessionController: ObservableObject {
             }
         }
         Task { [weak self] in
-            for await st in a.activityStateUpdates where st == .dismissed || st == .ended {
+            for await st in a.activityStateUpdates {
+                print("[Live] card \(a.id.prefix(8)): \(st)")      // diagnostics: what iOS thinks of the card
+                guard st == .dismissed || st == .ended else { continue }
                 guard let self, self.activity?.id == a.id else { continue }
-                self.activity = nil                     // swiped away: next alert brings it back (iOS 17.2+)
+                if st == .dismissed {
+                    // You swiped the card away: that closes the live workout — the Watch's card and
+                    // session clear too, and rest alerts stop. Opening the workout starts it again.
+                    print("[Live] card swiped away — closing the live workout")
+                    self.end(dismissal: .immediate)
+                    continue
+                }
+                self.activity = nil
                 self.activityToken = nil
                 if self.resting { self.rescheduleRestAlerts() }
+                // Ended by iOS (the 8-hour limit) while you're using the app: a fresh card right away.
+                if st == .ended, UIApplication.shared.applicationState == .active, let id = self.workoutId {
+                    self.begin(workoutId: id)
+                }
             }
         }
     }
@@ -824,6 +957,8 @@ final class LiveSessionController: ObservableObject {
     private func shownView(_ avail: [LiveView], stage st: LiveStage) -> LiveView {
         if afterSet, st == .resting || st == .ready, avail.contains(lastSensorView) { return lastSensorView }
         if avail.contains(userView) { return userView }
+        // A sensor view you picked stays put while the Watch is tracking — it fills in at the first rep.
+        if userView.isSensor, isDemo || WatchBridge.shared.watchSessionLive { return userView }
         return avail.first ?? .sets
     }
 
@@ -873,8 +1008,19 @@ final class LiveSessionController: ObservableObject {
             s.hrSpark = stride(from: 0, to: samples.count, by: every).map { samples[$0] }
         }
 
-        // Last set from the Watch
-        let lastM = lastMotion(w)                   // one scan, used for the views list too
+        // Last set from the Watch — or, while you're lifting, the set in progress, rep by rep
+        // (only reps from this set: right after Start, the previous set's may still be here).
+        var lastM = lastMotion(w)                   // one scan, used for the views list too
+        let live = WatchBridge.shared.liveRepMotions
+        var isLive = false
+        if let started = setStart, let first = live.first, let lastRep = live.last,
+           first.start >= started.addingTimeInterval(-5), let nx = Self.nextSet(w) {
+            let m = SetMotion(id: "live", workoutId: wid, exerciseId: nx.0.id, setId: nx.1.id, exerciseName: nx.0.name,
+                              start: first.start, end: lastRep.end, reps: live, autoDetected: true, analyzerVersion: 1)
+            lastM = (nx.0, nx.1, nx.2, m)
+            isLive = true
+        }
+        s.liveSet = isLive ? true : nil
         if let lm = lastM {
             let mex = lm.0, n = lm.2, m = lm.3
             s.lastSet = "\(mex.name) · Set \(n)"
@@ -1061,5 +1207,9 @@ nonisolated struct CardAlert {
     }
 
     var fits: Bool { (json?.count ?? .max) < 3_800 }
+}
+
+private extension String {
+    func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 

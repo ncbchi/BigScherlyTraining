@@ -119,8 +119,29 @@ final class SetupEngine: ObservableObject {
     var step: SetupStep? { steps.indices.contains(stepIndex) ? steps[stepIndex] : nil }
 
     private static let bodyDoneKey = "bst_setup_body_done"
-    private var skipped: Set<String> = []                // "workoutId|body" / "workoutId|squat" — for this workout
+    /// Settings ▸ Apple Watch Setup: offer setup between sets until each one's done (default on),
+    /// and check squat depth with the camera by default (default on).
+    static let remindKey = "bst_setup_remind", cameraKey = "bst_setup_camera"
+    static var remindDuringWorkouts: Bool { UserDefaults.standard.object(forKey: remindKey) as? Bool ?? true }
+    static var cameraByDefault: Bool { UserDefaults.standard.object(forKey: cameraKey) as? Bool ?? true }
+
+    /// Where the card was opened: between sets in a workout, or from Settings (Recalibrate).
+    enum Origin { case workout, settings }
+    @Published private(set) var origin: Origin = .workout
+    /// Opened from Settings with no workout running: the Watch runs a session just for setup
+    /// (discarded afterwards — nothing goes to Apple Health).
+    private var soloSession = false
+
+    /// "Later" snoozes it — for 10 minutes, or until the next exercise starts — and it comes back
+    /// every workout until it's done. (Key: "workoutId|body" / "workoutId|squat".)
+    private var snoozed: [String: (until: Date, exercise: String?)] = [:]
+    private var offeredExercise: String?
     private var workoutId: String?
+
+    private func isSnoozed(_ key: String, exercise: String?) -> Bool {
+        guard let s = snoozed[key] else { return false }
+        return Date() < s.until && s.exercise == exercise
+    }
     private var wrist = "left", crown = "right"
     private var bodyResults: [String: Double] = [:]
     private var bag = Set<AnyCancellable>()
@@ -140,18 +161,31 @@ final class SetupEngine: ObservableObject {
     /// Between sets, with the Watch's session running: the first-time body setup, or a lift's
     /// first-time setup when that lift is next.
     func considerOffering(workout w: Workout) {
-        guard request == nil, WatchBridge.shared.watchSessionLive else { return }
+        guard request == nil, Self.remindDuringWorkouts, WatchBridge.shared.watchSessionLive else { return }
         let stage = LiveSessionController.shared.stage
         guard stage == .ready || stage == .done else { return }
-        if !Self.bodyDone && !skipped.contains("\(w.id)|body") {
-            open(.body, workout: w.id); return
+        let nextEx = LiveSessionController.nextSet(w)?.0
+        if !Self.bodyDone && !isSnoozed("\(w.id)|body", exercise: nextEx?.id) {
+            open(.body, workout: w.id, exercise: nextEx?.id); return
         }
-        guard let next = LiveSessionController.nextSet(w)?.0, let lift = SetupLift.match(next.name),
-              LiftCalibration.saved(lift) == nil, !skipped.contains("\(w.id)|\(lift.rawValue)") else { return }
-        open(.lift(lift), workout: w.id)
+        guard let next = nextEx, let lift = SetupLift.match(next.name),
+              LiftCalibration.saved(lift) == nil, !isSnoozed("\(w.id)|\(lift.rawValue)", exercise: next.id) else { return }
+        open(.lift(lift), workout: w.id, exercise: next.id)
     }
 
-    private func open(_ r: SetupRequest, workout: String) {
+    /// Settings ▸ Apple Watch Setup ▸ Recalibrate: open the setup card right now. Your saved
+    /// setup is only replaced once the new one's done (cancel and nothing changes). The Watch only
+    /// measures during a workout session — if none is running, open it into one just for setup.
+    func recalibrate(_ r: SetupRequest) {
+        guard request == nil else { return }
+        soloSession = !WatchBridge.shared.watchSessionLive && WatchBridge.shared.watchAppAvailable
+        if soloSession { WatchBridge.shared.startWatchWorkout { _ in } }
+        open(r, workout: "settings", exercise: nil, origin: .settings)
+    }
+
+    private func open(_ r: SetupRequest, workout: String, exercise: String? = nil, origin o: Origin = .workout) {
+        origin = o
+        offeredExercise = exercise
         workoutId = workout
         stepIndex = 0
         liveReps = []
@@ -165,9 +199,12 @@ final class SetupEngine: ObservableObject {
 
     func begin() { phase = .ready; sendStep() }
 
-    /// "Later" / "Skip for now": not again this workout.
+    /// "Later" / "Skip for now": back in 10 minutes, or when the next exercise starts — and every
+    /// workout until it's done. (From Settings: just closes; nothing saved changes.)
     func skip() {
-        if let w = workoutId, let r = request { skipped.insert("\(w)|\(r.id)") }
+        if origin == .workout, let w = workoutId, let r = request {
+            snoozed["\(w)|\(r.id)"] = (Date().addingTimeInterval(600), offeredExercise)
+        }
         close()
     }
 
@@ -176,6 +213,8 @@ final class SetupEngine: ObservableObject {
     private func close() {
         resendTask?.cancel()
         watchQuiet = false
+        soloSession = false
+        origin = .workout
         useCamera = false
         DepthCamera.shared.stop()
         WatchBridge.shared.sendSetup(["setupEnd": true])
@@ -199,15 +238,30 @@ final class SetupEngine: ObservableObject {
         }
     }
 
+    /// The step waiting for Go, as a message — for the Watch's pull (nil if nothing's waiting).
+    func pendingStepPayload() -> [String: Any]? {
+        guard request != nil, step != nil else { return nil }
+        switch phase {
+        case .ready, .retry: return stepMessage()
+        default: return nil
+        }
+    }
+
     /// The step, to the Watch.
     private func transmitStep() {
-        guard let s = step else { return }
-        WatchBridge.shared.sendSetup(["setup": [
+        guard let m = stepMessage() else { return }
+        WatchBridge.shared.sendSetup(m)
+    }
+
+    private func stepMessage() -> [String: Any]? {
+        guard let s = step else { return nil }
+        return ["setup": [
             "title": s.watchTitle, "hint": s.watchHint, "caps": s.watchCaps,
             "kind": s.isStill ? "still" : "reps", "target": s.target,
             "n": stepIndex + 1, "of": steps.count,
-            "lift": request.map { r -> String in if case .lift(let l) = r { return l.rawValue } else { return "body" } } ?? "body"
-        ] as [String: Any]])
+            "lift": request.map { r -> String in if case .lift(let l) = r { return l.rawValue } else { return "body" } } ?? "body",
+            "solo": soloSession ? 1 : 0
+        ] as [String: Any]]
     }
 
     /// Keep sending it every few seconds until the Watch says Go — a message to the Watch can be
@@ -237,7 +291,7 @@ final class SetupEngine: ObservableObject {
         guard let s = step else { return }
         liveReps = []
         DepthCamera.shared.resetSighting()
-        if s.usesCamera && !cameraDeclined && !useCamera { useCamera = true }      // on by default for squats
+        if s.usesCamera && Self.cameraByDefault && !cameraDeclined && !useCamera { useCamera = true }   // Settings default
         if s.usesCamera, useCamera { DepthCamera.shared.start() } else if !s.usesCamera { DepthCamera.shared.stop() }
         transmitStep()
         keepSending()
@@ -257,6 +311,20 @@ final class SetupEngine: ObservableObject {
     func watchLive(_ reps: [RepMotion]) {
         guard phase == .capturing, step?.isStill == false else { return }
         liveReps = reps
+    }
+
+    /// The Watch's still check didn't pass: show why, and wait for Go again (the Watch is back on Go).
+    func watchStillFailed(_ message: String) {
+        guard step?.isStill == true else { return }
+        phase = .retry(message)
+        keepSending()
+    }
+
+    /// The card's screen went away (Settings closed, workout minimised): a setup with nowhere to
+    /// show its card is withdrawn — nothing saved changes, and it's offered again next time.
+    func withdraw(from o: Origin) {
+        guard request != nil, origin == o else { return }
+        close()
     }
 
     func watchStillDone() {

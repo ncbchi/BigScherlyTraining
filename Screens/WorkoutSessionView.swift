@@ -113,7 +113,8 @@ struct WorkoutSessionView: View {
                 // first time it's up next (squat, bench, deadlift). Your theme, the elements in your accent.
                 .onChange(of: live.revision) { _, _ in SetupEngine.shared.considerOffering(workout: w) }
                 .onReceive(WatchBridge.shared.$watchSessionActive) { _ in SetupEngine.shared.considerOffering(workout: w) }
-                .sheet(item: $setup.request) { _ in
+                .sheet(item: Binding(get: { setup.origin == .workout ? setup.request : nil },
+                                     set: { setup.request = $0 })) { _ in
                     SetupSheet()                                   // sizes itself to its content
                         .presentationBackground(Brand.bg)
                         .presentationDragIndicator(.visible)
@@ -123,6 +124,7 @@ struct WorkoutSessionView: View {
                     if store.activeWorkoutId == w.id { store.activeWorkoutId = nil }
                     UIApplication.shared.isIdleTimerDisabled = false
                     SetVideoRecorder.shared.screenVisible = false   // set videos only film on this screen
+                    SetupEngine.shared.withdraw(from: .workout)    // offered again when you reopen it
                 }
                 .confirmationDialog("Finish this workout?", isPresented: $confirmFinish, titleVisibility: .visible) {
                     Button("Finish anyway") { finish(w) }
@@ -1249,6 +1251,7 @@ struct LiveCard: View {
         let _ = live.revision
         VStack(spacing: 0) {
             LiveStatusBar(workout: workout)
+            LinkDiagnosticsStrip()                                   // DIAGNOSTIC (temporary)
             Rectangle().fill(Brand.line).frame(height: 1)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
@@ -1501,9 +1504,9 @@ private struct HeartMetric: View {
 
     var body: some View {
         let cutoff = Date().addingTimeInterval(-600)
+        // Stable identities (the sample's time), so a redraw isn't "all-new data" to the chart.
         let pts = samples.filter { $0.0 >= cutoff }.map { s -> Pt in
-            let x = s.0.timeIntervalSinceNow / 60
-            return Pt(id: x, x: x, bpm: s.1)
+            Pt(id: s.0.timeIntervalSinceReferenceDate, x: s.0.timeIntervalSinceNow / 60, bpm: s.1)
         }
         let peak = samples.map { $0.1 }.max() ?? now ?? 0
         if now == nil && pts.isEmpty {
@@ -1520,6 +1523,12 @@ private struct HeartMetric: View {
                     }
                 }
                 let floor = max(40, (pts.map { $0.bpm }.min() ?? 60) - 10)
+                // A smooth curve through a single point divides by zero — the chart redraws invalid
+                // sizes on every frame and blocks the main thread. Two points before drawing it.
+                if pts.count < 2 {
+                    Text("Building your heart-rate trend…").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
+                        .frame(maxWidth: .infinity, minHeight: compact ? 30 : 60, alignment: .center)
+                } else {
                 Chart(pts) { p in
                     AreaMark(x: .value("Minutes", p.x), yStart: .value("Floor", floor), yEnd: .value("bpm", p.bpm))
                         .foregroundStyle(LinearGradient(colors: [Brand.danger.opacity(0.28), Brand.danger.opacity(0.02)],
@@ -1541,6 +1550,7 @@ private struct HeartMetric: View {
                     }
                 }
                 .liveAxes(x: "minutes", y: "bpm")
+                }
             }
         }
     }
@@ -1932,5 +1942,37 @@ private struct NotesMetric: View {
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Brand.text.opacity(0.05)))
+    }
+}
+
+// MARK: - DIAGNOSTIC (temporary): the phone → Watch link at a glance. Delete with LinkStats.
+struct LinkDiagnosticsStrip: View {
+    @ObservedObject private var s = LinkStats.shared
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("LINK").font(BrandFont.body(9, .heavy)).tracking(1.4).foregroundColor(Brand.voltText)
+            chip("bolt.fill", s.live, "live", Brand.voltText)
+            chip("arrow.clockwise", s.retried, "retried", s.retried > 0 ? Brand.text : Brand.mute)
+            chip("arrow.down.circle.fill", s.rescued, "by pull", s.rescued > 0 ? .orange : Brand.mute)
+            chip("tray.full.fill", s.queued, "queued", s.queued > 0 ? .red : Brand.mute)
+            Spacer(minLength: 4)
+            if let ms = s.lastMs {
+                Text("\(ms) ms").font(BrandFont.body(10, .heavy)).monospacedDigit()
+                    .foregroundColor(ms > 600 ? .orange : Brand.mute)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(Brand.voltLine.opacity(0.06))
+        .animation(.spring(response: 0.3), value: s.sent)
+    }
+
+    private func chip(_ icon: String, _ n: Int, _ label: String, _ c: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: 9, weight: .bold))
+            Text("\(n)").font(BrandFont.body(11, .heavy)).monospacedDigit()
+            Text(label).font(BrandFont.body(9, .semibold)).opacity(0.8)
+        }
+        .foregroundColor(c)
     }
 }

@@ -26,17 +26,21 @@ struct BigScherlyWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchHomeView()
-                .environmentObject(state)
-                .environmentObject(session)
-                .environmentObject(motion)
                 // The pause countdown, over any screen — except the card, whose tile shows the hold.
                 .overlay { if !state.cardVisible && state.setup == nil { PauseCountdownOverlay() } }
                 // The first-time setup, over everything while it runs (the phone drives it).
                 .overlay { if state.setup != nil { WatchSetupView() } }
                 // (A detected set now appears on the card's tile as "Log set", not a pop-up.)
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { state.requestCard() }      // pick up the phone's card as it is now
+                    // Open: pull every 2 s alongside the live messages; stop when the wrist drops.
+                    if phase == .active { state.startPulling() } else { state.stopPulling() }
                 }
+                .onAppear { state.startPulling() }
+                // Last, so everything above — the overlays included — can see them. (Attached before
+                // the overlays, the setup screen couldn't find them, and the app stopped when Go appeared.)
+                .environmentObject(state)
+                .environmentObject(session)
+                .environmentObject(motion)
         }
     }
 }

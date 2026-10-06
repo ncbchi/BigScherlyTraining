@@ -46,8 +46,7 @@ final class WatchBridge: NSObject, ObservableObject {
     // wrist notification so the tap fires even with the phone away).
     func startRest(seconds: Int) {
         #if canImport(WatchConnectivity)
-        guard let session, session.activationState == .activated, session.isReachable else { return }
-        session.sendMessage(["restSeconds": seconds], replyHandler: nil, errorHandler: nil)
+        WatchLink.send(["restSeconds": seconds], label: "restSeconds")       // live, confirmed, once-only
         #endif
     }
 
@@ -69,7 +68,7 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
     @Published private(set) var watchBuild: String?
     /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
-    static let expectedWatchBuild = "2026-10-05.1"
+    static let expectedWatchBuild = "2026-10-05.12"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -153,32 +152,39 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The live card for the Watch (see LiveSessionController.pushCardToWatch). Live only:
     /// when the Watch isn't reachable it asks for the latest when it comes back.
     func sendCard(_ data: Data, extras: [String: Any]) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isReachable else { return }
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         var msg = extras
         msg["card"] = data
-        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        // Live, on every change (no "reachable" gate). If a send fails, the newest card goes again.
+        WCSession.default.sendMessage(msg, replyHandler: nil) { e in
+            print("[Link] card: \(e.localizedDescription) — sending the newest card again")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { LiveSessionController.shared.pushCardToWatch() }
+        }
     }
 
     /// No card on the Watch. `endSession`: the workout finished, so the Watch ends its session
     /// too (saved for real workouts, discarded for demos). Without it, just "no card right now".
-    func sendCardEnd(endSession: Bool) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        let msg: [String: Any] = ["cardEnd": true, "endSession": endSession]
-        if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil) { _ in
-                if endSession { WCSession.default.transferUserInfo(msg) }
-            }
-        } else if endSession {
-            WCSession.default.transferUserInfo(msg)            // arrives when the Watch is back
-        }
+    /// An event for the Watch (try again, OK, setup over, workout over): live, with a handshake and
+    /// fast retries (see WatchLink).
+    func sendEvent(_ msg: [String: Any]) {
+        WatchLink.send(msg, label: msg.keys.sorted().first ?? "event")
     }
+
+    func sendCardEnd(endSession: Bool) {
+        if endSession { sendEvent(["cardEnd": true, "endSession": true]); return }   // the workout's over
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        WCSession.default.sendMessage(["cardEnd": true, "endSession": false], replyHandler: nil, errorHandler: nil)
+    }
+
 
     /// The Watch setup's steps (see WatchSetup.swift).
     func sendSetup(_ msg: [String: Any]) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isReachable else { return }
-        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        // Try again / OK / setup over are events: confirmed delivery. (The step itself is state —
+        // it's also on every pull.)
+        if msg["setupRetry"] != nil || msg["setupOK"] != nil || msg["setupEnd"] != nil { sendEvent(msg); return }
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        // The step is state: live, and resent until the Watch says Go (see the setup engine).
+        WCSession.default.sendMessage(msg, replyHandler: nil) { print("[Link] setup step: \($0.localizedDescription)") }
     }
 
     /// A paired Watch with the app installed (so the phone can open it into a workout).
@@ -234,12 +240,19 @@ struct WatchSet: Codable, Identifiable {
 
 #if canImport(WatchConnectivity)
 extension WatchBridge: WCSessionDelegate {
-    func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {}
+    func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
+        print("[Watch] connection \(state == .activated ? "active" : "not active") · paired \(session.isPaired) · Watch app installed \(session.isWatchAppInstalled) · reachable \(session.isReachable)" + (error.map { " · error: \($0.localizedDescription)" } ?? ""))
+    }
+
+    func sessionWatchStateDidChange(_ session: WCSession) {
+        print("[Watch] Watch state changed · paired \(session.isPaired) · Watch app installed \(session.isWatchAppInstalled)")
+    }
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
     /// The Watch app came back in reach: catch it up (the card, and a waiting setup step).
     func sessionReachabilityDidChange(_ session: WCSession) {
+        print("[Watch] reachable: \(session.isReachable)")
         guard session.isReachable else { return }
         Task { @MainActor in
             LiveSessionController.shared.pushCardToWatch()
@@ -253,12 +266,42 @@ extension WatchBridge: WCSessionDelegate {
         handleIncoming(message)
     }
 
+    /// The Watch pulls the card (and any setup step waiting for Go): the answer rides back on the
+    /// reply — which works even when the phone thinks the Watch isn't reachable.
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any],
+                 replyHandler: @escaping ([String: Any]) -> Void) {
+        guard message["cardPull"] as? Bool == true else {
+            handleIncoming(message)
+            replyHandler(["ack": message["mid"] as? String ?? ""])     // confirms an event
+            return
+        }
+        // The Watch's pull (every 2 s while it's open): it confirms events it got on earlier replies,
+        // and gets the card, any setup step, and any of our events it hasn't confirmed yet.
+        for mid in (message["acks"] as? [String]) ?? [] {
+            if LinkBook.shared.confirm(mid) {                                        // DIAGNOSTIC: rescued
+                print("[Link] an event reached the Watch on its pull (the handshake missed it)")
+                Task { @MainActor in LinkStats.shared.rescued += 1 }
+            }
+        }
+        let build = message["watchBuild"] as? String
+        Task { @MainActor in
+            WatchBridge.shared.watchBuild = build
+            var payload = LiveSessionController.shared.watchCardPayload()
+            if let step = SetupEngine.shared.pendingStepPayload() { payload.merge(step) { current, _ in current } }
+            payload["setupActive"] = SetupEngine.shared.active        // none here → the Watch clears its own
+            let ours = LinkBook.shared.pendingMessages()
+            if !ours.isEmpty { payload["events"] = ours }
+            replyHandler(payload)
+        }
+    }
+
     // …or queued delivery when it wasn't (also how set motion data always arrives).
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         handleIncoming(userInfo)
     }
 
     private func handleIncoming(_ message: [String: Any]) {
+        if let mid = message["mid"] as? String, !LinkBook.shared.firstTime(mid) { return }   // already handled
         // (setStarted and liveReps were missing here, so "set started" never reached the phone.)
         if message["sessionActive"] != nil || message["liveHR"] != nil || message["detectedSet"] != nil
             || message["setStarted"] != nil || message["liveRepsData"] != nil {
@@ -287,6 +330,14 @@ extension WatchBridge: WCSessionDelegate {
         if let data = message["setupLive"] as? Data {
             let reps = (try? JSONDecoder().decode([RepMotion].self, from: data)) ?? []
             Task { @MainActor in SetupEngine.shared.watchLive(reps) }
+            return
+        }
+        if let m = message["setupStillFailed"] as? String {
+            Task { @MainActor in SetupEngine.shared.watchStillFailed(m) }
+            return
+        }
+        if message["setupExit"] as? Bool == true {
+            Task { @MainActor in SetupEngine.shared.skip() }
             return
         }
         if message["setupStillDone"] as? Bool == true {
@@ -364,4 +415,110 @@ struct WatchPayload {
         self.nextWorkoutDate = nextWorkoutDate
         self.unreadMessages = unreadMessages
     }
+}
+
+// MARK: - The live link
+/// Events between the phone and the Watch, live with a handshake: sent at once, and the other side
+/// confirms the moment it has it. No confirmation within 0.3 s → sent again straight away, and again
+/// on a short back-off (seven live attempts within 4 s). Every attempt carries the same id and the
+/// receiver handles each id once — a retry can never count twice. Only if every live attempt fails
+/// does it fall back to iOS's queued delivery, so nothing is lost. No "reachable" checks: that flag
+/// is unreliable, and gating on it is what silently dropped messages.
+nonisolated enum WatchLink {
+    private static let waits: [Double] = [0.3, 0.3, 0.5, 0.5, 0.8, 0.8, 0.8]     // = 4 s
+
+    static func send(_ msg: [String: Any], label: String) {
+        guard WCSession.default.activationState == .activated else { return }
+        let mid = UUID().uuidString
+        var m = msg
+        m["mid"] = mid
+        LinkBook.shared.track(mid, m)              // until confirmed (the pull carries it too)
+        Task { @MainActor in LinkStats.shared.sent += 1 }                         // DIAGNOSTIC
+        attempt(Box(m), mid: mid, label: label, n: 0, started: Date())
+    }
+
+    private static func attempt(_ box: Box, mid: String, label: String, n: Int, started: Date) {
+        guard !LinkBook.shared.isConfirmed(mid) else { return }
+        guard n < waits.count else {
+            print("[Link] \(label): no confirmation within 4 s — also handed to iOS's queued delivery")
+            Task { @MainActor in LinkStats.shared.queued += 1 }                   // DIAGNOSTIC
+            WCSession.default.transferUserInfo(box.m)
+            return
+        }
+        WCSession.default.sendMessage(box.m, replyHandler: { r in
+            guard r["ack"] as? String == mid, LinkBook.shared.confirm(mid) else { return }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            Task { @MainActor in                                                   // DIAGNOSTIC
+                if n == 0 { LinkStats.shared.live += 1 } else { LinkStats.shared.retried += 1 }
+                LinkStats.shared.lastMs = ms
+            }
+            if n > 0 || ms > 600 { print("[Link] \(label) confirmed in \(ms) ms" + (n > 0 ? " (attempt \(n + 1))" : "")) }
+        }, errorHandler: { e in
+            if n == 0 { print("[Link] \(label): \(e.localizedDescription) — retrying") }
+        })
+        DispatchQueue.global().asyncAfter(deadline: .now() + waits[n]) {
+            attempt(box, mid: mid, label: label, n: n + 1, started: started)
+        }
+    }
+
+    /// (a message, passed between threads by the retry loop)
+    final class Box: @unchecked Sendable { let m: [String: Any]; init(_ m: [String: Any]) { self.m = m } }
+}
+
+/// Which events have been confirmed (sender) and which ids have been handled (receiver). Locked:
+/// touched from WatchConnectivity's threads.
+nonisolated final class LinkBook: @unchecked Sendable {
+    static let shared = LinkBook()
+    private let lock = NSLock()
+    private var confirmed: [String] = []
+    private var seen: [String] = []
+    private var unconfirmed: [(mid: String, msg: [String: Any], at: Date)] = []
+    private var acks: [String] = []
+
+    /// An event on its way, until it's confirmed.
+    func track(_ mid: String, _ msg: [String: Any]) {
+        lock.lock(); defer { lock.unlock() }
+        unconfirmed.append((mid, msg, Date()))
+    }
+    /// Events still unconfirmed (from the last minute) — they ride along on the pull.
+    func pendingMessages() -> [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }
+        unconfirmed.removeAll { Date().timeIntervalSince($0.at) > 60 }
+        return unconfirmed.map { $0.msg }
+    }
+    /// Events that arrived on a pull reply: confirmed on the next pull.
+    func ackLater(_ mid: String) { lock.lock(); acks.append(mid); lock.unlock() }
+    func takeAcks() -> [String] { lock.lock(); defer { acks = []; lock.unlock() }; return acks }
+
+    /// Marks it confirmed; true the first time (later replies to retries are ignored).
+    func confirm(_ mid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if confirmed.contains(mid) { return false }
+        confirmed.append(mid)
+        unconfirmed.removeAll { $0.mid == mid }
+        if confirmed.count > 400 { confirmed.removeFirst(200) }
+        return true
+    }
+    func isConfirmed(_ mid: String) -> Bool { lock.lock(); defer { lock.unlock() }; return confirmed.contains(mid) }
+    /// Already handled? (doesn't record it)
+    func hasSeen(_ mid: String) -> Bool { lock.lock(); defer { lock.unlock() }; return seen.contains(mid) }
+    /// True the first time an id arrives; a repeat (a retry of something already handled) is false.
+    func firstTime(_ mid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if seen.contains(mid) { return false }
+        seen.append(mid)
+        if seen.count > 400 { seen.removeFirst(200) }
+        return true
+    }
+}
+
+// MARK: - DIAGNOSTIC (temporary): link counters, shown on the workout card. Delete with its views.
+@MainActor final class LinkStats: ObservableObject {
+    static let shared = LinkStats()
+    @Published var sent = 0
+    @Published var live = 0        // confirmed on the first attempt
+    @Published var retried = 0     // confirmed after a resend
+    @Published var rescued = 0     // the handshake missed it — the 2-second pull caught it
+    @Published var queued = 0      // no confirmation within 4 s: handed to iOS's queued delivery
+    @Published var lastMs: Int?
 }

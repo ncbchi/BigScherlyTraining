@@ -66,6 +66,8 @@ final class WatchState: NSObject, ObservableObject {
         var holdAtBottom: Bool { lift == "squat" || lift == "bench" || caps == "HIP BELOW KNEE" }
     }
     @Published private(set) var setup: SetupStep? = nil
+    /// When the phone last said the workout is over — Home goes back to its top screen.
+    @Published private(set) var workoutEndedAt: Date? = nil
     /// ready (Go) · holding (still check) · capturing · checking (phone) · ok
     @Published private(set) var setupPhase = "ready"
     @Published private(set) var setupMessage: String? = nil
@@ -75,25 +77,69 @@ final class WatchState: NSObject, ObservableObject {
     private var setupSent = false
     private var setupLatest: [RepMotion] = []
     private var setupFinish: Task<Void, Never>?
+    /// This session was opened just for setup (from Settings, no workout): discard it afterwards.
+    private var setupSolo = false
+
+    /// DIAGNOSTIC (temporary): what the last still check measured, shown under its message.
+    @Published private(set) var setupDiag: String? = nil
+    private var setupAppliedAt = Date.distantPast
 
     fileprivate func applySetup(_ d: [String: Any]) {
-        // The phone re-sends the step until it hears Go — ignore a repeat of the step in progress.
-        if let cur = setup, cur.n == (d["n"] as? Int ?? 1), cur.title == (d["title"] as? String ?? ""),
-           ["holding", "capturing", "checking"].contains(setupPhase) { return }
-        if let cur = setup, cur.n == (d["n"] as? Int ?? 1), cur.title == (d["title"] as? String ?? ""),
-           setupPhase == "ready" { return }                 // already showing Go for it
+        // The phone re-sends the step until it hears Go, and every sync carries it: a repeat of the
+        // step on screen is ignored in every phase (it was cancelling the countdown midway).
+        if let cur = setup, cur.n == (d["n"] as? Int ?? 1), cur.title == (d["title"] as? String ?? "") { return }
+        setupAppliedAt = Date()
+        setupDiag = nil
         setup = SetupStep(title: d["title"] as? String ?? "Setup", hint: d["hint"] as? String ?? "",
                           caps: d["caps"] as? String ?? "", kind: d["kind"] as? String ?? "reps",
                           target: d["target"] as? Int ?? 0, n: d["n"] as? Int ?? 1, of: d["of"] as? Int ?? 1,
                           lift: d["lift"] as? String ?? "body")
+        stopCountdown()
         setupPhase = "ready"
         setupCount = 0
         setupFinish?.cancel(); setupFinish = nil
+        if d["solo"] as? Int == 1 {
+            setupSolo = true
+            WorkoutSessionManager.shared.discardOnEnd = true        // nothing goes to Apple Health
+        }
         // (a retry message, if one just arrived, stays up until Go)
     }
 
     /// Go: right before you touch the weight.
+    /// Go: tap, lower your arm, get set. A 3-second countdown (a tap each second) — nothing is measured
+    /// until it ends, and your arm moving into place isn't counted as a rep (or a "set").
+    @Published private(set) var countdownEnds: Date? = nil
+    private var countdownTask: Task<Void, Never>?
+
     func setupGo() {
+        guard setup != nil, setupPhase == "ready" else { return }
+        setupMessage = nil
+        setupPhase = "countdown"
+        countdownEnds = Date().addingTimeInterval(3)
+        MotionRecorder.shared.calibrating = true          // arm going down: not a rep, not a set
+        WKInterfaceDevice.current().play(.click)
+        countdownTask?.cancel()
+        countdownTask = Task {
+            for _ in 0..<2 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, self.setupPhase == "countdown" else { return }
+                WKInterfaceDevice.current().play(.click)
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled, self.setupPhase == "countdown" else { return }
+            self.countdownEnds = nil
+            WKInterfaceDevice.current().play(.start)       // measuring from here
+            self.beginCapture()
+        }
+    }
+
+    private func stopCountdown() {
+        countdownTask?.cancel(); countdownTask = nil
+        countdownEnds = nil
+    }
+
+    /// After the countdown: measure.
+    private func beginCapture() {
         guard let step = setup else { return }
         setupGoAt = Date()
         setupSent = false
@@ -107,20 +153,15 @@ final class WatchState: NSObject, ObservableObject {
         if step.kind == "still" {
             setupPhase = "holding"
             holdStarted = Date()
-            MotionRecorder.shared.beginStillProbe()
             Task {
+                // The start tap just shook the Watch: let it settle before measuring.
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard self.setupPhase == "holding" else { return }
+                MotionRecorder.shared.beginStillProbe()
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                MotionRecorder.shared.endStillProbe { [weak self] shake, rot in
-                    guard let self else { return }
-                    self.holdStarted = nil
-                    if shake < 0.15 && rot < 0.25 {
-                        self.setupPhase = "checking"
-                        Self.sendLive(["setupStillDone": true])
-                    } else {
-                        self.setupPhase = "ready"
-                        self.setupMessage = "You moved a little — stand completely still, then tap Go again."
-                        WKInterfaceDevice.current().play(.retry)
-                    }
+                let stillHolding = self.setupPhase == "holding"
+                MotionRecorder.shared.endStillProbe { shake, rot, n in    // (always ends the probe)
+                    if stillHolding { self.stillMeasured(shake: shake, rot: rot, samples: n) }
                 }
             }
         } else {
@@ -129,6 +170,46 @@ final class WatchState: NSObject, ObservableObject {
             // Bottom holds: the Watch taps at exactly two seconds — "hold until the tap".
             MotionRecorder.shared.setPauseTarget(step.holdAtBottom ? 2.0 : nil)
         }
+    }
+
+    /// Limits for "still": arm hanging at your side moves far less than this; lowering an arm,
+    /// shifting your feet or adjusting the strap moves far more.
+    private static let stillShakeLimit = 0.35     // m/s², steady spread of vertical acceleration
+    private static let stillRotLimit = 0.30       // rad/s, median rotation
+
+    private func stillMeasured(shake: Double, rot: Double, samples n: Int) {
+        holdStarted = nil
+        let diag = n == 0 ? "no samples" :
+            String(format: "measured %.2f m/s² · %.2f rad/s  (limit %.2f · %.2f) · %d samples",
+                   shake, rot, Self.stillShakeLimit, Self.stillRotLimit, n)
+        print("[Setup] still check: \(diag)")
+        setupDiag = diag                                                    // DIAGNOSTIC
+        if n > 0, shake < Self.stillShakeLimit, rot < Self.stillRotLimit {
+            setupPhase = "checking"
+            Self.sendLive(["setupStillDone": true])
+            return
+        }
+        let message = n == 0
+            ? "Your Watch wasn't measuring — make sure the workout is running on it, then tap Go again."
+            : "You moved a little — arm relaxed at your side, stand completely still, then tap Go again."
+        setupPhase = "ready"
+        setupMessage = message
+        WKInterfaceDevice.current().play(.retry)
+        Self.sendLive(["setupStillFailed": message])                       // the phone says so too
+    }
+
+    /// "Exit setup" on the wrist: the phone closes its setup too (otherwise the next sync brings it back).
+    func setupExit() {
+        Self.sendLive(["setupExit": true])
+        setupEnd()
+    }
+
+    /// The phone's sync says it has no setup running (it ended, or the phone app restarted): clear
+    /// ours. (Not in the first moments after a step arrives — a sync can be overtaken by the step.)
+    fileprivate func phoneHasNoSetup() {
+        guard setup != nil, Date().timeIntervalSince(setupAppliedAt) > 3 else { return }
+        print("[Setup] the phone has no setup running — clearing it here")
+        setupEnd()
     }
 
     /// Setup reps since Go, as they're counted.
@@ -164,6 +245,8 @@ final class WatchState: NSObject, ObservableObject {
     }
 
     fileprivate func setupRetry(_ message: String) {
+        stopCountdown()
+        setupDiag = nil
         setupMessage = message
         setupPhase = "ready"
         setupFinish?.cancel(); setupFinish = nil
@@ -176,20 +259,77 @@ final class WatchState: NSObject, ObservableObject {
     }
 
     func setupEnd() {
+        stopCountdown()
         setup = nil
         setupPhase = "ready"
         setupMessage = nil
         setupFinish?.cancel(); setupFinish = nil
         MotionRecorder.shared.endCalibration()
         updatePauseTarget()                               // back to the exercise's own pause
+        if setupSolo {                                    // a session just for setup: close it, unsaved
+            setupSolo = false
+            if card == nil, WorkoutSessionManager.shared.isRunning {
+                Task { await WorkoutSessionManager.shared.end() }
+            }
+        }
     }
 
     /// Ask the phone for the card as it is now (on launch, and when the app comes back).
-    func requestCard() { Self.sendLive(["cardRequest": true, "watchBuild": WatchBuild.tag]) }
+    /// Ask the phone for the card (and any setup step waiting for Go). The answer comes back on the
+    /// reply and goes through the normal message handler — so it works even when the phone thinks
+    /// the Watch isn't reachable (it only answers; it doesn't have to reach out).
+    func requestCard() {
+        guard WCSession.default.activationState == .activated else { return }
+        let me = self                                   // (main-actor class: safe to hand to the reply)
+        var pull: [String: Any] = ["cardPull": true, "watchBuild": WatchBuild.tag]
+        let acks = LinkBook.shared.takeAcks()
+        if !acks.isEmpty { pull["acks"] = acks }
+        WCSession.default.sendMessage(pull, replyHandler: { reply in
+            // The phone's events that hadn't been confirmed (each handled once), then the state.
+            for e in (reply["events"] as? [[String: Any]]) ?? [] {
+                if let mid = e["mid"] as? String {
+                    if !LinkBook.shared.hasSeen(mid) {                               // DIAGNOSTIC: rescued
+                        print("[Link] the pull caught an event the handshake missed")
+                        Task { @MainActor in LinkStats.shared.rescued += 1 }
+                    }
+                    LinkBook.shared.ackLater(mid)
+                }
+                me.session(WCSession.default, didReceiveMessage: e)
+            }
+            var state = reply
+            state.removeValue(forKey: "events")
+            if !state.isEmpty { me.session(WCSession.default, didReceiveMessage: state) }
+        }, errorHandler: { e in
+            for a in acks { LinkBook.shared.ackLater(a) }       // confirm them on the next pull
+            print("[Link] pull: \(e.localizedDescription)")
+        })
+    }
+
+    private var pullTask: Task<Void, Never>?
+    /// While the app is open: pull every 2 seconds, alongside the live messages — the card and setup
+    /// step are never more than 2 s stale, and any of the phone's events that didn't get through
+    /// directly come back on the reply. (Stops when the wrist drops or the app closes.)
+    func startPulling() {
+        pullTask?.cancel()
+        pullTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.requestCard()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+    func stopPulling() { pullTask?.cancel(); pullTask = nil }
+
+    /// The phone came back in reach: catch up at once (the card and any setup step).
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        guard session.isReachable else { return }
+        Task { @MainActor in self.requestCard() }
+    }
 
     fileprivate func applyCard(_ data: Data, note: String?, live: [Double], demo: Bool, step: Double?, warn: Bool?) {
         guard let c = try? JSONDecoder().decode(WatchCard.self, from: data) else { return }
         card = c
+        reconcileDetections(with: c)
         WorkoutSessionManager.shared.discardOnEnd = demo          // a demo session isn't saved
         cardNote = note
         cardLiveSpeeds = live
@@ -210,6 +350,7 @@ final class WatchState: NSObject, ObservableObject {
     /// No card. `finished`: the phone's workout ended, so the session ends too
     /// (saved for real workouts, discarded for demos).
     fileprivate func endCard(finished: Bool) {
+        if finished, card != nil || WorkoutSessionManager.shared.isRunning { workoutEndedAt = Date() }
         card = nil; cardNote = nil; cardLiveSpeeds = []
         restTaps.forEach { $0.cancel() }; restTaps = []
         if finished, WorkoutSessionManager.shared.isRunning {
@@ -258,7 +399,11 @@ final class WatchState: NSObject, ObservableObject {
         let lb = card?.unit == "kg" ? weight / 0.45359237 : weight
         let detection = presentedDetection
         logSet(exerciseId: ex.id, setId: set.id, reps: reps, weight: lb, rpe: rpe, motion: detection)
-        if detection != nil { presentedDetection = nil }
+        // Logged: every suggestion for a set that ended before now is out of date. Clear them all
+        // first — clearing just this one showed the next in the queue (another stale "Log set"),
+        // which kept rest off the tile.
+        detections.removeAll { $0.end <= Date() }
+        if presentedDetection != nil { presentedDetection = nil }
         liveSpeeds = []
         // Rest starts now on the wrist; the phone's card follows in a moment.
         let more = activeWorkout?.exercises.contains { $0.sets.contains { $0.loggedReps == nil } } ?? false
@@ -355,28 +500,37 @@ final class WatchState: NSObject, ObservableObject {
 
     /// Live-only message for the phone (heart rate, session state, detected sets).
     /// Dropped when the phone isn't reachable — it's only useful in the moment.
+    /// Events that must arrive (exactly once). Everything else — heart rate, reps as they come, the
+    /// sound cue — is a live stream: best-effort, a missed sample doesn't matter.
+    nonisolated private static let eventKeys: Set<String> =
+        ["cardAction", "setupGo", "setupStillDone", "setupStillFailed", "setupExit", "setupReps",
+         "setStarted", "detectedSet", "sessionActive"]
+
     nonisolated static func sendLive(_ msg: [String: Any]) {
-        guard WCSession.default.activationState == .activated, WCSession.default.isReachable else { return }
-        WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        guard WCSession.default.activationState == .activated else { return }
+        guard let key = msg.keys.first(where: { eventKeys.contains($0) }) else {
+            // A live stream. (Not gated on "reachable" — that flag is unreliable; a failed try is fine.)
+            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+            return
+        }
+        // An event: live, with a handshake and fast retries (see WatchLink).
+        WatchLink.send(msg, label: key)
     }
 
-    /// Live message when the phone is reachable; otherwise queued so it arrives later.
+    /// A set log: live, confirmed and handled once by the phone (queued delivery only as the last resort).
     nonisolated private static func sendReliably(_ msg: [String: Any]) {
-        guard WCSession.default.activationState == .activated else { return }
-        if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil) { _ in
-                WCSession.default.transferUserInfo(msg)
-            }
-        } else {
-            WCSession.default.transferUserInfo(msg)
-        }
+        WatchLink.send(msg, label: msg.keys.sorted().first ?? "log")            // live, confirmed, once-only
     }
+
 
     // MARK: - Detected sets
 
     /// A finished set came in from the motion recorder.
     func handleDetectedSet(reps: [RepMotion], start: Date, end: Date) {
         guard let workout = activeWorkout, !reps.isEmpty else { return }
+        // Already logged (from the phone or Lock Screen) and resting: this is that set's tail —
+        // don't show Log set for the next one.
+        if let c = card, c.stage == "resting", let rs = c.restStart, rs <= end.addingTimeInterval(10) { return }
         let exId = suggestedExercise(in: workout)
         let setId = exId.flatMap { id in
             workout.exercises.first(where: { $0.id == id })?.sets.first(where: { $0.loggedReps == nil })?.id
@@ -395,6 +549,22 @@ final class WatchState: NSObject, ObservableObject {
         Self.sendLive(live)
         WKInterfaceDevice.current().play(.click)
         if presentedDetection == nil { presentNextDetection() }
+    }
+
+    /// The phone's card has moved on, so any "Log set" the Watch was suggesting for an earlier set is
+    /// out of date: resting means the set was logged on the phone (or Lock Screen); lifting means a
+    /// new set has started. Without this, a suggestion from wrist motion (walking to the bar,
+    /// loading plates) took over the tile — no lifting timer, and no rest after logging on the phone.
+    private func reconcileDetections(with c: WatchCard) {
+        let cutoff: Date?
+        switch c.stage {
+        case "resting": cutoff = c.restStart?.addingTimeInterval(15)   // sets that ended before this rest
+        case "lifting": cutoff = c.setStart                             // sets from before this one began
+        default: cutoff = nil
+        }
+        guard let cut = cutoff else { return }
+        detections.removeAll { $0.end <= cut }
+        if let p = presentedDetection, p.end <= cut { presentedDetection = nil }   // (shows the next newer one, if any)
     }
 
     func discardDetection(_ d: DetectedSet) {
@@ -639,6 +809,7 @@ extension WatchState: WCSessionDelegate {
 
     // Rest-timer start (live message).
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if let mid = message["mid"] as? String, !LinkBook.shared.firstTime(mid) { return }   // already handled
         if let seconds = message["restSeconds"] as? Int {
             Task { @MainActor in self.startRest(seconds: seconds) }
         }
@@ -664,20 +835,26 @@ extension WatchState: WCSessionDelegate {
             }
             Task { @MainActor in
                 var typed: [String: Any] = step
-                for k in ["target", "n", "of"] { if let s = step[k], let i = Int(s) { typed[k] = i } }
+                for k in ["target", "n", "of", "solo"] { if let s = step[k], let i = Int(s) { typed[k] = i } }
                 self.applySetup(typed)
             }
         }
         if let m = message["setupRetry"] as? String { Task { @MainActor in self.setupRetry(m) } }
+        if message["setupActive"] as? Bool == false { Task { @MainActor in self.phoneHasNoSetup() } }
         if message["setupOK"] as? Bool == true { Task { @MainActor in self.setupOK() } }
         if message["setupEnd"] as? Bool == true { Task { @MainActor in self.setupEnd() } }
     }
 
     // A finished workout queued while the Watch was away.
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        if userInfo["cardEnd"] as? Bool == true, userInfo["endSession"] as? Bool == true {
-            Task { @MainActor in self.endCard(finished: true) }
-        }
+        self.session(session, didReceiveMessage: userInfo)      // queued delivery: same handling
+    }
+
+    /// The phone's events, sent directly: handle (once) and confirm in the reply.
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any],
+                             replyHandler: @escaping ([String: Any]) -> Void) {
+        self.session(session, didReceiveMessage: message)
+        replyHandler(["ack": message["mid"] as? String ?? ""])
     }
 }
 
@@ -688,6 +865,111 @@ private extension UInt32 {
 /// Which build of the Watch app this is — shown on Home and reported to the phone, so a Watch
 /// that missed an update is obvious instead of a mystery. Bump with each Watch delivery.
 enum WatchBuild {
-    static let tag = "2026-10-05.1"
+    static let tag = "2026-10-05.12"
 }
 
+// MARK: - The live link
+/// Events between the phone and the Watch, live with a handshake: sent at once, and the other side
+/// confirms the moment it has it. No confirmation within 0.3 s → sent again straight away, and again
+/// on a short back-off (seven live attempts within 4 s). Every attempt carries the same id and the
+/// receiver handles each id once — a retry can never count twice. Only if every live attempt fails
+/// does it fall back to iOS's queued delivery, so nothing is lost. No "reachable" checks: that flag
+/// is unreliable, and gating on it is what silently dropped messages.
+nonisolated enum WatchLink {
+    private static let waits: [Double] = [0.3, 0.3, 0.5, 0.5, 0.8, 0.8, 0.8]     // = 4 s
+
+    static func send(_ msg: [String: Any], label: String) {
+        guard WCSession.default.activationState == .activated else { return }
+        let mid = UUID().uuidString
+        var m = msg
+        m["mid"] = mid
+        LinkBook.shared.track(mid, m)              // until confirmed (the pull carries it too)
+        Task { @MainActor in LinkStats.shared.sent += 1 }                         // DIAGNOSTIC
+        attempt(Box(m), mid: mid, label: label, n: 0, started: Date())
+    }
+
+    private static func attempt(_ box: Box, mid: String, label: String, n: Int, started: Date) {
+        guard !LinkBook.shared.isConfirmed(mid) else { return }
+        guard n < waits.count else {
+            print("[Link] \(label): no confirmation within 4 s — also handed to iOS's queued delivery")
+            Task { @MainActor in LinkStats.shared.queued += 1 }                   // DIAGNOSTIC
+            WCSession.default.transferUserInfo(box.m)
+            return
+        }
+        WCSession.default.sendMessage(box.m, replyHandler: { r in
+            guard r["ack"] as? String == mid, LinkBook.shared.confirm(mid) else { return }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            Task { @MainActor in                                                   // DIAGNOSTIC
+                if n == 0 { LinkStats.shared.live += 1 } else { LinkStats.shared.retried += 1 }
+                LinkStats.shared.lastMs = ms
+            }
+            if n > 0 || ms > 600 { print("[Link] \(label) confirmed in \(ms) ms" + (n > 0 ? " (attempt \(n + 1))" : "")) }
+        }, errorHandler: { e in
+            if n == 0 { print("[Link] \(label): \(e.localizedDescription) — retrying") }
+        })
+        DispatchQueue.global().asyncAfter(deadline: .now() + waits[n]) {
+            attempt(box, mid: mid, label: label, n: n + 1, started: started)
+        }
+    }
+
+    /// (a message, passed between threads by the retry loop)
+    final class Box: @unchecked Sendable { let m: [String: Any]; init(_ m: [String: Any]) { self.m = m } }
+}
+
+/// Which events have been confirmed (sender) and which ids have been handled (receiver). Locked:
+/// touched from WatchConnectivity's threads.
+nonisolated final class LinkBook: @unchecked Sendable {
+    static let shared = LinkBook()
+    private let lock = NSLock()
+    private var confirmed: [String] = []
+    private var seen: [String] = []
+    private var unconfirmed: [(mid: String, msg: [String: Any], at: Date)] = []
+    private var acks: [String] = []
+
+    /// An event on its way, until it's confirmed.
+    func track(_ mid: String, _ msg: [String: Any]) {
+        lock.lock(); defer { lock.unlock() }
+        unconfirmed.append((mid, msg, Date()))
+    }
+    /// Events still unconfirmed (from the last minute) — they ride along on the pull.
+    func pendingMessages() -> [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }
+        unconfirmed.removeAll { Date().timeIntervalSince($0.at) > 60 }
+        return unconfirmed.map { $0.msg }
+    }
+    /// Events that arrived on a pull reply: confirmed on the next pull.
+    func ackLater(_ mid: String) { lock.lock(); acks.append(mid); lock.unlock() }
+    func takeAcks() -> [String] { lock.lock(); defer { acks = []; lock.unlock() }; return acks }
+
+    /// Marks it confirmed; true the first time (later replies to retries are ignored).
+    func confirm(_ mid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if confirmed.contains(mid) { return false }
+        confirmed.append(mid)
+        unconfirmed.removeAll { $0.mid == mid }
+        if confirmed.count > 400 { confirmed.removeFirst(200) }
+        return true
+    }
+    func isConfirmed(_ mid: String) -> Bool { lock.lock(); defer { lock.unlock() }; return confirmed.contains(mid) }
+    /// Already handled? (doesn't record it)
+    func hasSeen(_ mid: String) -> Bool { lock.lock(); defer { lock.unlock() }; return seen.contains(mid) }
+    /// True the first time an id arrives; a repeat (a retry of something already handled) is false.
+    func firstTime(_ mid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if seen.contains(mid) { return false }
+        seen.append(mid)
+        if seen.count > 400 { seen.removeFirst(200) }
+        return true
+    }
+}
+
+// MARK: - DIAGNOSTIC (temporary): link counters, shown on the workout card. Delete with its views.
+@MainActor final class LinkStats: ObservableObject {
+    static let shared = LinkStats()
+    @Published var sent = 0
+    @Published var live = 0        // confirmed on the first attempt
+    @Published var retried = 0     // confirmed after a resend
+    @Published var rescued = 0     // the handshake missed it — the 2-second pull caught it
+    @Published var queued = 0      // no confirmation within 4 s: handed to iOS's queued delivery
+    @Published var lastMs: Int?
+}

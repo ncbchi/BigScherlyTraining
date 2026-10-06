@@ -134,6 +134,7 @@ struct WatchCardPage: View {
                     .onTapGesture { tap(now) }
                 if !dimmed { below(now) }                   // buttons can't be tapped while dimmed
                 if showsFooter(now) { CardFooter(card: card, hr: session.heartRate ?? card.hr) }
+                LinkDiagnosticsRow()                                  // DIAGNOSTIC (temporary)
             }
             .frame(maxWidth: .infinity)
         }
@@ -877,5 +878,35 @@ struct WatchCardOverview: View {
         .padding(.horizontal, 9).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 12).fill(K.panel))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(now ? state.accentColor : .clear, lineWidth: 1.4))
+    }
+}
+
+// MARK: - DIAGNOSTIC (temporary): the Watch → phone link at a glance. Delete with LinkStats.
+struct LinkDiagnosticsRow: View {
+    @ObservedObject private var s = LinkStats.shared
+    @EnvironmentObject var state: WatchState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            item("bolt.fill", s.live, state.accentColor)
+            item("arrow.clockwise", s.retried, s.retried > 0 ? .white : Color(white: 0.45))
+            item("arrow.down.circle.fill", s.rescued, s.rescued > 0 ? .orange : Color(white: 0.45))
+            item("tray.full.fill", s.queued, s.queued > 0 ? .red : Color(white: 0.45))
+            if let ms = s.lastMs {
+                Text("\(ms)ms").font(.system(size: 9, weight: .heavy, design: .rounded)).monospacedDigit()
+                    .foregroundColor(ms > 600 ? .orange : Color(white: 0.45))
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Capsule().fill(Color.white.opacity(0.06)))
+        .padding(.top, 2)
+    }
+
+    private func item(_ icon: String, _ n: Int, _ c: Color) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: icon).font(.system(size: 8, weight: .bold))
+            Text("\(n)").font(.system(size: 10, weight: .heavy, design: .rounded)).monospacedDigit()
+        }
+        .foregroundColor(c)
     }
 }
