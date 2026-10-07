@@ -84,6 +84,12 @@ nonisolated struct WorkoutActivityAttributes: ActivityAttributes {
         var view: LiveView = .sets
         var accent: UInt32? = nil         // your theme accent (already readable on the card's black)
         var accentInkWhite: Bool? = nil   // text on the accent: white (dark accents) or black
+        // Your theme's look on the Lock Screen card (optional: older payloads decode)
+        var light: Bool? = nil            // true = Light, false = Dark, nil = follow the Lock Screen (System)
+        var fill: UInt32? = nil           // light card: the accent as a fill (the real accent)
+        var fillInkWhite: Bool? = nil     // light card: white text on that fill (dark accents) or black
+        var lineLight: UInt32? = nil      // light card: accent lines — grey for pale accents (Volt, Toxic, Ice, Amber)
+        var headLight: UInt32? = nil      // light card: the accent on the smoke-pill labels
         var available: [LiveView] = []
         var afterSet: Bool = false     // showing the set you just did (until the next set starts)
         var liveSet: Bool? = nil       // the sensor views show the set in progress, rep by rep (optional: older payloads decode)
@@ -139,6 +145,9 @@ nonisolated struct WorkoutActivityAttributes: ActivityAttributes {
         var dReps: Int = 0
         var dWeight: Double = 0        // display units
         var dRPE: Double = 8
+        // Three single-tap screens: 0 reps · 1 weight · 2 RPE (the RPE tap saves). Optional: older payloads decode.
+        var editStep: Int? = nil
+        var repsPage: Int? = nil       // 0 = 1–10, 1 = 11–20
     }
 
     var workoutId: String
@@ -251,6 +260,46 @@ nonisolated struct LiveRPEDownIntent: LiveActivityIntent {
     static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
     init() {}
     func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("rpe-")); return .result() }
+}
+
+// The log editor's picks: one tap each (shown at once), moving to the next screen.
+
+nonisolated struct LivePickRepsIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "Pick reps"
+    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
+    @Parameter(title: "On") var value: Bool    // instant-preview switch
+    @Parameter(title: "Reps", default: 0) var reps: Int
+    init() {}
+    init(reps: Int) { self.reps = reps }
+    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("reps=\(reps)")); return .result() }
+}
+
+nonisolated struct LivePickWeightIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "Pick weight"
+    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
+    @Parameter(title: "On") var value: Bool    // instant-preview switch
+    @Parameter(title: "Weight", default: 0) var weight: Double   // display units
+    init() {}
+    init(weight: Double) { self.weight = weight }
+    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("weight=\(weight)")); return .result() }
+}
+
+nonisolated struct LivePickRPEIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "Pick RPE and save"
+    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
+    @Parameter(title: "On") var value: Bool    // instant-preview switch
+    @Parameter(title: "RPE", default: 8) var rpe: Double
+    init() {}
+    init(rpe: Double) { self.rpe = rpe }
+    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("rpe=\(rpe)")); return .result() }
+}
+
+nonisolated struct LiveRepsPageIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "More reps"
+    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
+    @Parameter(title: "On") var value: Bool    // instant-preview switch
+    init() {}
+    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("repsPage")); return .result() }
 }
 
 // View selector and the set-loop controls: on/off switches (iOS redraws a switch the instant it's tapped, before the

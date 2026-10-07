@@ -143,7 +143,8 @@ struct WatchCardPage: View {
 
     /// The Watch's own signals first (instant), then the phone's card.
     private func currentTile(at now: Date) -> Tile {
-        if let start = motion.pauseStart, motion.pauseTarget > 0 {
+        if let start = motion.pauseStart, motion.pauseTarget > 0,
+           card.stage == "lifting" || motion.liveRepCount != nil || motion.calibrating {   // only during a set
             return .hold(start, motion.pauseTarget, motion.pauseReached)
         }
         if let d = state.presentedDetection {

@@ -3,6 +3,7 @@ import Combine
 import ActivityKit
 import UIKit
 import AVFoundation
+import SwiftUI
 
 // MARK: - Live session
 // One place that owns an in-progress workout's rest timer and set logging, so the
@@ -54,6 +55,8 @@ final class LiveSessionController: ObservableObject {
     private var dReps = 0
     private var dWeightLb = 0.0
     private var dRPE = 8.0
+    private var editStep = 0                    // 0 reps · 1 weight · 2 RPE
+    private var repsPage = 0                    // 0 = 1–10 · 1 = 11–20
     private var editorTask: Task<Void, Never>?
     private var stageTask: Task<Void, Never>?
     private var demoTask: Task<Void, Never>?
@@ -112,6 +115,11 @@ final class LiveSessionController: ObservableObject {
             .map { "\($0.id.prefix(8)) \($0.activityState)" }.joined(separator: ", ")).ifEmpty("none"))
         WatchBridge.shared.$liveHeartRate
             .sink { [weak self] bpm in self?.heartRate(bpm) }
+            .store(in: &bag)
+        // Theme or accent changed mid-workout: redraw the card in the new look.
+        ThemeStore.shared.objectWillChange
+            .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.push(now: true) }
             .store(in: &bag)
         // Each rep from the Watch, while you're lifting: the card's sensor views fill in as you go.
         WatchBridge.shared.$liveRepMotions
@@ -438,6 +446,8 @@ final class LiveSessionController: ObservableObject {
         dWeightLb = ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? set.targetWeight
         dRPE = ex.sets.last(where: { $0.rpe != nil })?.rpe ?? 8
         editing = true
+        editStep = 0
+        repsPage = dReps > 10 ? 1 : 0
         editorAuto = auto
         if auto { extendEditor() } else { editorUntil = nil; editorTask?.cancel() }
         push(now: true)
@@ -582,13 +592,25 @@ final class LiveSessionController: ObservableObject {
         case "cancel":
             closeEditor()
             return
-        case "reps+": dReps = min(50, dReps + 1)
-        case "reps-": dReps = max(0, dReps - 1)
-        case "weight+": dWeightLb = max(0, dWeightLb + weightStepLb)
-        case "weight-": dWeightLb = max(0, dWeightLb - weightStepLb)
-        case "rpe+": dRPE = min(10, dRPE + 0.5)
-        case "rpe-": dRPE = max(1, dRPE - 0.5)
+        case "repsPage":
+            guard editing, editStep == 0 else { return }
+            repsPage = repsPage == 0 ? 1 : 0
+        case _ where a.hasPrefix("reps="):
+            guard editing, editStep == 0 else { return }       // only the screen that's live
+            dReps = max(0, min(50, Int(a.dropFirst(5)) ?? dReps))
+            editStep = 1
+        case _ where a.hasPrefix("weight="):
+            guard editing, editStep == 1 else { return }
+            let shown = Double(a.dropFirst(7)) ?? StatsUnits.weight(dWeightLb)
+            dWeightLb = max(0, kg ? shown / 0.45359237 : shown)
+            editStep = 2
+        case _ where a.hasPrefix("rpe="):
+            guard editing, editStep == 2 else { return }
+            dRPE = max(1, min(10, Double(a.dropFirst(4)) ?? dRPE))
+            logAction("commit")                 // the RPE tap saves
+            return
         case "commit":
+            guard editing else { return }
             guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
                   let nx = Self.nextSet(w) else { closeEditor(); return }
             let ex = nx.0, set = nx.1
@@ -977,6 +999,15 @@ final class LiveSessionController: ObservableObject {
         let accent = RGBColor(hex: ThemeStore.shared.accent).readableOnDark(RGBColor(hex: 0x010101))
         s.accent = accent.hex
         s.accentInkWhite = accent.textOn == .white
+        // Light / Dark / System (nil: the card follows the Lock Screen), and the accent's shades
+        // on the white card — the app's Light rules; pale accents draw their lines in grey.
+        let theme = ThemeStore.shared
+        let raw = RGBColor(hex: theme.accent)
+        s.light = theme.forcedScheme.map { $0 == .light }
+        s.fill = raw.hex
+        s.fillInkWhite = raw.textOn == .white
+        s.lineLight = raw.contrast(.white) < 1.6 ? 0x8E8E93 : raw.hex
+        s.headLight = raw.readableOnDark(RGBColor(hex: 0x39393B)).hex
 
         // Left quarter: the set you're on (or the last one, when everything's logged).
         let next = Self.nextSet(w)
@@ -1100,6 +1131,8 @@ final class LiveSessionController: ObservableObject {
         s.dReps = dReps
         s.dWeight = disp(dWeightLb)
         s.dRPE = dRPE
+        s.editStep = editStep
+        s.repsPage = repsPage
         return s
     }
 

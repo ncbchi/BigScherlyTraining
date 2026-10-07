@@ -68,7 +68,7 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
     @Published private(set) var watchBuild: String?
     /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
-    static let expectedWatchBuild = "2026-10-06.7"
+    static let expectedWatchBuild = "2026-10-07.1"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -158,7 +158,8 @@ final class WatchBridge: NSObject, ObservableObject {
     private var cardRetried = false
 
     func sendCard(_ data: Data, extras: [String: Any]) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isWatchAppInstalled else { return }     // no Watch app: nothing to send to
         var msg = extras
         msg["card"] = data
         cardRetried = false
@@ -173,7 +174,8 @@ final class WatchBridge: NSObject, ObservableObject {
     /// (Retrying on "not reachable" used to rebuild and resend the card three times a second
     /// for as long as the Watch was away, which is what made the app crawl without it.)
     private func cardFailed(_ e: Error) {
-        if (e as NSError).code == WCError.notReachable.rawValue { return }
+        let code = (e as NSError).code
+        if code == WCError.notReachable.rawValue || code == WCError.watchAppNotInstalled.rawValue { return }
         guard !cardRetried else { return }
         cardRetried = true
         print("[Link] card: \(e.localizedDescription) — sending the newest card once more")

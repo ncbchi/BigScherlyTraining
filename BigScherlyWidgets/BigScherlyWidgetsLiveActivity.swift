@@ -9,29 +9,83 @@ import AppIntents
 // iOS redraws the card by itself at its stale date (rest ends → Start set; the
 // Watch-opened log editor closes after 10 s), so it stays right even with the app asleep.
 
-/// Your theme accent on the card (Settings ▸ Appearance). Set from the update before drawing.
+/// The card's colours, chosen per draw. Dark: the original card (black, the accent made
+/// readable on it). Light: your Light theme — white card, ink text, the right pane on light
+/// grey; the accent stays the fill, accent text goes ink, accent lines keep the accent (grey
+/// for pale accents), labels sit on smoke pills. System follows the Lock Screen.
+/// The Dynamic Island always draws dark (black hardware).
+private struct LivePalette {
+    var light = false
+    var volt: Color, onVolt: Color          // the accent as a FILL, and text/icons on it
+    var acc: Color                          // the accent as TEXT/ICONS
+    var stroke: Color                       // the accent as a LINE
+    var head: Color                         // section labels
+    var card: Color, panel: Color, tile: Color, text: Color, mute: Color
+    var line: Color, dim: Color, track: Color, highlight: Color
+    var blue: Color, orange: Color, red: Color, redText: Color
+
+    static func hex(_ h: UInt32) -> Color {
+        Color(.sRGB, red: Double((h >> 16) & 0xff) / 255, green: Double((h >> 8) & 0xff) / 255,
+              blue: Double(h & 0xff) / 255, opacity: 1)
+    }
+
+    static func make(_ s: WorkoutActivityAttributes.ContentState, light: Bool) -> LivePalette {
+        let dark = hex(s.accent ?? 0xEDFF3D)                  // readable on the black card
+        if !light {
+            return LivePalette(light: false, volt: dark, onVolt: (s.accentInkWhite ?? false) ? .white : .black,
+                               acc: dark, stroke: dark, head: dark,
+                               card: hex(0x010101), panel: hex(0x141416), tile: .black, text: .white,
+                               mute: Color(white: 0.56), line: Color(white: 1, opacity: 0.10),
+                               dim: Color(white: 1, opacity: 0.08), track: Color(white: 0.30),
+                               highlight: dark.opacity(0.14),
+                               blue: hex(0x3D9BE0), orange: hex(0xF2A03D), red: hex(0xFF5555), redText: hex(0xFF5555))
+        }
+        let fill = hex(s.fill ?? s.accent ?? 0xEDFF3D)
+        let ink = hex(0x111113)
+        return LivePalette(light: true, volt: fill, onVolt: (s.fillInkWhite ?? false) ? .white : ink,
+                           acc: ink, stroke: hex(s.lineLight ?? 0x8E8E93), head: hex(s.headLight ?? 0xEDFF3D),
+                           card: .white, panel: hex(0xF2F2F4), tile: .white, text: ink,
+                           mute: hex(0x6E6E73), line: Color.black.opacity(0.08),
+                           dim: Color.black.opacity(0.05), track: Color.black.opacity(0.10),
+                           highlight: Color.black.opacity(0.05),
+                           blue: hex(0x3D9BE0), orange: hex(0xD97D0F), red: hex(0xE5484D), redText: hex(0xD93036))
+    }
+}
+
+/// Set from the update before drawing (and re-set by each pane, from what it was handed).
 private enum LiveTheme {
-    nonisolated(unsafe) static var accent = Color(red: 237 / 255, green: 1, blue: 61 / 255)
-    nonisolated(unsafe) static var onAccent = Color.black
-    nonisolated static func set(_ s: WorkoutActivityAttributes.ContentState) {
-        let h = s.accent ?? 0xEDFF3D
-        accent = Color(.sRGB, red: Double((h >> 16) & 0xff) / 255, green: Double((h >> 8) & 0xff) / 255,
-                       blue: Double(h & 0xff) / 255, opacity: 1)
-        onAccent = (s.accentInkWhite ?? false) ? .white : .black
+    nonisolated(unsafe) static var p = LivePalette.make(WorkoutActivityAttributes.ContentState(startedAt: Date()), light: false)
+    nonisolated static func set(_ s: WorkoutActivityAttributes.ContentState, light: Bool) {
+        p = LivePalette.make(s, light: light)
     }
 }
 
 private enum C {
-    nonisolated static var volt: Color { LiveTheme.accent }
-    nonisolated static var onVolt: Color { LiveTheme.onAccent }
-    static let card = Color(red: 1 / 255, green: 1 / 255, blue: 1 / 255)
-    static let panel = Color(red: 20 / 255, green: 20 / 255, blue: 22 / 255)
-    static let mute = Color(white: 0.56)
-    static let line = Color(white: 1, opacity: 0.10)
-    static let dim = Color(white: 1, opacity: 0.08)
-    static let blue = Color(red: 61 / 255, green: 155 / 255, blue: 224 / 255)
-    static let orange = Color(red: 242 / 255, green: 160 / 255, blue: 61 / 255)
-    static let red = Color(red: 1, green: 85 / 255, blue: 85 / 255)
+    nonisolated static var volt: Color { LiveTheme.p.volt }
+    nonisolated static var onVolt: Color { LiveTheme.p.onVolt }
+    nonisolated static var acc: Color { LiveTheme.p.acc }
+    nonisolated static var stroke: Color { LiveTheme.p.stroke }
+    nonisolated static var card: Color { LiveTheme.p.card }
+    nonisolated static var panel: Color { LiveTheme.p.panel }
+    nonisolated static var tile: Color { LiveTheme.p.tile }
+    nonisolated static var text: Color { LiveTheme.p.text }
+    nonisolated static var mute: Color { LiveTheme.p.mute }
+    nonisolated static var line: Color { LiveTheme.p.line }
+    nonisolated static var dim: Color { LiveTheme.p.dim }
+    nonisolated static var track: Color { LiveTheme.p.track }
+    nonisolated static var highlight: Color { LiveTheme.p.highlight }
+    nonisolated static var blue: Color { LiveTheme.p.blue }
+    nonisolated static var orange: Color { LiveTheme.p.orange }
+    nonisolated static var red: Color { LiveTheme.p.red }
+    nonisolated static var redText: Color { LiveTheme.p.redText }
+}
+
+/// A section label: accent text; on the light card, on a smoke-grey pill (like the app's headers).
+private func head(_ t: String) -> some View {
+    let l = LiveTheme.p
+    return Text(t).font(.system(size: 8, weight: .heavy)).tracking(1.2).foregroundStyle(l.head).lineLimit(1)
+        .padding(.horizontal, l.light ? 5 : 0).padding(.vertical, l.light ? 1.5 : 0)
+        .background(Capsule().fill(l.light ? Color(.sRGB, red: 30 / 255, green: 30 / 255, blue: 33 / 255, opacity: 0.88) : .clear))
 }
 
 private typealias S = WorkoutActivityAttributes.ContentState
@@ -43,6 +97,9 @@ private struct Shown {
     var card: CGSize = .zero        // the card's inner size (for instant previews)
     var frozen = false              // a preview: timers shown still, not counting
     var isPreview = false           // drawn inside another control's preview: no live controls
+    var light = false               // the light card (never the Dynamic Island)
+    /// Each pane sets the palette from what it was handed, so it always draws its own look.
+    func usePalette() { LiveTheme.set(s, light: light) }
     /// Rest ended while the app slept → show Start set.
     var stage: LiveStage { s.stage == .resting && stale ? .ready : s.stage }
     /// The Watch-opened editor closes itself at the stale date.
@@ -67,8 +124,13 @@ private struct Shown {
         var c = self; c.stale = false
         c.s.editing = true; c.s.editorAuto = false; c.s.editorUntil = nil
         c.s.dReps = s.nextReps; c.s.dWeight = s.nextWeight; c.s.dRPE = s.nextRPE; c.s.editSet = s.setNumber
+        c.s.editStep = 0; c.s.repsPage = s.nextReps > 10 ? 1 : 0
         return c
     }
+    func afterReps(_ n: Int) -> Shown { var c = self; c.stale = false; c.s.dReps = n; c.s.editStep = 1; return c }
+    func afterWeight(_ w: Double) -> Shown { var c = self; c.stale = false; c.s.dWeight = w; c.s.editStep = 2; return c }
+    func afterRPE(_ r: Double) -> Shown { var c = afterSave(); c.s.dRPE = r; return c }
+    func afterRepsPage() -> Shown { var c = self; c.stale = false; c.s.repsPage = (s.repsPage ?? 0) == 0 ? 1 : 0; return c }
     func afterCancel() -> Shown {
         var c = self; c.stale = false; c.s.editing = false; c.s.editorAuto = false
         return c
@@ -97,11 +159,14 @@ private struct Shown {
 private struct InstantStyle<Face: View, Preview: View>: ToggleStyle {
     let face: (Bool) -> Face
     let preview: () -> Preview
+    /// False once the card already shows this control's result: iOS can keep a tapped switch "on"
+    /// long after, and its preview would then paint over whatever the pane shows now.
+    var live = true
 
     func makeBody(configuration: Configuration) -> some View {
-        face(configuration.isOn)
+        face(configuration.isOn && live)
             .overlay(alignment: .topLeading) {
-                if configuration.isOn {
+                if configuration.isOn && live {
                     GeometryReader { g in
                         let f = g.frame(in: .named("card"))
                         preview().offset(x: -f.minX, y: -f.minY)
@@ -109,6 +174,9 @@ private struct InstantStyle<Face: View, Preview: View>: ToggleStyle {
                     .allowsHitTesting(false)
                 }
             }
+            // A preview must sit above every sibling drawn after this control, or the siblings
+            // (other chips, the next row) show through and pile up on top of it.
+            .zIndex(configuration.isOn ? 10 : 0)
     }
 }
 
@@ -116,14 +184,14 @@ private struct InstantStyle<Face: View, Preview: View>: ToggleStyle {
 /// as a plain picture instead: iOS pre-draws every switch's "on" look, and previews within
 /// previews would otherwise chain round the set loop forever.
 @ViewBuilder
-private func instant<I: AppIntent, F: View, P: View>(_ intent: I, _ x: Shown,
+private func instant<I: AppIntent, F: View, P: View>(_ intent: I, _ x: Shown, live: Bool = true,
                                                      face: @escaping (Bool) -> F,
                                                      result: @escaping () -> P) -> some View {
     if x.isPreview {
         face(false)
     } else {
         Toggle(isOn: false, intent: intent) { EmptyView() }
-            .toggleStyle(InstantStyle(face: face, preview: result))
+            .toggleStyle(InstantStyle(face: face, preview: result, live: live))
     }
 }
 
@@ -135,12 +203,13 @@ private struct CardPreview: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let l = left {
-                LeftPane(x: l.asPreview()).frame(width: 104, height: card.height).background(C.card)
+                LeftPane(x: l.asPreview()).frame(width: 104, height: card.height).background(C.card).compositingGroup()
             }
             if let r = right {
                 RightPanel(x: r.asPreview())
                     .frame(width: max(card.width - 114, 0), height: card.height)
                     .background(C.card)
+                    .compositingGroup()                    // one opaque layer: nothing shows through
                     .offset(x: 114)
             }
         }
@@ -151,12 +220,15 @@ private struct CardPreview: View {
 struct BigScherlyWidgetsLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: WorkoutActivityAttributes.self) { context in
-            let _ = LiveTheme.set(context.state)
+            // Light / Dark from your theme; System (nil) follows the Lock Screen — LiveCard reads
+            // that and paints its own background, so the tint is only set when it's known here.
+            let forced = context.state.light
+            let _ = LiveTheme.set(context.state, light: forced ?? false)
             LiveCard(x: Shown(s: context.state, stale: context.isStale))
-                .activityBackgroundTint(C.card)
-                .activitySystemActionForegroundColor(C.volt)
+                .activityBackgroundTint(forced == true ? Color.white : (forced == false ? C.card : nil))
+                .activitySystemActionForegroundColor(forced == true ? Color(.sRGB, red: 17 / 255, green: 17 / 255, blue: 19 / 255, opacity: 1) : C.volt)
         } dynamicIsland: { context in
-            LiveTheme.set(context.state)
+            LiveTheme.set(context.state, light: false)                 // the Island is always dark
             let x = Shown(s: context.state, stale: context.isStale)
             return DynamicIsland {
                 // Expanded (long-press): the same two panes as the Lock Screen, full width.
@@ -228,27 +300,34 @@ private func goal(_ s: S) -> String {
 
 private func pill(_ t: String, filled: Bool, height: CGFloat = 22) -> some View {
     Text(t).font(.system(size: 10, weight: .heavy))
-        .foregroundStyle(filled ? C.onVolt : C.volt)
+        .foregroundStyle(filled ? C.onVolt : C.acc)
         .lineLimit(1).minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity).frame(height: height)
         .background(Capsule().fill(filled ? C.volt : Color.clear))
-        .overlay(Capsule().stroke(C.volt, lineWidth: filled ? 0 : 1))
+        .overlay(Capsule().stroke(C.stroke, lineWidth: filled ? 0 : 1))
 }
 
 // MARK: - Lock Screen card
 
 private struct LiveCard: View {
     let x: Shown
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
-        GeometryReader { g in
+        var y = x
+        y.light = x.s.light ?? (scheme == .light)          // System: the Lock Screen's look
+        let shown = y
+        let _ = shown.usePalette()
+        let bg = C.card
+        return GeometryReader { g in
             HStack(spacing: 10) {
-                LeftPane(x: x.sized(g.size)).frame(width: 104)
-                RightPanel(x: x.sized(g.size))
+                LeftPane(x: shown.sized(g.size)).frame(width: 104)
+                RightPanel(x: shown.sized(g.size))
             }
             .coordinateSpace(name: "card")
         }
         .padding(12)
         .frame(height: 160)
+        .background(bg)
     }
 }
 
@@ -259,14 +338,15 @@ private struct LeftPane: View {
     private var s: S { x.s }
 
     var body: some View {
+        let _ = x.usePalette()
         VStack(spacing: 4) {
             VStack(spacing: 1) {
-                Text(s.exercise).font(.system(size: 12, weight: .heavy)).foregroundStyle(.white)
+                Text(s.exercise).font(.system(size: 12, weight: .heavy)).foregroundStyle(C.text)
                     .lineLimit(1).minimumScaleFactor(0.65)
                 Text(x.stage == .done ? "ALL SETS DONE" : "SET \(s.setNumber) OF \(s.setCount)")
                     .font(.system(size: 7.5, weight: .heavy)).tracking(0.8).foregroundStyle(C.mute)
                 Text(goal(s)).font(.system(size: 12, weight: .heavy, design: .rounded))
-                    .foregroundStyle(C.volt).lineLimit(1).minimumScaleFactor(0.65)
+                    .foregroundStyle(C.acc).lineLimit(1).minimumScaleFactor(0.65)
             }
             stage
             (Text(Image(systemName: "stopwatch")) + Text(" ") + Text(s.startedAt, style: .timer) + Text(" total"))
@@ -288,7 +368,7 @@ private struct LeftPane: View {
                         instant(LiveRestPlus30Intent(), x,
                                 face: { on in pill(on ? "✓ +30s" : "+30s", filled: on, height: 20) },
                                 result: { EmptyView() })
-                        instant(LiveSkipRestIntent(), x,
+                        instant(LiveSkipRestIntent(), x, live: x.stage == .resting,
                                 face: { on in pill("Skip", filled: on, height: 20) },
                                 result: { CardPreview(card: x.card, left: x.afterSkip()) })
                     }
@@ -296,7 +376,7 @@ private struct LeftPane: View {
             }
         case .ready:
             VStack(spacing: 4) {
-                instant(LiveStartSetIntent(), x, face: { _ in
+                instant(LiveStartSetIntent(), x, live: x.stage == .ready, face: { _ in
                         VStack(spacing: 2) {
                             Image(systemName: "play.fill").font(.system(size: 14, weight: .heavy))
                             Text("Start set \(s.setNumber)").font(.system(size: 12, weight: .heavy))
@@ -312,27 +392,31 @@ private struct LeftPane: View {
             VStack(spacing: 4) {
                 VStack(spacing: 0) {
                     Text(s.logNeeded ? "SET \(s.setNumber) DONE" : "SET \(s.setNumber) · LIFTING")
-                        .font(.system(size: 7, weight: .heavy)).tracking(0.8).foregroundStyle(C.volt)
+                        .font(.system(size: 7, weight: .heavy)).tracking(0.8).foregroundStyle(C.acc)
                     if x.frozen && !s.logNeeded {
                         Text("0:00").font(.system(size: 22, weight: .heavy, design: .rounded))
-                            .monospacedDigit().foregroundStyle(.white)
+                            .monospacedDigit().foregroundStyle(C.text)
                     } else if let st = s.setStart, !s.logNeeded {
                         Text(st, style: .timer).font(.system(size: 22, weight: .heavy, design: .rounded))
-                            .monospacedDigit().foregroundStyle(.white)
+                            .monospacedDigit().foregroundStyle(C.text)
                     } else {
-                        Image(systemName: "checkmark").font(.system(size: 20, weight: .heavy)).foregroundStyle(.white)
+                        Image(systemName: "checkmark").font(.system(size: 20, weight: .heavy)).foregroundStyle(C.text)
                     }
                 }
                 .frame(maxWidth: .infinity).frame(height: 52)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.black))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.volt, lineWidth: 1.5))
-                instant(LiveLogOpenIntent(), x,
-                        face: { _ in pill("✓ Log set", filled: true, height: 20) },
-                        result: { CardPreview(card: x.card, right: x.afterOpenEditor()) })
+                .background(RoundedRectangle(cornerRadius: 12).fill(C.tile))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.stroke, lineWidth: 1.5))
+                if x.editing {
+                    pill("Logging…", filled: false, height: 20)          // open already: a label, not a button
+                } else {
+                    instant(LiveLogOpenIntent(), x, live: !x.editing,
+                            face: { _ in pill("✓ Log set", filled: true, height: 20) },
+                            result: { CardPreview(card: x.card, right: x.afterOpenEditor()) })
+                }
             }
         case .done:
             VStack(spacing: 4) {
-                Image(systemName: "checkmark.seal.fill").font(.system(size: 26)).foregroundStyle(C.volt)
+                Image(systemName: "checkmark.seal.fill").font(.system(size: 26)).foregroundStyle(C.acc)
                     .frame(height: 52)
                 Text("Finish in the app").font(.system(size: 8, weight: .bold)).foregroundStyle(C.mute).frame(height: 20)
             }
@@ -411,10 +495,10 @@ private struct RestBorder: View {
             start.addingTimeInterval(total * Double(ps[...i].reduce(0) { $0 + $1.length } / perimeter))
         }
         ZStack {
-            RoundedRectangle(cornerRadius: radius).fill(Color.black)
+            RoundedRectangle(cornerRadius: radius).fill(C.tile)
             // Grey outline: the shape that stays.
             RoundedRectangle(cornerRadius: radius).inset(by: line / 2)
-                .stroke(Color(white: 0.30), lineWidth: line)
+                .stroke(C.track, lineWidth: line)
             ZStack {
                 ForEach(ps.indices, id: \.self) { i in
                     bar(ps[i], from: cuts[i], to: cuts[i + 1])
@@ -427,7 +511,7 @@ private struct RestBorder: View {
             VStack(spacing: 0) {
                 Text(timerInterval: start...end, countsDown: true)
                     .font(.system(size: 20, weight: .heavy, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(.white).multilineTextAlignment(.center)
+                    .foregroundStyle(C.text).multilineTextAlignment(.center)
                 Text("REST").font(.system(size: 7, weight: .heavy)).tracking(1).foregroundStyle(C.mute)
             }
             .frame(width: w - 16)
@@ -448,7 +532,7 @@ private struct RestBorder: View {
             EmptyView()
         } currentValueLabel: { EmptyView() }
         .progressViewStyle(.linear)
-        .tint(C.volt)
+        .tint(C.stroke)
         .frame(width: l + 2 * overhang)
         .scaleEffect(x: 1, y: 3.5)                       // much thicker than the outline; the clip trims it
         .rotationEffect(.radians(Double(angle)))
@@ -469,8 +553,9 @@ private struct RightPane: View {
     private var s: S { x.s }
 
     var body: some View {
+        let _ = x.usePalette()
         if x.editing {
-            LogEditor(x: x)
+            LogEditor(x: x).id("editor-\(x.s.editSet)")
         } else {
             // The data on top, the selector along the bottom. Each icon is an on/off switch
             // whose "on" look draws its view over the data area — iOS shows that the moment
@@ -559,7 +644,7 @@ private struct ViewContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
-                Text(view.title).font(.system(size: 8, weight: .heavy)).tracking(1.2).foregroundStyle(C.volt)
+                head(view.title)
                 if s.afterSet && view == s.view {
                     Text("AFTER SET").font(.system(size: 6.5, weight: .heavy)).foregroundStyle(C.onVolt)
                         .padding(.horizontal, 4).padding(.vertical, 1).background(Capsule().fill(C.volt))
@@ -587,10 +672,11 @@ private struct ViewContent: View {
 private struct RightPanel: View {
     let x: Shown
     var body: some View {
+        let _ = x.usePalette()
         RightPane(x: x)
             .padding(6)
             .background(RoundedRectangle(cornerRadius: 14).fill(C.panel))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.volt, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.stroke, lineWidth: 1))
     }
 }
 
@@ -603,7 +689,7 @@ private struct ViewBody: View {
     var body: some View {
         switch view ?? s.view {
         case .heartRate: heartRate
-        case .speed:     bars(s.speeds, format: { String(format: "%.2f", $0) }, color: C.volt,
+        case .speed:     bars(s.speeds, format: { String(format: "%.2f", $0) }, color: C.stroke,
                               footer: "M/S" + ([s.speedLoss.map { " · −\($0)%" }, s.effort.map { " · \($0)" }].compactMap { $0 }.joined()))
         case .travel:    bars(s.travel, format: { num($0) }, color: C.blue,
                               footer: s.travelUnit.uppercased()
@@ -626,10 +712,10 @@ private struct ViewBody: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(s.hr.map(String.init) ?? "—").font(.system(size: 22, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white).monospacedDigit()
+                    .foregroundStyle(C.text).monospacedDigit()
                 Text("BPM").font(.system(size: 7, weight: .heavy)).foregroundStyle(C.mute)
                 if let z = s.hrZone, let p = s.hrPct {
-                    Text("Z\(z) · \(p)%").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.red)
+                    Text("Z\(z) · \(p)%").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.redText)
                 }
                 Spacer(minLength: 0)
                 if let pk = s.hrPeak {
@@ -652,7 +738,7 @@ private struct ViewBody: View {
             HStack(alignment: .bottom, spacing: 3) {
                 ForEach(Array(values.enumerated()), id: \.offset) { i, v in
                     VStack(spacing: 1) {
-                        Text(format(v)).font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
+                        Text(format(v)).font(.system(size: 7, weight: .bold)).foregroundStyle(C.text)
                             .lineLimit(1).minimumScaleFactor(0.5)
                         RoundedRectangle(cornerRadius: 2).fill(color.opacity(i == values.count - 1 ? 1 : 0.7))
                             .frame(height: max(3, 32 * CGFloat(v / mx)))
@@ -673,7 +759,7 @@ private struct ViewBody: View {
             HStack(alignment: .bottom, spacing: 4) {
                 ForEach(s.ecc.indices, id: \.self) { i in
                     VStack(spacing: 0) {
-                        seg(s.top[i], mx, C.mute); seg(s.con[i], mx, C.volt)
+                        seg(s.top[i], mx, C.mute); seg(s.con[i], mx, C.stroke)
                         seg(s.pause[i], mx, C.orange); seg(s.ecc[i], mx, C.blue)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 2))
@@ -682,9 +768,9 @@ private struct ViewBody: View {
             }
             .frame(maxHeight: .infinity, alignment: .bottom)
             HStack(spacing: 5) {
-                key("Down", C.blue); key("Pause", C.orange); key("Up", C.volt); key("Top", C.mute)
+                key("Down", C.blue); key("Pause", C.orange); key("Up", C.stroke); key("Top", C.mute)
                 Spacer(minLength: 0)
-                if let t = s.tempo { Text(t).font(.system(size: 8, weight: .heavy)).foregroundStyle(.white) }
+                if let t = s.tempo { Text(t).font(.system(size: 8, weight: .heavy)).foregroundStyle(C.text) }
             }
         }
     }
@@ -704,18 +790,18 @@ private struct ViewBody: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(s.pauseAvg.map { String(format: "%.1fs", $0) } ?? "—")
-                    .font(.system(size: 22, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                    .font(.system(size: 22, weight: .heavy, design: .rounded)).foregroundStyle(C.text)
                 VStack(alignment: .leading, spacing: 0) {
                     Text("avg pause").font(.system(size: 8, weight: .bold)).foregroundStyle(C.mute)
-                    if let t = s.pauseTarget { Text("target \(num(t))s").font(.system(size: 8, weight: .bold)).foregroundStyle(C.volt) }
+                    if let t = s.pauseTarget { Text("target \(num(t))s").font(.system(size: 8, weight: .bold)).foregroundStyle(C.acc) }
                 }
             }
             HStack(spacing: 3) {
                 ForEach(Array(s.pause.enumerated()), id: \.offset) { _, p in
                     let hit = s.pauseTarget.map { p >= $0 - 0.2 } ?? (p > 0)
                     VStack(spacing: 2) {
-                        Circle().fill(hit ? C.volt : C.orange).frame(width: 10, height: 10)
-                        Text(String(format: "%.1f", p)).font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
+                        Circle().fill(hit ? C.stroke : C.orange).frame(width: 10, height: 10)
+                        Text(String(format: "%.1f", p)).font(.system(size: 7, weight: .bold)).foregroundStyle(C.text)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -732,16 +818,16 @@ private struct ViewBody: View {
                     Text("\(r.tReps) × \(num(r.tWeight))").font(.system(size: 9)).foregroundStyle(C.mute)
                     Spacer(minLength: 2)
                     if let reps = r.reps {
-                        Text("\(reps) × \(num(r.weight ?? r.tWeight))").font(.system(size: 9, weight: .heavy)).foregroundStyle(.white)
-                        Text(r.rpe.map { "@\(num($0))" } ?? "").font(.system(size: 8, weight: .heavy)).foregroundStyle(C.volt)
+                        Text("\(reps) × \(num(r.weight ?? r.tWeight))").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.text)
+                        Text(r.rpe.map { "@\(num($0))" } ?? "").font(.system(size: 8, weight: .heavy)).foregroundStyle(C.acc)
                             .frame(width: 22, alignment: .trailing)
                     } else {
                         Text(r.current ? "NOW" : "—").font(.system(size: 8, weight: .heavy))
-                            .foregroundStyle(r.current ? C.volt : C.mute)
+                            .foregroundStyle(r.current ? C.acc : C.mute)
                     }
                 }
                 .padding(.horizontal, 5).frame(height: 13)
-                .background(RoundedRectangle(cornerRadius: 4).fill(r.current ? C.volt.opacity(0.14) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: 4).fill(r.current ? C.highlight : Color.clear))
             }
         }
     }
@@ -756,17 +842,17 @@ private struct ViewBody: View {
             GeometryReader { g in
                 ZStack(alignment: .leading) {
                     Capsule().fill(C.dim)
-                    Capsule().fill(C.volt).frame(width: g.size.width * CGFloat(s.setsTotal > 0 ? Double(s.setsDone) / Double(s.setsTotal) : 0))
+                    Capsule().fill(C.stroke).frame(width: g.size.width * CGFloat(s.setsTotal > 0 ? Double(s.setsDone) / Double(s.setsTotal) : 0))
                 }
             }
             .frame(height: 5)
-            if let u = s.upNext { Text("Up next: \(u)").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.volt).lineLimit(1) }
+            if let u = s.upNext { Text("Up next: \(u)").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.acc).lineLimit(1) }
         }
     }
 
     private func stat(_ v: String, _ l: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(v).font(.system(size: 15, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+            Text(v).font(.system(size: 15, weight: .heavy, design: .rounded)).foregroundStyle(C.text)
                 .lineLimit(1).minimumScaleFactor(0.6)
             Text(l).font(.system(size: 6.5, weight: .heavy)).tracking(0.4).foregroundStyle(C.mute).lineLimit(1)
         }
@@ -838,67 +924,127 @@ private struct HRGraph: View {
     }
 }
 
-// MARK: - Log a set: Reps · Weight · RPE, each with −/+ straddling the field's edges
+// MARK: - Log a set: three single-tap screens — Reps · Weight · RPE (the RPE tap saves)
+// All three screens are always in the pane, stacked at the same spot; the one you're on is shown,
+// the others are hidden and can't be tapped. Nothing is swapped in place — when the card swaps a
+// region, iOS crossfades the pixels while the old controls still own the touch area for a moment,
+// so what you saw and what you tapped came apart. Hidden layers can't do that.
 
 private struct LogEditor: View {
     let x: Shown
     private var s: S { x.s }
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 5) {
-                Text("LOG SET \(s.editSet)").font(.system(size: 8, weight: .heavy)).tracking(1.2).foregroundStyle(C.volt)
-                Spacer(minLength: 0)
-                if s.editorAuto, let u = s.editorUntil, u > Date() {
-                    (Text("closes in ") + Text(timerInterval: Date()...u, countsDown: true))
-                        .font(.system(size: 8, weight: .bold)).monospacedDigit().foregroundStyle(C.mute)
-                }
-            }
-            HStack(spacing: 3) {
-                field("REPS", "\(s.dReps)", minus: LiveRepsDownIntent(), plus: LiveRepsUpIntent())
-                field(s.unit.uppercased(), num(s.dWeight), minus: LiveWeightDownIntent(), plus: LiveWeightUpIntent())
-                field("RPE", num(s.dRPE), minus: LiveRPEDownIntent(), plus: LiveRPEUpIntent())
-            }
-            Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                instant(LiveLogCancelIntent(), x,
-                        face: { on in pill("Cancel", filled: on) },
-                        result: { CardPreview(card: x.card, right: x.afterCancel()) })
-                instant(LiveLogCommitIntent(), x,
-                        face: { _ in pill("✓ Save set \(s.editSet)", filled: true) },
-                        result: { CardPreview(card: x.card, left: x.afterSave(), right: x.afterSave()) })
-            }
-        }
-    }
-
-    /// 70 wide: a 50-wide value box with 20-wide −/+ centred on its edges, leaving ~30 of
-    /// clear space for the number (enough for "275" or "102.5").
-    private func field<M: AppIntent, P: AppIntent>(_ label: String, _ value: String, minus: M, plus: P) -> some View {
-        VStack(spacing: 3) {
-            Text(label).font(.system(size: 7, weight: .heavy)).tracking(1).foregroundStyle(C.mute)
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(C.dim)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.line, lineWidth: 1))
-                    .frame(width: 50, height: 32)
-                Text(value).font(.system(size: 15, weight: .heavy, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6).frame(width: 30)
-                HStack(spacing: 0) {
-                    stepper("minus", minus)
+        let _ = x.usePalette()
+        let step = s.editStep ?? 0
+        GeometryReader { g in
+            let w = g.size.width
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    head(step == 0 ? "REPS" : step == 1 ? "WEIGHT · \(s.unit.uppercased())" : "RPE")
+                    if step > 0 {
+                        Text("\(s.dReps) reps" + (step > 1 ? "  ·  \(num(s.dWeight)) \(s.unit)" : ""))
+                            .font(.system(size: 9, weight: .heavy, design: .rounded)).monospacedDigit()
+                            .foregroundStyle(C.text).lineLimit(1).minimumScaleFactor(0.7)
+                    }
                     Spacer(minLength: 0)
-                    stepper("plus", plus)
+                    Text("SET \(s.editSet)").font(.system(size: 7.5, weight: .heavy)).tracking(0.8).foregroundStyle(C.mute)
+                    instant(LiveLogCancelIntent(), x, live: x.editing,
+                            face: { _ in
+                                Image(systemName: "xmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(C.mute)
+                                    .frame(width: 18, height: 18).background(Circle().fill(C.dim))
+                            },
+                            result: { CardPreview(card: x.card, right: x.afterCancel()) })
                 }
-                .frame(width: 70)
+                .frame(height: 18)
+                let gridH = max(g.size.height - 24, 0)
+                ZStack {
+                    layer(step == 0) { reps(width: w, height: gridH, active: step == 0) }
+                    layer(step == 1) { weight(width: w, height: gridH, active: step == 1) }
+                    layer(step == 2) { rpe(width: w, height: gridH, active: step == 2) }
+                }
+                .frame(width: w, height: gridH)
             }
-            .frame(width: 70, height: 32)
         }
-        .frame(maxWidth: .infinity)
     }
 
-    private func stepper<I: AppIntent>(_ icon: String, _ intent: I) -> some View {
-        Button(intent: intent) {
-            Image(systemName: icon).font(.system(size: 9, weight: .heavy)).foregroundStyle(C.onVolt)
-                .frame(width: 20, height: 20).background(Circle().fill(C.volt))
+    /// A screen in the stack: shown and tappable only while it's the one you're on.
+    private func layer<V: View>(_ on: Bool, @ViewBuilder _ v: () -> V) -> some View {
+        v().opacity(on ? 1 : 0).allowsHitTesting(on).zIndex(on ? 1 : 0)
+    }
+
+    /// Two rows of five (1–10, or 11–20); a slim column at the right flips between them.
+    private func reps(width: CGFloat, height: CGFloat, active: Bool) -> some View {
+        let page = s.repsPage ?? 0, base = page * 10
+        let gap: CGFloat = 4, flipW: CGFloat = 30
+        let chipW = (width - flipW - gap * 5) / 5, chipH = (height - gap) / 2
+        return HStack(spacing: gap) {
+            grid((1...10).map { base + $0 }, columns: 5, w: chipW, h: chipH, gap: gap) { n in
+                instant(LivePickRepsIntent(reps: n), x, live: active,
+                        face: { _ in chip("\(n)", on: n == s.dReps, w: chipW, h: chipH, size: 14) },
+                        result: { CardPreview(card: x.card, right: x.afterReps(n)) })
+            }
+            instant(LiveRepsPageIntent(), x, live: active,
+                    face: { _ in
+                        VStack(spacing: 2) {
+                            Image(systemName: page == 0 ? "chevron.right" : "chevron.left").font(.system(size: 9, weight: .heavy))
+                            Text(page == 0 ? "11+" : "1–10").font(.system(size: 7, weight: .heavy))
+                        }
+                        .foregroundStyle(C.acc)
+                        .frame(width: flipW, height: height)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(C.dim))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.line, lineWidth: 1))
+                    },
+                    result: { CardPreview(card: x.card, right: x.afterRepsPage()) })
         }
-        .buttonStyle(.plain)
+        .frame(width: width, height: height)
+    }
+
+    /// Two rows of five around the weight so far, in 5s (2.5s in kg).
+    private func weight(width: CGFloat, height: CGFloat, active: Bool) -> some View {
+        let inc: Double = s.unit == "kg" ? 2.5 : 5
+        let gap: CGFloat = 4
+        let lowest = max(0, s.dWeight - 5 * inc)
+        let values = (0..<10).map { lowest + Double($0) * inc }
+        let chipW = (width - gap * 4) / 5, chipH = (height - gap) / 2
+        return grid(values, columns: 5, w: chipW, h: chipH, gap: gap) { v in
+            instant(LivePickWeightIntent(weight: v), x, live: active,
+                    face: { _ in chip(num(v), on: abs(v - s.dWeight) < 0.01, w: chipW, h: chipH, size: 13) },
+                    result: { CardPreview(card: x.card, right: x.afterWeight(v)) })
+        }
+        .frame(width: width, height: height)
+    }
+
+    /// 1–10 in two rows of five; the tap saves the set.
+    private func rpe(width: CGFloat, height: CGFloat, active: Bool) -> some View {
+        let gap: CGFloat = 4
+        let chipW = (width - gap * 4) / 5, chipH = (height - gap) / 2
+        return grid((1...10).map { Double($0) }, columns: 5, w: chipW, h: chipH, gap: gap) { r in
+            instant(LivePickRPEIntent(rpe: r), x, live: active,
+                    face: { _ in chip(num(r), on: abs(r - s.dRPE) < 0.01, w: chipW, h: chipH, size: 14) },
+                    result: { CardPreview(card: x.card, left: x.afterRPE(r), right: x.afterRPE(r)) })
+        }
+        .frame(width: width, height: height)
+    }
+
+    private func grid<T: Hashable, V: View>(_ values: [T], columns: Int, w: CGFloat, h: CGFloat, gap: CGFloat,
+                                            @ViewBuilder cell: @escaping (T) -> V) -> some View {
+        let rows = stride(from: 0, to: values.count, by: columns).map { Array(values[$0..<min($0 + columns, values.count)]) }
+        return VStack(spacing: gap) {
+            ForEach(rows.indices, id: \.self) { r in
+                HStack(spacing: gap) {
+                    ForEach(rows[r], id: \.self) { v in cell(v) }
+                    if rows[r].count < columns { Spacer(minLength: 0) }
+                }
+            }
+        }
+    }
+
+    private func chip(_ t: String, on: Bool, w: CGFloat, h: CGFloat, size: CGFloat) -> some View {
+        Text(t).font(.system(size: size, weight: .heavy, design: .rounded)).monospacedDigit()
+            .foregroundStyle(on ? C.onVolt : C.text).lineLimit(1).minimumScaleFactor(0.6)
+            .frame(width: w, height: h)
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? C.volt : C.dim))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.clear : C.line, lineWidth: 1))
     }
 }

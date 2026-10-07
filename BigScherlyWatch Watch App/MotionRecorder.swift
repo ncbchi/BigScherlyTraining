@@ -46,6 +46,12 @@ final class MotionRecorder: ObservableObject {
     @Published private(set) var pauseStart: Date? = nil
     @Published private(set) var pauseTarget: Double = 0       // 0 = off
     @Published private(set) var pauseReached = false
+    /// The phone's card says a set is under way (WatchState keeps this in step with the card).
+    /// Outside a set, a still wrist after lowering your arm isn't a "bottom pause": no HOLD/GO
+    /// screen and no GO tap. (Setup and a set the Watch has already started still count.)
+    var setActive = false {
+        didSet { if !setActive && liveRepCount == nil && !calibrating { applyPause(bottomAt: nil, reached: false) } }
+    }
     /// From the phone (Settings ▸ Notifications ▸ Watch buzzes).
     var haptics = WatchHaptics(pauseStrength: 1, pauseTicks: false, slowRepOn: true, slowRepPct: 20, slowRepPattern: 0)
     /// Every rep so far in the set in progress (speed, lowering, pause, lifting, travel) —
@@ -191,7 +197,9 @@ final class MotionRecorder: ObservableObject {
     }
 
     private func applyPause(bottomAt: TimeInterval?, reached: Bool) {
-        guard let bottomAt else { stopBuildUp(); pauseStart = nil; pauseReached = false; return }
+        guard let bottomAt, calibrating || setActive || liveRepCount != nil else {
+            stopBuildUp(); pauseStart = nil; pauseReached = false; return
+        }
         let start = Date(timeIntervalSince1970: bottomAt)
         let isNew = pauseStart != start
         pauseStart = start

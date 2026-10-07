@@ -39,7 +39,9 @@ final class WatchState: NSObject, ObservableObject {
 
     // MARK: - The live card (mirrors the phone's: same data as the Lock Screen card)
 
-    @Published private(set) var card: WatchCard? = nil
+    @Published private(set) var card: WatchCard? = nil {
+        didSet { MotionRecorder.shared.setActive = card?.stage == "lifting" }   // pause GO only during a set
+    }
     /// The last set's coach note, during rest.
     @Published private(set) var cardNote: String? = nil
     /// Reps as they arrive, from the phone (its Demo Mode); the Watch's own reps are `liveSpeeds`.
@@ -1001,7 +1003,7 @@ private extension UInt32 {
 /// Which build of the Watch app this is — shown on Home and reported to the phone, so a Watch
 /// that missed an update is obvious instead of a mystery. Bump with each Watch delivery.
 enum WatchBuild {
-    static let tag = "2026-10-06.10"
+    static let tag = "2026-10-07.1"
 }
 
 // MARK: - The live link
