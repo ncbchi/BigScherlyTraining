@@ -9,7 +9,6 @@ struct WorkoutsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("bst_units") private var units = "lb"
     @State private var selected: Workout?          // completed → summary
-    @State private var session: Workout?           // planned → live session
     @State private var showPreWorkoutPrompt = false
     @State private var preWorkoutDue: [Supplement] = []
     // Remembers the day we last showed the pre-workout drawer, so it appears at most
@@ -66,12 +65,12 @@ struct WorkoutsView: View {
             }
         }
         .sheet(item: $selected) { w in WorkoutDetailView(workout: w) }
-        .fullScreenCover(item: $session) { w in WorkoutSessionView(workoutId: w.id) }
         .sheet(isPresented: $showPreWorkoutPrompt) {
             PreWorkoutSupplementPrompt(supplements: preWorkoutDue)
         }
         // Fires only when a logged set earns a throttled PR (see ProgressEngine).
-        .sheet(item: $store.prToCelebrate) { pr in PRCelebrationView(pr: pr) }
+        .sheet(item: Binding(get: { (store.sessionWorkoutId == nil || store.sessionMinimized) ? store.prToCelebrate : nil },
+                             set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr) }
     }
 
     // MARK: Rows
@@ -81,7 +80,7 @@ struct WorkoutsView: View {
         let isToday = cal.isDateInToday(w.date)
         let sets = w.exercises.reduce(0) { $0 + $1.sets.count }
         let logged = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
-        return Button { session = w } label: {
+        return Button { store.openSession(w.id) } label: {
             HStack(alignment: .top, spacing: 14) {
                 VStack(spacing: 0) {
                     Text(w.date.formatted(.dateTime.weekday(.abbreviated)).uppercased())

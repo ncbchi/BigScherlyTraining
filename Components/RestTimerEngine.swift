@@ -7,25 +7,15 @@ import Combine
 
 // MARK: - Rest Timer Engine
 // Handles the parts that must work even when the app is backgrounded:
-//  • Foreground: plays the bell through AVAudioPlayer, ducking any music.
+//  • Foreground: plays your chosen sound (Settings ▸ Notifications) through SoundPlayer.
 //  • Background/locked: a scheduled local notification fires the bell on time.
 //  • On return: the countdown recomputes from a saved end-time so it's always accurate.
 final class RestTimerEngine: ObservableObject {
     static let shared = RestTimerEngine()
 
-    private var player: AVAudioPlayer?
     private let notifId = "bst.rest.timer.bell"
 
     private init() { }
-
-    private var audioPrepared = false
-    private func prepareAudioIfNeeded() {
-        guard !audioPrepared else { return }
-        audioPrepared = true
-        guard let url = Bundle.main.url(forResource: "bell", withExtension: "mp3") else { return }
-        player = try? AVAudioPlayer(contentsOf: url)
-        player?.prepareToPlay()
-    }
 
     // Ask once for notification permission (needed for the background bell).
     func requestPermissionIfNeeded() {

@@ -17,8 +17,13 @@ struct WorkoutSessionView: View {
     @ObservedObject private var setup = SetupEngine.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("bst_units") private var units = "lb"
+    @AppStorage("bst_hand") private var hand = "right"      // the dock chevron sits on the thumb side
 
     let workoutId: String
+    /// Set when the session is hosted as a floating card: the chevron docks it,
+    /// finishing closes it. Unset (e.g. a preview sheet) falls back to dismiss().
+    var onMinimize: (() -> Void)? = nil
+    var onClose: (() -> Void)? = nil
 
     @State private var openExercises: Set<String> = []
     @State private var editingSetId: String? = nil
@@ -59,6 +64,10 @@ struct WorkoutSessionView: View {
                     .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 30)
                 }
                 .background(Brand.bg.ignoresSafeArea())
+                // Already at the top and still pulling down: dock the card.
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                    if y < -80, onMinimize != nil { minimise() }
+                }
                 // Scrolled past the card: its status bar stays pinned. Tap it to scroll back up.
                 .overlay(alignment: .top) {
                     if cardHidden {
@@ -80,8 +89,8 @@ struct WorkoutSessionView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .keyboardDoneButton()
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { dismiss() } label: {
+                    ToolbarItem(placement: hand == "left" ? .topBarLeading : .topBarTrailing) {
+                        Button { minimise() } label: {
                             Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).foregroundColor(Brand.text)
                         }
                         .accessibilityLabel("Minimise workout")
@@ -93,13 +102,24 @@ struct WorkoutSessionView: View {
                 .toolbarBackground(Brand.bg, for: .navigationBar)
                 .navigationBarTitleDisplayMode(.inline)
                 .onAppear {
+                    print(String(format: "[Open] card appeared · %.0f ms after tap", Date().timeIntervalSince(AppStore.openTapAt) * 1000))
                     store.activeWorkoutId = w.id
                     if openExercises.isEmpty, let c = currentExercise(w) { openExercises = [c.id] }
                     live.begin(workoutId: w.id)            // starts the Lock Screen Live Activity
                     SetVideoRecorder.shared.screenVisible = true   // set videos only film on this screen
-                    SetupEngine.shared.considerOffering(workout: w)   // first-time Watch setup
+                    // First-time Watch setup — a beat later, once the card has settled, so it
+                    // isn't on the critical path of the card appearing.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        if store.sessionWorkoutId == w.id, !store.sessionMinimized {
+                            SetupEngine.shared.considerOffering(workout: w)
+                        }
+                    }
                     // Settings ▸ Keep screen awake (on unless turned off)
                     UIApplication.shared.isIdleTimerDisabled = UserDefaults.standard.object(forKey: "bst_keep_awake") as? Bool ?? true
+                    print(String(format: "[Open] onAppear finished · %.0f ms after tap", Date().timeIntervalSince(AppStore.openTapAt) * 1000))
+                    DispatchQueue.main.async {
+                        print(String(format: "[Open] main thread free again · %.0f ms after tap", Date().timeIntervalSince(AppStore.openTapAt) * 1000))
+                    }
                 }
                 // A set logged from the Lock Screen moves on to the next exercise here too.
                 .onChange(of: currentExercise(w)?.id) { old, new in
@@ -121,17 +141,11 @@ struct WorkoutSessionView: View {
                         .interactiveDismissDisabled()
                 }
                 .onDisappear {
-                    if store.activeWorkoutId == w.id { store.activeWorkoutId = nil }
+                    // Docked, not closed: the Watch keeps pointing at this workout.
+                    if store.activeWorkoutId == w.id, store.sessionWorkoutId != w.id { store.activeWorkoutId = nil }
                     UIApplication.shared.isIdleTimerDisabled = false
                     SetVideoRecorder.shared.screenVisible = false   // set videos only film on this screen
                     SetupEngine.shared.withdraw(from: .workout)    // offered again when you reopen it
-                }
-                .confirmationDialog("Finish this workout?", isPresented: $confirmFinish, titleVisibility: .visible) {
-                    Button("Finish anyway") { finish(w) }
-                    Button("Keep going", role: .cancel) {}
-                } message: {
-                    let left = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps == nil }.count
-                    Text("\(left) set\(left == 1 ? " is" : "s are") still unlogged.")
                 }
                 .sheet(item: $store.prToCelebrate) { pr in PRCelebrationView(pr: pr) }
             } else {
@@ -140,6 +154,19 @@ struct WorkoutSessionView: View {
             }
         }
         .tint(Brand.volt)
+        // Finish confirmation: the app's own centred card, not a system alert — an
+        // alert takes the accent tint for its buttons, which on a translucent alert
+        // surface isn't readable.
+        .overlay {
+            if confirmFinish, let w = workout {
+                FinishConfirmCard(
+                    left: w.exercises.flatMap { $0.sets }.filter { $0.loggedReps == nil }.count,
+                    keepGoing: { withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { confirmFinish = false } },
+                    finishAnyway: { confirmFinish = false; finish(w) })
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.9), value: confirmFinish)
     }
 
     // MARK: Header
@@ -232,7 +259,46 @@ struct WorkoutSessionView: View {
             store.refreshAwards()
         }
         store.activeWorkoutId = nil
-        dismiss()
+        if let onClose { onClose() } else { dismiss() }
+    }
+
+    private func minimise() {
+        if let onMinimize { onMinimize() } else { dismiss() }
+    }
+}
+
+// MARK: - Finish confirmation (centred card)
+
+private struct FinishConfirmCard: View {
+    let left: Int
+    let keepGoing: () -> Void
+    let finishAnyway: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5).ignoresSafeArea()
+                .onTapGesture { keepGoing() }
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Finish this workout?").font(BrandFont.display(28)).foregroundColor(Brand.text)
+                Text("\(left) set\(left == 1 ? " is" : "s are") still unlogged.")
+                    .font(BrandFont.body(15)).foregroundColor(Brand.text.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button("Keep going") { keepGoing() }
+                        .buttonStyle(DSButtonStyle(kind: .secondary))
+                    Button("Finish anyway") { finishAnyway() }
+                        .buttonStyle(DSButtonStyle(kind: .primary))
+                }
+                .padding(.top, 4)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 24).fill(Brand.card))
+            .overlay(RoundedRectangle(cornerRadius: 24).stroke(Brand.line, lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 30, x: 0, y: 12)
+            .padding(.horizontal, 24)
+        }
+        .accessibilityAddTraits(.isModal)
     }
 }
 
@@ -1249,6 +1315,9 @@ struct LiveCard: View {
 
     var body: some View {
         let _ = live.revision
+        // Built once per redraw and shared by every window — it rescans the workout for
+        // motion data and builds the coach notes, which is too much to do four times over.
+        let ctx = context
         VStack(spacing: 0) {
             LiveStatusBar(workout: workout)
             LinkDiagnosticsStrip()                                   // DIAGNOSTIC (temporary)
@@ -1256,17 +1325,17 @@ struct LiveCard: View {
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     if windows == 1 {
-                        pane(0, compact: false).frame(height: Self.windowHeight)
+                        pane(0, ctx, compact: false).frame(height: Self.windowHeight)
                         dotsRow(0)
                     } else {
+                        pane(0, ctx, compact: true).frame(height: Self.half - 1)
                         dotsRow(0)
-                        pane(0, compact: true).frame(height: Self.half - 1)
                         divider
-                        pane(1, compact: true).frame(height: Self.half)
+                        pane(1, ctx, compact: true).frame(height: Self.half)
                         dotsRow(1)
                         ForEach(2..<windows, id: \.self) { i in
                             divider
-                            pane(i, compact: true).frame(height: Self.half)
+                            pane(i, ctx, compact: true).frame(height: Self.half)
                             dotsRow(i)
                         }
                     }
@@ -1336,8 +1405,8 @@ struct LiveCard: View {
 
     // MARK: A window (swipe left or right to change its metric)
 
-    private func pane(_ i: Int, compact: Bool) -> some View {
-        metricView(shown(i), compact: compact)
+    private func pane(_ i: Int, _ ctx: LiveMetricContext, compact: Bool) -> some View {
+        metricView(shown(i), ctx, compact: compact)
             .padding(.leading, 14).padding(.trailing, 30).padding(.vertical, compact ? 6 : 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
@@ -1348,8 +1417,7 @@ struct LiveCard: View {
             })
     }
 
-    @ViewBuilder private func metricView(_ m: LiveMetric, compact: Bool) -> some View {
-        let ctx = context
+    @ViewBuilder private func metricView(_ m: LiveMetric, _ ctx: LiveMetricContext, compact: Bool) -> some View {
         switch m {
         case .notes: NotesMetric(ctx: ctx, compact: compact)
         case .heartRate:
@@ -1974,5 +2042,331 @@ struct LinkDiagnosticsStrip: View {
             Text(label).font(BrandFont.body(9, .semibold)).opacity(0.8)
         }
         .foregroundColor(c)
+    }
+}
+
+// MARK: - The session card and its dock
+// The card is presented as a full-screen cover from the app shell — its own
+// presentation, so its scrolling and start-up are isolated from the screens
+// underneath and the slide is driven by UIKit. Pull down on its title bar, or pull
+// down once you're already at the top, and it dismisses to a dock at the bottom of
+// the screen. Rest timers, logged sets and the Live Activity live in
+// LiveSessionController, so the card picks up where it was when re-opened.
+
+struct WorkoutSessionCard: View {
+    @EnvironmentObject var store: AppStore
+    @AppStorage("bst_hand") private var hand = "right"
+    let workoutId: String
+
+    @State private var drag: CGFloat = 0
+
+    var body: some View {
+        WorkoutSessionView(workoutId: workoutId,
+                           onMinimize: { store.minimizeSession() },
+                           onClose: { store.closeSession() })
+            .overlay(alignment: .top) { pullDownStrip }
+            .offset(y: drag)
+            .background(Brand.bg.ignoresSafeArea())
+    }
+
+    /// Pull down on the title bar to dock the card. Only this strip takes the drag
+    /// — and not the chevron's corner — so the session's own scrolling is untouched.
+    private var pullDownStrip: some View {
+        Color.clear
+            .frame(height: 54)
+            .contentShape(Rectangle())
+            .padding(hand == "left" ? .leading : .trailing, 66)
+            .gesture(
+                DragGesture(minimumDistance: 14)
+                    .onChanged { v in drag = max(0, v.translation.height) }
+                    .onEnded { v in
+                        if v.translation.height > 110 || v.predictedEndTranslation.height > 320 {
+                            store.minimizeSession()
+                        } else {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { drag = 0 }
+                        }
+                    }
+            )
+    }
+}
+
+/// The docked session: the same status bar and set card the session pins at its top
+/// when you scroll, in a bar at the bottom of the screen. Start a set, log it and
+/// end rest from here; tap or pull up to go back to the card.
+struct WorkoutDock: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var live = LiveSessionController.shared
+    @AppStorage("bst_hand") private var hand = "right"
+    let workoutId: String
+    /// Rest just ran out while you were elsewhere: a strip along the bottom says so,
+    /// and the edge goes volt. `flashOn` is the on-phase of the flash.
+    var alert = false
+    var flashOn = true
+
+    private var workout: Workout? { store.workouts.first { $0.id == workoutId } }
+
+    var body: some View {
+        if let w = workout {
+            VStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    Capsule().fill(Brand.mute.opacity(0.35)).frame(width: 40, height: 5)
+                        .padding(.top, 7)
+                    LiveStatusBar(workout: w)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { store.expandSession() }
+                .gesture(
+                    DragGesture(minimumDistance: 18)
+                        .onEnded { v in if v.translation.height < -24 { store.expandSession() } }
+                )
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Back to the workout")
+
+                Rectangle().fill(Brand.line).frame(height: 1)
+                setRow(w)
+                if alert { restOverStrip(w) }
+            }
+            .background(Brand.card)
+            .clipShape(RoundedRectangle(cornerRadius: 26))
+            .overlay(RoundedRectangle(cornerRadius: 26)
+                .stroke(alert ? Brand.volt.opacity(flashOn ? 1 : 0.45) : Brand.line, lineWidth: alert ? 1.5 : 1))
+            .shadow(color: .black.opacity(0.65), radius: 18, x: 0, y: 10)
+            .shadow(color: Brand.volt.opacity(alert && flashOn ? 0.35 : 0), radius: 10)
+            .padding(.horizontal, 12).padding(.bottom, 16)
+        }
+    }
+
+    private func restOverStrip(_ w: Workout) -> some View {
+        let next = LiveCardData.nextSet(w)
+        let which = next.map { "SET \($0.2) OF \($0.0.sets.count) IS UP" } ?? "NEXT SET IS UP"
+        return HStack(spacing: 8) {
+            Image(systemName: "timer").font(.system(size: 13, weight: .heavy))
+            Text("REST'S OVER · \(which)").font(BrandFont.body(11, .heavy)).tracking(1.4).lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength: 6)
+            if let next { Text(next.0.name).font(BrandFont.body(11, .bold)).opacity(0.75).lineLimit(1) }
+        }
+        .foregroundColor(Brand.onVolt)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(Brand.volt.opacity(flashOn ? 1 : 0.35))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// The compact set card drops its pills to stay slim, so rest keeps a Skip of
+    /// its own here — on the thumb side.
+    private func setRow(_ w: Workout) -> some View {
+        let _ = live.revision
+        let resting = live.stage == .resting
+        return HStack(spacing: 10) {
+            if resting && hand == "left" { skip.padding(.leading, 14) }
+            LiveSetCard(workout: w, compact: true)
+            if resting && hand != "left" { skip.padding(.trailing, 14) }
+        }
+    }
+
+    private var skip: some View {
+        Button { withAnimation(.spring(response: 0.4)) { live.endRest() } } label: {
+            Text("Skip").font(BrandFont.body(12, .heavy))
+                .foregroundColor(Brand.onVolt)
+                .padding(.horizontal, 12).frame(height: 28)
+                .background(Capsule().fill(Brand.volt))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("End rest")
+    }
+}
+
+
+// MARK: - Dock host: tuck it away, and bring it back when rest runs out
+// Swipe the dock toward the back-swipe edge and it slides off-screen, leaving a
+// volt tab on that edge with the live number (rest countdown, or the set clock).
+// Tap or pull the tab and it comes back. When a rest timer runs out while you're
+// elsewhere, the dock returns on its own with the rest-over strip flashing, and
+// the rest-end sound/haptic fires here — the full card isn't on screen to do it.
+
+struct WorkoutDockHost: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var live = LiveSessionController.shared
+    @AppStorage("bst_hand") private var hand = "right"
+    let workoutId: String
+
+    @State private var drag: CGFloat = 0
+    @State private var width: CGFloat = 400
+    @State private var dockHeight: CGFloat = 112
+    @State private var alert = false
+    @State private var flashOn = true
+    @State private var alertTask: Task<Void, Never>? = nil
+    // Ten seconds left while tucked: the tab flashes accent ⇄ background and reads "10s".
+    @State private var tabWarn = false
+    @State private var tabFlashOn = true
+    @State private var warnTask: Task<Void, Never>? = nil
+
+    private var leftHanded: Bool { hand == "left" }
+    private var tucked: Bool { store.dockTucked }
+    /// Tucks toward the leading edge for a right-handed grip (the back-swipe edge), trailing for left-handed.
+    private var tuckSign: CGFloat { leftHanded ? 1 : -1 }
+    private var workout: Workout? { store.workouts.first { $0.id == workoutId } }
+
+    var body: some View {
+        ZStack(alignment: leftHanded ? .bottomTrailing : .bottomLeading) {
+            WorkoutDock(workoutId: workoutId, alert: alert, flashOn: flashOn)
+                .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    if h > 1 { dockHeight = h }
+                }
+                .offset(x: tucked ? tuckSign * (width + 40) : drag)
+                .allowsHitTesting(!tucked)
+                .simultaneousGesture(tuckGesture)
+
+            if tucked, let w = workout {
+                DockTab(workout: w, leading: !leftHanded, warning: tabWarn, flashOn: tabFlashOn)
+                    .padding(.bottom, max(16, 16 + (dockHeight - 16 - 92) / 2))
+                    .transition(.move(edge: leftHanded ? .trailing : .leading).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
+            if w > 1 { width = w }
+        }
+        .onChange(of: live.stage) { old, new in
+            // Rest ran its course (a skip clears restEnd first). The full card fires the
+            // bell when it's open; while docked, that's this host's job.
+            guard old == .resting, new != .resting, live.restEnd != nil, store.sessionMinimized else { return }
+            restRanOut()
+        }
+        // Opening the menu tucks the dock out of the way. It stays tucked until you pull
+        // it back (or a rest runs out, which brings it back on its own).
+        .onChange(of: store.showTray) { _, open in
+            if open, !store.dockTucked { store.tuckDock() }
+        }
+        // The ten-second warning also only fires from the full card; while docked it's ours.
+        .onChange(of: live.restEnd, initial: true) { _, end in scheduleWarning(end) }
+        .onDisappear { alertTask?.cancel(); warnTask?.cancel() }
+    }
+
+    private func scheduleWarning(_ end: Date?) {
+        warnTask?.cancel(); warnTask = nil
+        guard let end else { return }
+        let delay = end.timeIntervalSinceNow - 10
+        guard delay > 0 else { return }
+        warnTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, live.restEnd == end, store.sessionMinimized else { return }
+            RestTimerEngine.shared.fireForegroundWarning()
+            guard store.dockTucked else { return }
+            withAnimation(.easeInOut(duration: 0.12)) { tabWarn = true; tabFlashOn = true }
+            for i in 1...4 {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.12)) { tabFlashOn = i % 2 == 0 }
+            }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { tabWarn = false; tabFlashOn = true }
+        }
+    }
+
+    /// Only a clearly sideways pull, in the tuck direction, moves the dock. Buttons on
+    /// the dock keep working: the gesture is simultaneous and needs 20pt of travel.
+    private var tuckGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onChanged { v in
+                let dx = v.translation.width
+                guard abs(dx) > abs(v.translation.height) * 1.5 else { return }
+                drag = tuckSign < 0 ? min(0, dx) : max(0, dx)
+            }
+            .onEnded { v in
+                let far = abs(drag) > 90
+                let flick = v.predictedEndTranslation.width * tuckSign > 240     // a flick in the tuck direction
+                if far || flick {
+                    drag = 0
+                    store.tuckDock()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { drag = 0 }
+                }
+            }
+    }
+
+    private func restRanOut() {
+        RestTimerEngine.shared.fireForegroundBell()      // your sound / haptic setting, Watch-aware
+        store.untuckDock()
+        alertTask?.cancel()
+        alertTask = Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.2)) { alert = true; flashOn = true }
+            // on · off · on · off · on, then hold, then go.
+            for i in 1...4 {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { flashOn = i % 2 == 0 }
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { alert = false }
+        }
+    }
+}
+
+/// The tab left on the edge when the dock is tucked: accent-coloured, the live
+/// number running vertically. Tap it, or pull it inward, to bring the dock back.
+struct DockTab: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var live = LiveSessionController.shared
+    let workout: Workout
+    let leading: Bool      // sits on the leading edge (right-handed) or the trailing edge
+    var warning = false    // ten seconds of rest left: flashes accent ⇄ background, reads "10s"
+    var flashOn = true
+
+    private var shape: UnevenRoundedRectangle {
+        leading ? UnevenRoundedRectangle(bottomTrailingRadius: 16, topTrailingRadius: 16)
+                : UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16)
+    }
+
+    var body: some View {
+        let _ = live.revision
+        let dim = warning && !flashOn          // the "background" phase of the flash
+        Button { store.untuckDock() } label: {
+            VStack(spacing: 6) {
+                Circle().fill(live.watchConnected ? Brand.danger : (dim ? Brand.mute : Brand.onVolt.opacity(0.5))).frame(width: 7, height: 7)
+                Group {
+                    if warning { Text("10s") } else { clock }
+                }
+                .font(BrandFont.body(12, .heavy)).monospacedDigit()
+                .fixedSize()
+                .rotationEffect(.degrees(-90))
+                .frame(width: 14, height: 48)
+                Image(systemName: leading ? "chevron.right" : "chevron.left")
+                    .font(.system(size: 12, weight: .heavy))
+            }
+            .foregroundColor(dim ? Brand.text : Brand.onVolt)
+            .frame(width: 30, height: 92)
+            .background(shape.fill(dim ? Brand.bg : Brand.volt))
+            .overlay(shape.stroke(Brand.volt, lineWidth: dim ? 1.5 : 0))
+            .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show the workout dock")
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12).onEnded { v in
+                let inward = leading ? v.translation.width : -v.translation.width
+                if inward > 24 { store.untuckDock() }
+            }
+        )
+    }
+
+    /// Rest countdown while resting, the set clock while lifting, the session clock otherwise.
+    @ViewBuilder
+    private var clock: some View {
+        switch live.stage {
+        case .resting:
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let left = max(0, Int(ceil((live.restEnd ?? ctx.date).timeIntervalSince(ctx.date))))
+                Text(String(format: "%d:%02d", left / 60, left % 60))
+            }
+        case .lifting:
+            if let since = live.liftingSince { Text(since, style: .timer) } else { Text("0:00") }
+        default:
+            Text(live.sessionStart(workout), style: .timer)
+        }
     }
 }

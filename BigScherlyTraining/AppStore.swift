@@ -722,10 +722,80 @@ final class AppStore: ObservableObject {
            let b = AppTab.allCases.firstIndex(of: tab) {
             tabForward = b > a
         }
+        if tab != activeTab {
+            // Remember the way back for the edge swipe. Home is the root, so
+            // landing there clears the trail.
+            if tab == .dashboard { navHistory.removeAll() }
+            else if navHistory.last != activeTab { navHistory.append(activeTab) }
+            if navHistory.count > 12 { navHistory.removeFirst(navHistory.count - 12) }
+        }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
             activeTab = tab
         }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { showTray = false }
+    }
+
+    // MARK: - Back navigation (edge swipe)
+
+    /// Where each screen was opened from, newest last.
+    @Published private(set) var navHistory: [AppTab] = []
+
+    /// The screen an edge swipe goes back to. nil on Home with nothing behind it.
+    var backTarget: AppTab? {
+        if let last = navHistory.last { return last }
+        return activeTab == .dashboard ? nil : .dashboard
+    }
+
+    /// Step back one screen — so two swipes from a screen opened off Home land on Home.
+    /// `animated: false` is for the edge swipe, which has already moved the page itself.
+    func goBack(animated: Bool = true) {
+        guard let target = backTarget else { return }
+        tabForward = false
+        if !navHistory.isEmpty { navHistory.removeLast() }
+        if animated {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { activeTab = target }
+        } else {
+            activeTab = target
+        }
+        if showTray { withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { showTray = false } }
+    }
+
+    // MARK: - The workout session card (floats over the app, docks at the bottom)
+
+    /// The workout showing in the floating card, or docked at the bottom. nil = no session on screen.
+    @Published var sessionWorkoutId: String? = nil
+    @Published var sessionMinimized = false
+    /// The dock swiped off to the side, leaving its tab on the edge.
+    @Published var dockTucked = false
+
+    /// When Start was tapped — for the "[Open]" timing lines in the console (temporary).
+    static var openTapAt = Date()
+
+    func openSession(_ id: String) {
+        Self.openTapAt = Date()
+        activeWorkoutId = id
+        print(String(format: "[Open] watch payload sent · %.0f ms after tap", Date().timeIntervalSince(Self.openTapAt) * 1000))
+        sessionMinimized = false
+        dockTucked = false
+        sessionWorkoutId = id
+    }
+    func tuckDock() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) { dockTucked = true }
+    }
+    func untuckDock() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) { dockTucked = false }
+    }
+    func minimizeSession() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { sessionMinimized = true }
+    }
+    func expandSession() {
+        dockTucked = false
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { sessionMinimized = false }
+    }
+    func closeSession() {
+        withAnimation(.easeOut(duration: 0.25)) { sessionWorkoutId = nil }
+        sessionMinimized = false
+        dockTucked = false
     }
 }
 

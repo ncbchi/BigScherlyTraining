@@ -30,6 +30,7 @@ struct BigScherlyWatchApp: App {
                 .overlay { if !state.cardVisible && state.setup == nil { PauseCountdownOverlay() } }
                 // The first-time setup, over everything while it runs (the phone drives it).
                 .overlay { if state.setup != nil { WatchSetupView() } }
+                .overlay { DebugRecordOverlay() }                // DEBUG recorder (removed before release)
                 // (A detected set now appears on the card's tile as "Log set", not a pop-up.)
                 .onChange(of: scenePhase) { _, phase in
                     // Open: pull every 2 s alongside the live messages; stop when the wrist drops.

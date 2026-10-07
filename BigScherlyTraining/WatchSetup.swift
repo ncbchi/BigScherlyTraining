@@ -3,6 +3,7 @@ import UIKit
 import Combine
 import AVFoundation
 import Vision
+import CoreImage
 
 // MARK: - Watch setup
 // A one-time body setup the first time your Watch joins a workout (hold still · overhead presses ·
@@ -63,9 +64,33 @@ struct LiftCalibration: Codable {
     static func clearAll() { UserDefaults.standard.removeObject(forKey: key) }
 }
 
+/// The grip check: how the Watch sits in your grip (face tilt) and its resting zero. Kept so the
+/// counting can use it once the captures say how.
+struct GripCalibration: Codable {
+    var tiltDeg: Double
+    var restZero: Double
+    var mode: String            // "rack" · "table"
+    var date: Date
+    private static let key = "bst_grip_calibrations"          // per lift
+    private static func all() -> [String: GripCalibration] {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([String: GripCalibration].self, from: $0) } ?? [:]
+    }
+    static func saved(_ lift: SetupLift) -> GripCalibration? { all()[lift.rawValue] }
+    static func save(_ g: GripCalibration, lift: SetupLift) {
+        var map = all(); map[lift.rawValue] = g
+        if let data = try? JSONEncoder().encode(map) { UserDefaults.standard.set(data, forKey: key) }
+    }
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
+    static let modeKey = "bst_grip_mode"
+    static var mode: String {
+        get { UserDefaults.standard.string(forKey: modeKey) ?? "rack" }
+        set { UserDefaults.standard.set(newValue, forKey: modeKey) }
+    }
+}
+
 // MARK: The steps
 
-enum SetupMove { case still, press, airSquat, squat, bench, deadlift }
+enum SetupMove { case still, grip, press, airSquat, squat, bench, deadlift }
 
 struct SetupStep {
     let move: SetupMove
@@ -76,7 +101,7 @@ struct SetupStep {
     let watchTitle: String
     let watchHint: String
     let watchCaps: String
-    var isStill: Bool { move == .still }
+    var isStill: Bool { move == .still || move == .grip }          // the Watch measures stillness (hold still · grip)
     var usesCamera: Bool { move == .airSquat || move == .squat }
 }
 
@@ -99,10 +124,33 @@ final class SetupEngine: ObservableObject {
     @Published private(set) var stepIndex = 0
     @Published private(set) var liveReps: [RepMotion] = []
     @Published var useCamera = false {
-        didSet { useCamera && step?.usesCamera == true ? DepthCamera.shared.start() : DepthCamera.shared.stop() }
+        didSet { (useCamera && step?.usesCamera == true) || tracking ? DepthCamera.shared.start() : DepthCamera.shared.stop() }
     }
     /// Switched the camera check off this session: leave it off.
     private var cameraDeclined = false
+
+    /// Grip step: "rack" (bar in the rack) or "table" (hand flat on a level table).
+    @Published var gripMode: String = GripCalibration.mode {
+        didSet { GripCalibration.mode = gripMode }
+    }
+    func cue(for s: SetupStep) -> String {
+        guard s.move == .grip else { return s.cue }
+        return gripMode == "table"
+            ? "Rest your hand flat on a level table, wrist the way it sits when you lift — then hold completely still."
+            : s.cue
+    }
+
+    /// Camera tracking test (debug): the camera follows the wrist or hips during the rep steps and is
+    /// paired with the Watch's capture. Off for the grip step and once setup is done.
+    var tracking: Bool { MotionCaptureStore.cameraTracking && step?.isStill == false && phase != .done }
+
+    /// The camera test's switch, from the card itself (also in Settings ▸ Motion captures).
+    func setTracking(_ on: Bool) {
+        MotionCaptureStore.cameraTracking = on
+        objectWillChange.send()
+        if tracking { DepthCamera.shared.start() }
+        else if !(step?.usesCamera == true && useCamera) { DepthCamera.shared.stop() }
+    }
 
     func toggleCamera() {
         useCamera.toggle()
@@ -193,7 +241,13 @@ final class SetupEngine: ObservableObject {
         summary = []
         phase = r == .body ? .intro : .ready
         SetVideoRecorder.shared.stopAll()              // the camera's free for the depth check
+        // The Watch measures only inside its workout session. Offered mid-workout, the session may
+        // have died (a Watch app update kills it) — open the Watch back into one.
+        if o == .workout, !WatchBridge.shared.watchSessionLive, WatchBridge.shared.watchAppAvailable {
+            WatchBridge.shared.startWatchWorkout { _ in }
+        }
         request = r
+        UIApplication.shared.isIdleTimerDisabled = true   // the screen stays on for the whole setup
         if phase == .ready { sendStep() }
     }
 
@@ -211,11 +265,16 @@ final class SetupEngine: ObservableObject {
     func finish() { close() }
 
     private func close() {
+        // Back to what the screen underneath wants: the workout screen keeps it awake (Settings ▸
+        // Keep screen awake, on by default); anywhere else it sleeps as usual.
+        let keepAwake = UserDefaults.standard.object(forKey: "bst_keep_awake") as? Bool ?? true
+        UIApplication.shared.isIdleTimerDisabled = SetVideoRecorder.shared.screenVisible && keepAwake
         resendTask?.cancel()
         watchQuiet = false
         soloSession = false
         origin = .workout
         useCamera = false
+        DepthCamera.shared.cancelRecording()
         DepthCamera.shared.stop()
         WatchBridge.shared.sendSetup(["setupEnd": true])
         request = nil
@@ -224,6 +283,7 @@ final class SetupEngine: ObservableObject {
     /// Settings ▸ Redo Watch setup.
     static func resetAll() {
         UserDefaults.standard.set(false, forKey: bodyDoneKey)
+        GripCalibration.clear()
         LiftCalibration.clearAll()
     }
 
@@ -257,7 +317,7 @@ final class SetupEngine: ObservableObject {
         guard let s = step else { return nil }
         return ["setup": [
             "title": s.watchTitle, "hint": s.watchHint, "caps": s.watchCaps,
-            "kind": s.isStill ? "still" : "reps", "target": s.target,
+            "kind": s.isStill ? "still" : "reps", "grip": s.move == .grip ? 1 : 0, "target": s.target,
             "n": stepIndex + 1, "of": steps.count,
             "lift": request.map { r -> String in if case .lift(let l) = r { return l.rawValue } else { return "body" } } ?? "body",
             "solo": soloSession ? 1 : 0
@@ -291,8 +351,9 @@ final class SetupEngine: ObservableObject {
         guard let s = step else { return }
         liveReps = []
         DepthCamera.shared.resetSighting()
+        DepthCamera.shared.cancelRecording()
         if s.usesCamera && Self.cameraByDefault && !cameraDeclined && !useCamera { useCamera = true }   // Settings default
-        if s.usesCamera, useCamera { DepthCamera.shared.start() } else if !s.usesCamera { DepthCamera.shared.stop() }
+        if (s.usesCamera && useCamera) || tracking { DepthCamera.shared.start() } else if !s.usesCamera { DepthCamera.shared.stop() }
         transmitStep()
         keepSending()
     }
@@ -305,6 +366,7 @@ final class SetupEngine: ObservableObject {
         liveReps = []
         DepthCamera.shared.resetSighting()
         phase = .capturing
+        if tracking, let s = step { DepthCamera.shared.startRecording(move: s.move, side: wrist) }   // from Go, like the Watch
     }
 
     /// Setup reps as the Watch counts them (sent separately from workout sets).
@@ -316,6 +378,7 @@ final class SetupEngine: ObservableObject {
     /// The Watch's still check didn't pass: show why, and wait for Go again (the Watch is back on Go).
     func watchStillFailed(_ message: String) {
         guard step?.isStill == true else { return }
+        MotionCaptureStore.shared.noteVerdict("rejected — \(message)")
         phase = .retry(message)
         keepSending()
     }
@@ -327,31 +390,53 @@ final class SetupEngine: ObservableObject {
         close()
     }
 
-    func watchStillDone() {
+    func watchStillDone(tilt: Double?, zero: Double?) {
         guard step?.isStill == true else { return }
-        accept()
+        var detail = "Steady"
+        if step?.move == .grip, let tilt, case .lift(let lift)? = request {
+            GripCalibration.save(GripCalibration(tiltDeg: tilt, restZero: zero ?? 0, mode: gripMode, date: Date()), lift: lift)
+            bodyResults["tilt"] = tilt
+            detail = String(format: "Steady · tilt %.0f°", tilt)
+        }
+        MotionCaptureStore.shared.noteVerdict("accepted")
+        accept(detail: detail)
     }
 
     func watchCaptured(_ reps: [RepMotion]) {
         guard let s = step, !s.isStill else { return }
+        if let track = DepthCamera.shared.stopRecording() { MotionCaptureStore.shared.attachCamera(track) }
         phase = .checking
         liveReps = reps
         if let problem = check(s, reps) {
+            MotionCaptureStore.shared.noteVerdict("rejected — \(problem)")
             WatchBridge.shared.sendSetup(["setupRetry": problem])
             sendStep()                                  // the Watch shows Go again
             phase = .retry(problem)
             return
         }
         record(s, reps)
-        accept()
+        MotionCaptureStore.shared.noteVerdict("accepted")
+        accept(detail: resultDetail(reps))
     }
 
-    private func accept() {
-        WatchBridge.shared.sendSetup(["setupOK": true])
+    /// "3 reps · 48 cm · 0.9 m/s" — what the Watch shows under "Got it".
+    private func resultDetail(_ reps: [RepMotion]) -> String {
+        let travel = reps.map(\.travelM).max() ?? 0
+        let speeds = reps.map(\.meanVelocity).sorted()
+        let median = speeds.isEmpty ? 0 : speeds[speeds.count / 2]
+        let dist = StatsUnits.isKg ? String(format: "%.0f cm", travel * 100) : String(format: "%.0f in", travel * 39.37)
+        return "\(reps.count) rep\(reps.count == 1 ? "" : "s") · \(dist) · " + String(format: "%.1f m/s", median)
+    }
+
+    private func accept(detail: String? = nil) {
+        var ok: [String: Any] = ["setupOK": true]
+        if let detail { ok["detail"] = detail }
+        WatchBridge.shared.sendSetup(ok)
         if stepIndex + 1 < steps.count {
             stepIndex += 1
             phase = .ready
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.sendStep() }
+            // Long enough to read "Got it" and its numbers on the wrist before the next step replaces it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) { [weak self] in self?.sendStep() }
         } else {
             complete()
         }
@@ -367,37 +452,48 @@ final class SetupEngine: ObservableObject {
                                 : "Only \(reps.count) rep\(reps.count == 1 ? "" : "s") counted — let's do the full set again."
         }
         let maxTravel = reps.map(\.travelM).max() ?? 0
-        let short = reps.enumerated().filter { $0.element.travelM < 0.88 * maxTravel }.map { $0.offset + 1 }
-        let first = reps[0]
+        // Air squats: the Watch rides on a free arm, which moves on its own a little (wrist travel
+        // varied ±10% while the camera saw the hips hit the same depth every rep), so allow more.
+        // Presses: the first rep starts from the position you held to start, a few cm higher than
+        // where your hands come back to between reps — the camera saw rep 1 at 87–93% of the others
+        // in four sets out of four, the Watch 77–92% (Oct 6). So rep 1 only has to be clearly a full
+        // press (70%); the rest are held to 82% of the best.
+        let shortAt = s.move == .airSquat ? 0.80 : s.move == .press ? 0.82 : 0.88
+        let short = reps.enumerated().filter {
+            $0.element.travelM < (s.move == .press && $0.offset == 0 ? 0.70 : shortAt) * maxTravel
+        }.map { $0.offset + 1 }
+        // The two-second hold: any rep counts (people often settle into it on a later rep).
+        let heldBottom = reps.contains { ($0.bottomPauseSec ?? 0) >= 1.5 }
+        let heldTop = reps.contains { ($0.topPauseSec ?? 0) >= 1.5 }
 
         switch s.move {
         case .press:
             if !short.isEmpty { return "Rep \(short[0]) stopped short — press all the way overhead and back to your shoulders, every rep." }
         case .airSquat, .squat:
-            if (first.bottomPauseSec ?? 0) < 1.5 {
-                return "Hold still at the bottom of the first rep for two full seconds — at true depth, hip crease below your knee."
+            if !heldBottom {
+                return "Hold still at the bottom for two full seconds on one rep — at true depth, hip crease below your knee. Wait for the tap."
             }
             if useCamera, DepthCamera.shared.available, !DepthCamera.shared.sawDepth {
                 return "The camera didn't see your hip go below your knee. Go lower — true depth, not comfortable depth."
             }
             if !short.isEmpty { return "Rep \(short[0]) was shallower than your deepest — same true depth every rep." }
         case .bench:
-            if (first.bottomPauseSec ?? 0) < 1.5 {
-                return "Rest the bar on your chest for two full seconds on the first rep — a real touch, not a hover."
+            if !heldBottom {
+                return "Rest the bar on your chest for two full seconds on one rep — a real touch, not a hover. Wait for the tap."
             }
             if let bounce = reps.dropFirst().firstIndex(where: { ($0.bottomPauseSec ?? 0) < 0.25 }) {
                 return "Rep \(bounce + 1) bounced — let the bar settle on your chest every rep."
             }
             if !short.isEmpty { return "Rep \(short[0]) didn't reach your chest — full touch, full lockout, every rep." }
         case .deadlift:
-            if (first.topPauseSec ?? 0) < 1.5 {
-                return "Lock out and hold for two full seconds at the top of the first rep — hips through, shoulders back."
+            if !heldTop {
+                return "Lock out and hold for two full seconds at the top of one rep — hips through, shoulders back."
             }
             if let tng = reps.dropFirst().firstIndex(where: { ($0.bottomPauseSec ?? 0) < 0.3 }) {
                 return "Rep \(tng + 1) didn't settle — let the bar come to rest on the floor between every rep."
             }
             if !short.isEmpty { return "Rep \(short[0]) was short of lockout — stand all the way up, every rep." }
-        case .still:
+        case .still, .grip:
             break
         }
         return nil
@@ -419,7 +515,7 @@ final class SetupEngine: ObservableObject {
                                                  cameraVerified: useCamera && DepthCamera.shared.sawDepth, date: Date()))
             bodyResults["travel"] = maxTravel
             bodyResults["speed"] = median
-        case .still: break
+        case .still, .grip: break
         }
     }
 
@@ -436,13 +532,27 @@ final class SetupEngine: ObservableObject {
             summary = [(lift == .squat ? "True depth" : lift == .bench ? "Chest to lockout" : "Floor to lockout", inches(bodyResults["travel"] ?? 0)),
                        ("Empty-bar speed", String(format: "%.2f m/s", bodyResults["speed"] ?? 0))]
             if lift == .squat, useCamera, DepthCamera.shared.sawDepth { summary.append(("Depth", "Camera-checked ✓")) }
+            if let tilt = bodyResults["tilt"] { summary.append(("Grip", String(format: "Wrist tilt %.0f°", tilt))) }
         case .none: break
         }
-        useCamera = false
         phase = .done
+        useCamera = false
+        DepthCamera.shared.stop()
     }
 
+    /// Each lift's setup starts with the grip: the bar in the rack (or a hand flat on a table).
+    private static let gripStep = SetupStep(
+        move: .grip, title: "Grip the bar", target: 0,
+        cue: "Grip the racked bar the way you will lift — then hold completely still.",
+        instruction: "Tap Go on your Watch, take your grip, and don't move for three seconds. The Watch learns its resting zero and how it sits in your grip on this lift.",
+        watchTitle: "Grip the bar", watchHint: "Tap, grip, hold still", watchCaps: "GRIP · HOLD STILL")
+
     static func steps(_ r: SetupRequest) -> [SetupStep] {
+        if case .lift = r { return [gripStep] + liftSteps(r) }
+        return liftSteps(r)
+    }
+
+    private static func liftSteps(_ r: SetupRequest) -> [SetupStep] {
         switch r {
         case .body:
             return [
@@ -487,8 +597,28 @@ final class DepthCamera: ObservableObject {
 
     @Published private(set) var status: Status = .off
     @Published private(set) var sawDepth = false
+    /// Camera tracking test: a person is in view / a track is being recorded.
+    @Published private(set) var poseSeen = false
+    @Published private(set) var recording = false
+    /// The camera's ruler: a plate marked on the screen and followed while recording.
+    @Published private(set) var plateLocked = false
+    @Published private(set) var plateBox: CGRect?            // where it is now (Vision coordinates)
+    @Published private(set) var plateLostSince: Date?
+    @Published private(set) var snapshot: CGImage?
     let rig = DepthRig()
     private var depthSince: Date?
+
+    private struct Recording {
+        var joint: String, side: String, work: String
+        var cmPerUnit: Double, scaleKnown: Bool
+        var t: [Double] = [], y: [Double] = [], c: [Double] = []
+        var k: [Double] = []                          // knee height alongside the hip (-1 = not seen)
+        var h: [Double] = []                          // plate: its box height each frame
+    }
+    private var rec: Recording?
+    /// Centimetres per unit of Vision's height, measured whenever you stand in view (nose to ankle
+    /// against your height) — frozen when recording starts.
+    private var measuredScale: Double = 0
 
     var available: Bool { AVCaptureDevice.authorizationStatus(for: .video) == .authorized && status != .off }
 
@@ -496,9 +626,118 @@ final class DepthCamera: ObservableObject {
         rig.onReading = { reading in
             Task { @MainActor in DepthCamera.shared.apply(reading) }
         }
+        rig.onPose = { frame in
+            Task { @MainActor in DepthCamera.shared.applyPose(frame) }
+        }
+        rig.onPlate = { frame in
+            Task { @MainActor in DepthCamera.shared.applyPlate(frame) }
+        }
+        rig.onSnapshot = { image in
+            let box = SnapshotBox(image: image)
+            Task { @MainActor in DepthCamera.shared.snapshot = box.image }
+        }
+    }
+
+    // MARK: The ruler — a plate of known size
+
+    /// Show what the camera sees, to draw a box around the plate.
+    func beginMarking() {
+        if status == .off { start() }
+        rig.wantsSnapshot = true
+    }
+    func endMarking() { rig.wantsSnapshot = false; snapshot = nil }
+
+    /// Follow the plate inside `box` (Vision coordinates).
+    func lockPlate(_ box: CGRect) {
+        rig.setPlate(box)
+        plateBox = box
+        plateLocked = true
+        plateLostSince = nil
+    }
+    func clearPlate() {
+        rig.setPlate(nil)
+        plateLocked = false
+        plateBox = nil
+        plateLostSince = nil
+    }
+
+    private func applyPlate(_ f: PlateFrame?) {
+        guard plateLocked else { return }
+        guard let f else {
+            if plateLostSince == nil { plateLostSince = Date() }
+            return
+        }
+        plateLostSince = nil
+        plateBox = CGRect(x: f.x - f.h / 2, y: f.y - f.h / 2, width: f.h, height: f.h)
+        guard let r = rec, r.joint == "plate" else { return }
+        rec?.t.append(f.t); rec?.y.append(f.y); rec?.c.append(f.c); rec?.h.append(f.h)
+    }
+
+    // MARK: Camera tracking test (debug)
+
+    func startRecording(move: SetupMove, side: String, usePlate: Bool = false) {
+        let hips = move == .airSquat || move == .squat
+        if usePlate && plateLocked {
+            // The bar end itself; the scale comes from the plate's size when the recording stops.
+            rec = Recording(joint: "plate", side: side, work: hips ? "low" : "high", cmPerUnit: 0, scaleKnown: true)
+        } else {
+            rec = Recording(joint: hips ? "hip" : "wrist", side: side, work: hips ? "low" : "high",
+                            cmPerUnit: measuredScale > 0 ? measuredScale : 200, scaleKnown: measuredScale > 0)
+        }
+        recording = true
+    }
+
+    /// The finished track (nil if nothing was being recorded).
+    func stopRecording() -> CameraTrack? {
+        guard let r = rec else { return nil }
+        rec = nil
+        recording = false
+        var perUnit = r.cmPerUnit
+        var ruler = r.scaleKnown ? "height \(Int(MotionCaptureStore.heightCm)) cm" : "assumed"
+        if r.joint == "plate" {
+            // The plate's box is its diameter: centimetres per unit = diameter ÷ box height (median).
+            let hs = r.h.filter { $0 > 0.01 }.sorted()
+            perUnit = hs.isEmpty ? 200 : PlateRuler.diameterCm / hs[hs.count / 2]
+            ruler = "plate \(String(format: "%.1f", PlateRuler.diameterCm)) cm"
+        }
+        return CameraTrack(joint: r.joint, side: r.side, work: r.work, cmPerUnit: perUnit,
+                           scaleKnown: r.joint == "plate" ? !r.h.isEmpty : r.scaleKnown, t: r.t, y: r.y, c: r.c,
+                           k: r.joint == "hip" ? r.k : nil, ruler: ruler)
+    }
+
+    func cancelRecording() { rec = nil; recording = false }
+
+    private func applyPose(_ f: PoseFrame) {
+        poseSeen = true
+        if rec == nil, let nose = f.nose, let ankle = [f.ankleL, f.ankleR].compactMap({ $0 }).max(by: { $0.c < $1.c }),
+           nose.c > 0.6, ankle.c > 0.6,                // a guessed ankle (feet out of frame) throws the scale off
+           nose.y - ankle.y > 0.3 {
+            measuredScale = MotionCaptureStore.heightCm * 0.93 / (nose.y - ankle.y)
+        }
+        guard let r = rec else { return }
+        var p: PosePoint?
+        if r.joint == "hip" {
+            let hips = [f.hipL, f.hipR].compactMap { $0 }
+            if !hips.isEmpty {
+                p = PosePoint(x: hips.map(\.x).reduce(0, +) / Double(hips.count),
+                              y: hips.map(\.y).reduce(0, +) / Double(hips.count),
+                              c: hips.map(\.c).min() ?? 0)
+            }
+        } else {
+            let mine = r.side == "right" ? f.wristR : f.wristL
+            let other = r.side == "right" ? f.wristL : f.wristR
+            p = mine ?? other
+        }
+        guard let p else { return }
+        rec?.t.append(f.t); rec?.y.append(p.y); rec?.c.append(p.c)
+        if r.joint == "hip" {
+            let knees = [f.kneeL, f.kneeR].compactMap { $0 }
+            rec?.k.append(knees.isEmpty ? -1 : knees.map(\.y).reduce(0, +) / Double(knees.count))
+        }
     }
 
     func start() {
+        rig.wantsPose = MotionCaptureStore.cameraTracking
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             status = .lookingForYou
@@ -520,7 +759,7 @@ final class DepthCamera: ObservableObject {
     private func apply(_ reading: Bool?) {
         guard status != .off else { return }
         switch reading {
-        case .none: status = .lookingForYou; depthSince = nil
+        case .none: status = .lookingForYou; depthSince = nil; poseSeen = false
         case .some(false): status = .high; depthSince = nil
         case .some(true):
             status = .atDepth
@@ -528,6 +767,27 @@ final class DepthCamera: ObservableObject {
             if let s = depthSince, Date().timeIntervalSince(s) >= 0.4 { sawDepth = true }    // held, not a flicker
         }
     }
+}
+
+nonisolated struct PosePoint: Sendable { var x: Double; var y: Double; var c: Double }
+
+/// The plate this frame: centre and box height in Vision units (0…1 of the frame), confidence.
+nonisolated struct PlateFrame: Sendable { var t: Double; var x: Double; var y: Double; var h: Double; var c: Double }
+
+/// The plate's real size — the camera's ruler.
+enum PlateRuler {
+    static let diameterKey = "bst_plate_cm"
+    /// A standard 20 kg / 45 lb plate is 45 cm across (iron 45s are about 44.5).
+    static var diameterCm: Double {
+        get { let v = UserDefaults.standard.double(forKey: diameterKey); return v >= 10 && v <= 60 ? v : 45 }
+        set { UserDefaults.standard.set(newValue, forKey: diameterKey) }
+    }
+}
+
+nonisolated struct PoseFrame: Sendable {
+    var t: Double
+    var wristL, wristR, hipL, hipR, nose, ankleL, ankleR: PosePoint?
+    var kneeL: PosePoint? = nil, kneeR: PosePoint? = nil
 }
 
 /// The camera and Vision, on their own queue.
@@ -538,6 +798,24 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var configured = false
     private var frame = 0
     var onReading: (@Sendable (Bool?) -> Void)?
+    /// Camera tracking test: every body-pose frame, with joints and a wall-clock time.
+    var onPose: (@Sendable (PoseFrame) -> Void)?
+    var wantsPose = false
+
+    // The camera's ruler (debug recorder): a plate of known size, followed frame to frame. Its box
+    // gives centimetres per pixel at the bar, and its centre is the bar end's path.
+    var onPlate: (@Sendable (PlateFrame?) -> Void)?
+    /// Frames for marking the plate: exactly the image Vision sees (upright, not mirrored).
+    var onSnapshot: (@Sendable (CGImage) -> Void)?
+    var wantsSnapshot = false
+    private var plate: VNDetectedObjectObservation?
+    private let tracker = VNSequenceRequestHandler()
+    private let ciContext = CIContext()
+
+    /// Start following the plate inside `box` (Vision coordinates: 0…1, origin bottom-left); nil stops.
+    func setPlate(_ box: CGRect?) {
+        queue.async { self.plate = box.map { VNDetectedObjectObservation(boundingBox: $0) } }
+    }
 
     func start() {
         queue.async {
@@ -563,11 +841,46 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         frame += 1
-        guard frame % 3 == 0, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }   // ~10 a second
+        guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        if wantsSnapshot, frame % 6 == 0 {                     // ~5 a second while you mark the plate
+            let image = CIImage(cvPixelBuffer: pixels)
+            if let cg = ciContext.createCGImage(image, from: image.extent) { onSnapshot?(cg) }
+        }
+        // The plate: every frame (the tracker is light), so the bar's path is sampled at the full rate.
+        if let last = plate {
+            let request = VNTrackObjectRequest(detectedObjectObservation: last)
+            request.trackingLevel = .accurate
+            try? tracker.perform([request], on: pixels, orientation: .up)
+            if let seen = request.results?.first as? VNDetectedObjectObservation, seen.confidence > 0.3 {
+                plate = seen
+                let stamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+                let host = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+                let b = seen.boundingBox
+                onPlate?(PlateFrame(t: Date().timeIntervalSince1970 - (host - stamp),
+                                    x: Double(b.midX), y: Double(b.midY), h: Double(b.height), c: Double(seen.confidence)))
+            } else {
+                onPlate?(nil)                                   // lost this frame (keeps looking where it last was)
+            }
+        }
+        guard frame % (wantsPose ? 2 : 3) == 0 else { return }   // body pose: ~10–15 a second
         let request = VNDetectHumanBodyPoseRequest()
         try? VNImageRequestHandler(cvPixelBuffer: pixels, orientation: .up).perform([request])
         guard let body = request.results?.first,
               let pts = try? body.recognizedPoints(.all) else { onReading?(nil); return }
+        if wantsPose, onPose != nil {
+            // The frame's time on the wall clock (capture timestamps run on the host clock).
+            let stamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+            let host = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+            let wall = Date().timeIntervalSince1970 - (host - stamp)
+            func joint(_ n: VNHumanBodyPoseObservation.JointName) -> PosePoint? {
+                guard let j = pts[n], j.confidence > 0.25 else { return nil }
+                return PosePoint(x: Double(j.location.x), y: Double(j.location.y), c: Double(j.confidence))
+            }
+            onPose?(PoseFrame(t: wall, wristL: joint(.leftWrist), wristR: joint(.rightWrist),
+                              hipL: joint(.leftHip), hipR: joint(.rightHip), nose: joint(.nose),
+                              ankleL: joint(.leftAnkle), ankleR: joint(.rightAnkle),
+                              kneeL: joint(.leftKnee), kneeR: joint(.rightKnee)))
+        }
         // The side facing the camera (more confident), hip vs knee. Vision's y runs upward.
         func pair(_ hip: VNHumanBodyPoseObservation.JointName, _ knee: VNHumanBodyPoseObservation.JointName) -> (Double, Double, Double)? {
             guard let h = pts[hip], let k = pts[knee], h.confidence > 0.3, k.confidence > 0.3 else { return nil }
@@ -575,9 +888,19 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
         let sides = [pair(.leftHip, .leftKnee), pair(.rightHip, .rightKnee)].compactMap { $0 }
         guard let best = sides.max(by: { $0.2 < $1.2 }) else { onReading?(nil); return }
-        onReading?(best.0 < best.1 - 0.01)          // hip crease below the top of the knee
+        onReading?(best.0 < best.1 + Self.depthMargin)
     }
+
+    /// Vision marks the hip and knee JOINT centres, not the hip crease and the top of the knee. At
+    /// true depth (crease below the top of the knee) the hip joint is still a little above the knee
+    /// joint — so "hip joint below knee joint" (the old test, minus 1% more) asked for well below
+    /// parallel and failed real depth. This allows the hip joint up to ~1.5% of the frame (about
+    /// 3–4 cm, side-on) above the knee joint.
+    static let depthMargin = 0.015
 }
+
+/// A frame for the marking screen, handed across threads (CGImage is immutable).
+nonisolated struct SnapshotBox: @unchecked Sendable { let image: CGImage }
 
 /// The live camera, small, so you can see you're in frame.
 struct DepthPreview: UIViewRepresentable {
@@ -671,16 +994,18 @@ struct SetupSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 header(s)
                 Text(s.title.uppercased()).font(BrandFont.display(32)).lineLimit(2).minimumScaleFactor(0.8)
-                if case .lift? = engine.request { liftChips(s) }
+                if case .lift? = engine.request, !s.isStill { liftChips(s) }
                 ZStack(alignment: .topTrailing) {
                     SetupFigure(move: s.move, ink: accentLine, bg: Brand.card, animated: true)
                         .frame(height: 230).frame(maxWidth: .infinity)
-                    if s.usesCamera && engine.useCamera { cameraInset }
+                    if (s.usesCamera && engine.useCamera) || engine.tracking { cameraInset }
                 }
                 .background(RoundedRectangle(cornerRadius: 22).fill(Brand.card))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(Brand.line, lineWidth: 1))
                 if s.target > 0 { counter(s) }
-                cueBox(s.cue)
+                cueBox(engine.cue(for: s))
+                if s.move == .grip { gripModeToggle }
+                if !s.isStill { trackingToggle }
                 Text(s.instruction).font(BrandFont.body(14, .medium)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
                 if s.usesCamera { cameraToggle }
                 status(s)
@@ -784,7 +1109,47 @@ struct SetupSheet: View {
         .padding(10)
     }
 
+    private var trackingToggle: some View {
+        let on = MotionCaptureStore.cameraTracking
+        return Button { engine.setTracking(!on) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: on ? "camera.viewfinder" : "camera").font(.system(size: 14, weight: .heavy)).foregroundColor(accentText)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(on ? "Camera is tracking your reps" : "Track my reps with the camera").font(BrandFont.body(13, .heavy))
+                    Text("Test: prop the phone side-on about 2.5 m back, and stand in view before Go.")
+                        .font(BrandFont.body(11, .medium)).foregroundColor(Brand.mute)
+                }
+                Spacer()
+                Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 18, weight: .bold))
+                    .foregroundColor(on ? accentText : Brand.mute)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Brand.card))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(on ? accentLine : Brand.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var gripModeToggle: some View {
+        HStack(spacing: 0) {
+            ForEach([("rack", "Bar in the rack"), ("table", "Hand on a table")], id: \.0) { m in
+                Button { engine.gripMode = m.0 } label: {
+                    Text(m.1).font(BrandFont.body(13, .heavy)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                        .foregroundColor(engine.gripMode == m.0 ? onAccent : Brand.text)
+                        .background(RoundedRectangle(cornerRadius: 11).fill(engine.gripMode == m.0 ? accent : Color.clear))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1.5))
+    }
+
     private var cameraLabel: String {
+        if engine.tracking, !(engine.step?.usesCamera == true && engine.useCamera) {     // tracking test, no depth check
+            if camera.recording { return "● TRACKING" }
+            return camera.poseSeen ? "READY" : "STEP INTO VIEW"
+        }
         switch camera.status {
         case .off: return "CAMERA OFF"
         case .lookingForYou: return "STEP INTO VIEW"
@@ -815,7 +1180,8 @@ struct SetupSheet: View {
             watchRow("Checking your numbers…")
         default:
             VStack(alignment: .leading, spacing: 8) {
-                watchRow("Tap Go on your Watch — right before you touch the weight")
+                watchRow(s.isStill ? "Tap Go on your Watch, then hold still"
+                                   : "Tap Go on your Watch, get into your starting position — it measures once you hold still")
                 if engine.watchQuiet {
                     let build = WatchBridge.shared.watchBuild
                     let stale = build != WatchBridge.expectedWatchBuild
@@ -900,7 +1266,7 @@ struct SetupFigure: View {
     }
 
     private var duration: Double {
-        switch move { case .still: return 2.4; case .press: return 4; case .airSquat, .squat: return 4.2; case .bench: return 4; case .deadlift: return 4.4 }
+        switch move { case .still, .grip: return 2.4; case .press: return 4; case .airSquat, .squat: return 4.2; case .bench: return 4; case .deadlift: return 4.4 }
     }
     private var stillPhase: Double { move == .press ? 1 : (move == .airSquat || move == .squat) ? 1 : 0 }
 
@@ -950,6 +1316,18 @@ struct SetupFigure: View {
         func rot(_ a: Double, _ x: Double, _ y: Double) -> (Double, Double) {
             let r = a * .pi / 180
             return (x * cos(r) - y * sin(r), x * sin(r) + y * cos(r))
+        }
+
+        if move == .grip {
+            // the rack, the bar in it, and a gripping hand with the Watch on the wrist
+            line(P(34, 70), P(34, 250), 9, ink.opacity(0.35)); line(P(166, 70), P(166, 250), 9, ink.opacity(0.35))
+            line(P(34, 148), P(58, 148), 7, ink.opacity(0.55)); line(P(166, 148), P(142, 148), 7, ink.opacity(0.55))
+            line(P(16, 128), P(184, 128), 8, ink)
+            poly([P(150, 238), P(128, 186), P(104, 140)], 14, ink)
+            let hand = Path(roundedRect: CGRect(x: P(84, 114).x, y: P(84, 114).y, width: 40 * s, height: 26 * s), cornerRadius: 12 * s)
+            g.fill(hand, with: .color(bg)); g.stroke(hand, with: .color(ink), lineWidth: 3 * s)
+            watchMark(P(112, 156), 0.35)
+            return
         }
 
         if move == .bench {

@@ -60,11 +60,17 @@ struct WatchSetupView: View {
 
     private func hint(_ s: WatchState.SetupStep) -> String {
         switch state.setupPhase {
-        case "ready": return s.kind == "still" ? "Tap, lower your arm — 3 seconds to get set" : "Tap, then get set — 3 seconds before it measures"
-        case "countdown": return s.kind == "still" ? "Arm down, stand tall…" : "Get into position…"
-        case "holding": return "Don't move…"
+        case "ready":
+            if s.kind == "still" { return s.grip ? "Tap, then take your grip — 3 seconds to get set" : "Tap, lower your arm — 3 seconds to get set" }
+            return "Tap, then get into your starting position — it measures once you hold still"
+        case "countdown":
+            if s.kind == "still" { return s.grip ? "Take your grip…" : "Arm down, stand tall…" }
+            return "Get into position…"
+        case "arming": return "Hold your starting position — it starts the moment you settle"
+        case "holding": return s.grip ? "Hold still…" : "Don't move…"
+        case "starting": return "Starting the workout on your Watch…"
         case "checking": return "Checking your numbers on the phone"
-        case "ok": return "Got it"
+        case "ok": return "Next step in a moment…"
         default: return s.hint
         }
     }
@@ -79,10 +85,16 @@ struct WatchSetupView: View {
             })
         case "countdown":
             let left = max(0, (state.countdownEnds ?? now).timeIntervalSince(now))
-            border((3 - left) / 3, VStack(spacing: 0) {
+            border((state.countdownTotal - left) / state.countdownTotal, VStack(spacing: 0) {
                 Text("GET SET").font(.system(size: 8.5, weight: .heavy)).tracking(1.4).foregroundColor(state.accentColor)
                 Text("\(max(1, Int(left.rounded(.up))))").font(.system(size: 34, weight: .heavy, design: .rounded))
-                Text(s.kind == "still" ? "ARM DOWN" : "INTO POSITION").font(.system(size: 7.5, weight: .heavy)).tracking(1).foregroundColor(mute)
+                Text(s.kind == "still" ? (s.grip ? "GRIP IT" : "ARM DOWN") : "INTO POSITION").font(.system(size: 7.5, weight: .heavy)).tracking(1).foregroundColor(mute)
+            })
+        case "arming":
+            border(1, VStack(spacing: 0) {
+                Text("HOLD").font(.system(size: 8.5, weight: .heavy)).tracking(1.4).foregroundColor(state.accentColor)
+                Text("START").font(.system(size: 26, weight: .heavy, design: .rounded))
+                Text("POSITION").font(.system(size: 7.5, weight: .heavy)).tracking(1).foregroundColor(mute)
             })
         case "holding":
             let held = now.timeIntervalSince(state.holdStarted ?? now)
@@ -115,17 +127,23 @@ struct WatchSetupView: View {
                 })
                 .animation(.spring(response: 0.3), value: state.setupCount)
             }
-        case "checking":
+        case "starting", "checking":
             VStack(spacing: 4) {
                 ProgressView().tint(state.accentColor)
-                Text("CHECKING").font(.system(size: 8.5, weight: .heavy)).tracking(1.4).foregroundColor(mute)
+                Text(state.setupPhase == "starting" ? "STARTING" : "CHECKING").font(.system(size: 8.5, weight: .heavy)).tracking(1.4).foregroundColor(mute)
             }
             .frame(maxWidth: .infinity).frame(height: 78)
             .background(RoundedRectangle(cornerRadius: 18).fill(Color.black))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(state.accentColor.opacity(0.6), lineWidth: 1.5))
             .padding(.horizontal, 4)
         default:   // ok
-            filled(Image(systemName: "checkmark.seal.fill").font(.system(size: 30, weight: .bold)))
+            filled(VStack(spacing: 2) {
+                Image(systemName: "checkmark").font(.system(size: 20, weight: .heavy))
+                Text("Got it").font(.system(size: 15, weight: .heavy))
+                if let d = state.setupDetail {
+                    Text(d).font(.system(size: 9.5, weight: .heavy)).opacity(0.75).lineLimit(1).minimumScaleFactor(0.7)
+                }
+            })
         }
     }
 

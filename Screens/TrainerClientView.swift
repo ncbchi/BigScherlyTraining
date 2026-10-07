@@ -418,7 +418,7 @@ struct TrainerPhotosView: View {
                                                 Text(p.category.uppercased()).font(BrandFont.body(8, .heavy)).tracking(0.8)
                                                 if p.trainerComment != nil { Image(systemName: "bubble.left.fill").font(.system(size: 8)) }
                                             }
-                                            .foregroundColor(Brand.text)
+                                            .foregroundColor(.white)        // the scrim is black in both themes
                                             .padding(.horizontal, 6).padding(.vertical, 3)
                                             .background(Capsule().fill(Color.black.opacity(0.6)))
                                             .padding(6)

@@ -26,8 +26,15 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
 
     // MARK: Start / end
 
+    /// One start at a time — but only for a few seconds, so a start that never answers (asked while
+    /// the app was in the background) can't block every later one.
+    private var startingSince: Date?
+
     func start() async {
         guard !isRunning, HKHealthStore.isHealthDataAvailable() else { return }
+        if let since = startingSince, Date().timeIntervalSince(since) < 6 { return }
+        startingSince = Date()
+        defer { startingSince = nil }
         lastError = nil
         do {
             try await store.requestAuthorization(
@@ -60,11 +67,15 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
             session = nil
             builder = nil
             lastError = "Couldn't start the session."
+            recover()                      // one may already be running for this app (e.g. after an update)
         }
     }
 
+    private var ending = false                 // our own end() — not "stopped from outside"
+
     func end() async {
         guard let s = session, let b = builder else { return }
+        ending = true
         MotionRecorder.shared.stop()
         s.end()
         do {
@@ -99,6 +110,7 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
     }
 
     private func reset() {
+        ending = false
         WatchState.sendLive(["sessionActive": false])
         discardOnEnd = false
         session = nil
@@ -129,7 +141,15 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
 extension WorkoutSessionManager: HKWorkoutSessionDelegate {
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
                                     didChangeTo toState: HKWorkoutSessionState,
-                                    from fromState: HKWorkoutSessionState, date: Date) {}
+                                    from fromState: HKWorkoutSessionState, date: Date) {
+        // Ended or stopped from outside (another workout app, the system): we're not running any more,
+        // so the next setup step or workout starts a fresh one instead of thinking it still has one.
+        guard toState == .ended || toState == .stopped else { return }
+        Task { @MainActor in
+            guard self.session === workoutSession, self.isRunning, !self.ending else { return }
+            self.handleFailure()
+        }
+    }
 
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
         Task { @MainActor in self.handleFailure() }

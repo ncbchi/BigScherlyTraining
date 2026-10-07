@@ -220,7 +220,7 @@ final class ThemeStore: ObservableObject {
 
     private let d = UserDefaults.standard
     @Published var choice: ThemeChoice { didSet { d.set(choice.rawValue, forKey: "bst_theme_choice"); scheduleIcon() } }
-    @Published var customBase: ThemeBase { didSet { d.set(customBase.rawValue, forKey: "bst_theme_base") } }
+    @Published var customBase: ThemeBase { didSet { d.set(customBase.rawValue, forKey: "bst_theme_base"); scheduleIcon() } }
     @Published var customAccent: UInt32 { didSet { d.set(Int(customAccent), forKey: "bst_theme_accent"); scheduleIcon() } }
     @Published var trueBlack: Bool { didSet { d.set(trueBlack, forKey: "bst_theme_trueblack") } }
     @Published var highContrast: Bool { didSet { d.set(highContrast, forKey: "bst_theme_contrast") } }
@@ -273,14 +273,15 @@ final class ThemeStore: ObservableObject {
 
     func accentName(_ hex: UInt32) -> String { ThemeStore.accents.first { $0.hex == hex }?.name ?? "Custom" }
 
-    // MARK: The app icon follows your accent
-    // One ready-made icon per preset (Assets: AppIcon-Red, AppIcon-Cobalt…; Volt is the main icon).
+    // MARK: The app icon follows your accent and your light/dark choice
+    // One ready-made icon per preset and background (Assets: AppIcon-Red, AppIcon-Red-Light,
+    // AppIcon-Volt-Light…; dark Volt is the main icon). "System" follows the iPhone's setting.
     // iOS shows its own short "icon changed" notice whenever an app switches its icon.
 
     private var iconTask: Task<Void, Never>?
 
     /// Wait a moment first, so cycling through themes doesn't flash a notice for each one.
-    private func scheduleIcon() {
+    func scheduleIcon() {
         iconTask?.cancel()
         iconTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 900_000_000)
@@ -292,17 +293,28 @@ final class ThemeStore: ObservableObject {
     func applyAppIcon() {
         let app = UIApplication.shared
         guard app.supportsAlternateIcons else { return }
-        let name = ThemeStore.iconName(for: accent)
+        // Palette.current is what's drawing right now: your choice, or the iPhone's for System.
+        let name = ThemeStore.iconName(for: accent, light: Palette.current.scheme == .light)
         guard app.alternateIconName != name else { return }
         app.setAlternateIconName(name) { _ in }
     }
 
-    static func iconName(for hex: UInt32) -> String? {
+    static func iconName(for hex: UInt32, light: Bool) -> String? {
+        let base = iconBase(for: hex)                       // nil = Volt
+        switch (base, light) {
+        case (nil, false): return nil                       // the main icon: Volt on black
+        case (nil, true): return "AppIcon-Volt-Light"
+        case (let n?, false): return "AppIcon-" + n
+        case (let n?, true): return "AppIcon-" + n + "-Light"
+        }
+    }
+
+    private static func iconBase(for hex: UInt32) -> String? {
         let named: [UInt32: String] = [0x00FF85: "Toxic", 0x00E5FF: "Ice", 0x2F6BFF: "Cobalt", 0x9B3DFF: "Violet",
                                        0xFF2E93: "HotPink", 0xFF2424: "Red", 0xFF5A1F: "Ember", 0xFFB300: "Amber"]
         if hex == volt { return nil }
-        if let n = named[hex] { return "AppIcon-" + n }
-        // A custom colour: the nearest preset by hue (greys keep the main icon).
+        if let n = named[hex] { return n }
+        // A custom colour: the nearest preset by hue (greys keep Volt).
         let c = RGBColor(hex: hex).hsl
         guard c.s > 0.25 else { return nil }
         var best: (hex: UInt32, d: Double) = (volt, 9)
@@ -311,7 +323,7 @@ final class ThemeStore: ObservableObject {
             let d = min(abs(h - c.h), 1 - abs(h - c.h))
             if d < best.d { best = (a.hex, d) }
         }
-        return named[best.hex].map { "AppIcon-" + $0 }
+        return named[best.hex]
     }
 }
 
@@ -325,6 +337,7 @@ struct ThemeHost<Content: View>: View {
         SchemeReader { scheme in
             let _ = (Palette.current = theme.palette(for: scheme))
             content()
+                .onChange(of: scheme) { _, _ in theme.scheduleIcon() }   // System: the iPhone flipped light/dark
         }
         .preferredColorScheme(theme.forcedScheme)
         .task {                                   // once a launch: make sure the icon matches your accent

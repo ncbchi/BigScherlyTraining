@@ -189,6 +189,8 @@ final class LiveSessionController: ObservableObject {
 
     /// The workout screen opened. Starts (or re-adopts) the Live Activity.
     func begin(workoutId id: String) {
+        let t0 = Date(); func mark(_ s: String) { print(String(format: "[Open] begin · %@ · %.0f ms", s, Date().timeIntervalSince(t0) * 1000)) }
+        defer { mark("done") }
         LocalReminders.cancelWorkout(id)                 // started: no "today's workout" nudge
         UserDefaults.standard.removeObject(forKey: closedKey)
         // Open the Watch straight into its workout session: it stays on your wrist (every raise
@@ -197,6 +199,7 @@ final class LiveSessionController: ObservableObject {
            WatchBridge.shared.watchAppAvailable, !WatchBridge.shared.watchSessionLive {
             watchLaunchedFor = id
             WatchBridge.shared.startWatchWorkout { _ in }
+            mark("watch app launch requested")
         }
         guard let w = store?.workouts.first(where: { $0.id == id }), !w.completed else { return }
         if workoutId != id {
@@ -227,8 +230,10 @@ final class LiveSessionController: ObservableObject {
                 print("[Live] couldn't start the card: \(error)")
             }
             if let a = activity { watch(a) }
+            mark("live activity")
         }
         push(now: true)
+        mark("first card push")
     }
 
     private func persist() {

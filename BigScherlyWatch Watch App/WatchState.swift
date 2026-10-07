@@ -63,6 +63,7 @@ final class WatchState: NSObject, ObservableObject {
     struct SetupStep: Equatable {
         var title: String, hint: String, caps: String, kind: String     // kind: still · reps
         var target: Int, n: Int, of: Int, lift: String                   // lift: body · squat · bench · deadlift
+        var grip = false                                                 // the bar-grip step (lift setups) rather than hold-still
         var holdAtBottom: Bool { lift == "squat" || lift == "bench" || caps == "HIP BELOW KNEE" }
     }
     @Published private(set) var setup: SetupStep? = nil
@@ -71,11 +72,16 @@ final class WatchState: NSObject, ObservableObject {
     /// ready (Go) · holding (still check) · capturing · checking (phone) · ok
     @Published private(set) var setupPhase = "ready"
     @Published private(set) var setupMessage: String? = nil
+    /// What the phone measured, shown under "Got it" (e.g. "3 reps · 48 cm · 0.9 m/s").
+    @Published private(set) var setupDetail: String? = nil
+    /// Motion capture (debug): true while the raw stream since Go is being kept.
+    private var captureOpen = false
     @Published private(set) var setupCount = 0
     @Published private(set) var holdStarted: Date? = nil
     private var setupGoAt = Date.distantPast
     private var setupSent = false
     private var setupLatest: [RepMotion] = []
+    private var setupTapped = 0                           // reps already tapped for since Go
     private var setupFinish: Task<Void, Never>?
     /// This session was opened just for setup (from Settings, no workout): discard it afterwards.
     private var setupSolo = false
@@ -90,10 +96,11 @@ final class WatchState: NSObject, ObservableObject {
         if let cur = setup, cur.n == (d["n"] as? Int ?? 1), cur.title == (d["title"] as? String ?? "") { return }
         setupAppliedAt = Date()
         setupDiag = nil
+        setupDetail = nil
         setup = SetupStep(title: d["title"] as? String ?? "Setup", hint: d["hint"] as? String ?? "",
                           caps: d["caps"] as? String ?? "", kind: d["kind"] as? String ?? "reps",
                           target: d["target"] as? Int ?? 0, n: d["n"] as? Int ?? 1, of: d["of"] as? Int ?? 1,
-                          lift: d["lift"] as? String ?? "body")
+                          lift: d["lift"] as? String ?? "body", grip: (d["grip"] as? Int ?? 0) == 1)
         stopCountdown()
         setupPhase = "ready"
         setupCount = 0
@@ -103,37 +110,93 @@ final class WatchState: NSObject, ObservableObject {
             WorkoutSessionManager.shared.discardOnEnd = true        // nothing goes to Apple Health
         }
         // (a retry message, if one just arrived, stays up until Go)
+        ensureSetupSession()
+    }
+
+    /// Setup only works inside a workout session: it keeps the app on screen with your arm down,
+    /// and the motion sensors only run in one. The phone opens the Watch into a session, but if that
+    /// didn't happen (the Watch app was just reinstalled, or you opened it yourself) start one here.
+    /// Without a workout on the phone it's a setup-only session, thrown away afterwards.
+    private func ensureSetupSession() {
+        let sessions = WorkoutSessionManager.shared
+        guard !sessions.isRunning else { return }
+        if card == nil {
+            setupSolo = true
+            sessions.discardOnEnd = true                  // nothing goes to Apple Health
+        }
+        print("[Setup] no workout session running — starting one on the Watch")
+        Task { await sessions.start() }
     }
 
     /// Go: right before you touch the weight.
     /// Go: tap, lower your arm, get set. A 3-second countdown (a tap each second) — nothing is measured
     /// until it ends, and your arm moving into place isn't counted as a rep (or a "set").
     @Published private(set) var countdownEnds: Date? = nil
+    @Published private(set) var countdownTotal: Double = 3
     private var countdownTask: Task<Void, Never>?
 
     func setupGo() {
         guard setup != nil, setupPhase == "ready" else { return }
+        // Measuring needs the workout session running FIRST: it's what keeps the app (and the motion
+        // sensors) going once your wrist drops. Without one the countdown froze at 1 and "Hold still"
+        // never finished. Start it, wait for it (a few seconds at most), then go.
+        if !WorkoutSessionManager.shared.isRunning {
+            ensureSetupSession()                          // (the app's in front now, so it can start)
+            setupMessage = nil
+            setupPhase = "starting"
+            Task {
+                for _ in 0..<25 where !WorkoutSessionManager.shared.isRunning {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+                guard self.setupPhase == "starting" else { return }
+                self.setupPhase = "ready"
+                if WorkoutSessionManager.shared.isRunning {
+                    self.setupGo()
+                } else {
+                    let why = WorkoutSessionManager.shared.lastError.map { " (\($0))" } ?? ""
+                    self.setupMessage = "Your Watch couldn't start its workout\(why) — it needs one to keep measuring with your arm down. Close the app on your Watch, open it again, then tap Go."
+                    WKInterfaceDevice.current().play(.retry)
+                }
+            }
+            return
+        }
         setupMessage = nil
         setupPhase = "countdown"
-        countdownEnds = Date().addingTimeInterval(3)
-        MotionRecorder.shared.calibrating = true          // arm going down: not a rep, not a set
-        WKInterfaceDevice.current().play(.click)
+        // Still checks: 3 s. Rep steps: 5 s to get into the starting position — and then it waits
+        // until you've actually settled there before it measures anything.
+        let total = setup?.kind == "still" ? 3 : 5
+        countdownTotal = Double(total)
+        countdownEnds = Date().addingTimeInterval(Double(total))
+        MotionRecorder.shared.calibrating = true          // arm moving into place: not a rep, not a set
+        WatchBuzz.tap()                                   // Go: got it
         countdownTask?.cancel()
         countdownTask = Task {
-            for _ in 0..<2 {
+            for left in stride(from: total - 1, through: 1, by: -1) {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, self.setupPhase == "countdown" else { return }
-                WKInterfaceDevice.current().play(.click)
+                WatchBuzz.countdown(left)                 // tick-tick each second, quicker at the end
             }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled, self.setupPhase == "countdown" else { return }
             self.countdownEnds = nil
-            WKInterfaceDevice.current().play(.start)       // measuring from here
-            self.beginCapture()
+            if self.setup?.kind == "still" {
+                WatchBuzz.go()                             // measuring from here
+                self.beginCapture()
+            } else {
+                self.setupPhase = "arming"                 // hold the starting position; it starts when you're still
+                MotionRecorder.shared.waitForStillness(needed: 0.8, timeout: 12) { _ in
+                    Task { @MainActor in
+                        guard self.setupPhase == "arming" else { return }
+                        WatchBuzz.go()                     // measuring from here
+                        self.beginCapture()
+                    }
+                }
+            }
         }
     }
 
     private func stopCountdown() {
+        MotionRecorder.shared.cancelStillnessWait()
         countdownTask?.cancel(); countdownTask = nil
         countdownEnds = nil
     }
@@ -144,8 +207,12 @@ final class WatchState: NSObject, ObservableObject {
         setupGoAt = Date()
         setupSent = false
         setupMessage = nil
+        setupDetail = nil
         setupLatest = []
+        setupTapped = 0
         setupCount = 0
+        MotionRecorder.shared.beginCapture()              // motion capture: every sample from here
+        captureOpen = true
         let device = WKInterfaceDevice.current()
         Self.sendLive(["setupGo": true,
                        "wrist": device.wristLocation == .left ? "left" : "right",
@@ -160,13 +227,16 @@ final class WatchState: NSObject, ObservableObject {
                 MotionRecorder.shared.beginStillProbe()
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 let stillHolding = self.setupPhase == "holding"
-                MotionRecorder.shared.endStillProbe { shake, rot, n in    // (always ends the probe)
-                    if stillHolding { self.stillMeasured(shake: shake, rot: rot, samples: n) }
+                MotionRecorder.shared.endStillProbe { reading in           // (always ends the probe)
+                    if stillHolding { self.stillMeasured(reading) }
                 }
             }
         } else {
             setupPhase = "capturing"
             MotionRecorder.shared.calibrating = true
+            // Presses and deadlifts go up first; squats and bench go down first.
+            let upFirst = step.lift == "deadlift" || step.title.lowercased().contains("press")
+            MotionRecorder.shared.setRepOrder(upFirst ? .upFirst : .downFirst)
             // Bottom holds: the Watch taps at exactly two seconds — "hold until the tap".
             MotionRecorder.shared.setPauseTarget(step.holdAtBottom ? 2.0 : nil)
         }
@@ -177,21 +247,28 @@ final class WatchState: NSObject, ObservableObject {
     private static let stillShakeLimit = 0.35     // m/s², steady spread of vertical acceleration
     private static let stillRotLimit = 0.30       // rad/s, median rotation
 
-    private func stillMeasured(shake: Double, rot: Double, samples n: Int) {
+    private func stillMeasured(_ g: GripReading) {
+        let shake = g.shake, rot = g.rot, n = g.count
         holdStarted = nil
         let diag = n == 0 ? "no samples" :
-            String(format: "measured %.2f m/s² · %.2f rad/s  (limit %.2f · %.2f) · %d samples",
-                   shake, rot, Self.stillShakeLimit, Self.stillRotLimit, n)
+            String(format: "measured %.2f m/s² · %.2f rad/s  (limit %.2f · %.2f) · tilt %.0f° · %d samples",
+                   shake, rot, Self.stillShakeLimit, Self.stillRotLimit, g.tiltDeg, n)
         print("[Setup] still check: \(diag)")
         setupDiag = diag                                                    // DIAGNOSTIC
+        finishCapture(reps: [], diag: diag)
         if n > 0, shake < Self.stillShakeLimit, rot < Self.stillRotLimit {
             setupPhase = "checking"
-            Self.sendLive(["setupStillDone": true])
+            // The grip: how the Watch sits and its resting zero — kept here, and sent to the phone.
+            UserDefaults.standard.set(["tilt": g.tiltDeg, "zero": g.restZero, "at": Date().timeIntervalSince1970],
+                                      forKey: "bst.watch.grip")
+            Self.sendLive(["setupStillDone": true, "gripTilt": g.tiltDeg, "gripZero": g.restZero])
             return
         }
         let message = n == 0
             ? "Your Watch wasn't measuring — make sure the workout is running on it, then tap Go again."
-            : "You moved a little — arm relaxed at your side, stand completely still, then tap Go again."
+            : (setup?.grip == true
+               ? "Your grip moved — hold the bar (or your hand) completely still, then tap Go again."
+               : "You moved a little — arm relaxed at your side, stand completely still, then tap Go again.")
         setupPhase = "ready"
         setupMessage = message
         WKInterfaceDevice.current().play(.retry)
@@ -216,14 +293,22 @@ final class WatchState: NSObject, ObservableObject {
     fileprivate func setupLive(_ reps: [RepMotion]) {
         guard let step = setup, setupPhase == "capturing" else { return }
         let mine = reps.filter { $0.start >= setupGoAt.addingTimeInterval(-0.5) }
+        // A tap for every rep it counts (setup only, for now — workouts can use WatchBuzz.rep() later).
+        if mine.count > setupTapped {
+            setupTapped = mine.count
+            WatchBuzz.rep()
+        }
         setupLatest = mine
         setupCount = mine.count
         if let data = try? JSONEncoder().encode(mine) { Self.sendLive(["setupLive": data]) }
         if step.target > 0, mine.count >= step.target, setupFinish == nil {
-            // Target reached: give the last rep a moment to settle, then hand them over.
+            // Target reached: give the last rep a moment to settle, then hand them over — but only if
+            // the count still holds. (A rep counted early can be withdrawn when the analysis sees more;
+            // handing over then sent "Only 2 reps" for a full set of 3. Now it just keeps measuring.)
             setupFinish = Task {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard !Task.isCancelled else { return }
+                guard self.setupLatest.count >= step.target else { self.setupFinish = nil; return }
                 self.sendSetupReps(self.setupLatest)
             }
         }
@@ -241,7 +326,28 @@ final class WatchState: NSObject, ObservableObject {
         setupSent = true
         setupFinish?.cancel(); setupFinish = nil
         setupPhase = "checking"
+        finishCapture(reps: reps, diag: nil)
         Self.sendLive(["setupReps": data])
+    }
+
+    /// Motion capture (debug tool): stop recording, pack the raw stream and send it to the phone
+    /// with the Watch's own count — the phone adds its verdict and keeps it for Copy.
+    private func finishCapture(reps: [RepMotion], diag: String?) {
+        guard captureOpen, let step = setup else { return }
+        captureOpen = false
+        let repsData = (try? JSONEncoder().encode(reps)) ?? Data()
+        let title = step.title, lift = step.lift, kind = step.kind, n = step.n, of = step.of
+        let build = WatchBuild.tag
+        MotionRecorder.shared.endCapture { samples in
+            guard samples.count >= 50 else { return }
+            let packed = MotionCapturePack.pack(samples)
+            var m: [String: Any] = ["motionCapture": packed.data, "mcReps": repsData,
+                                    "mcTitle": title, "mcLift": lift, "mcKind": kind, "mcN": n, "mcOf": of,
+                                    "mcStart": packed.startT, "mcHz": MotionCapturePack.outRate,
+                                    "mcBuild": build, "mcAnalyzer": RepAnalyzer.version, "mcRaw": samples.count]
+            if let diag { m["mcDiag"] = diag }
+            WatchState.sendLive(m)
+        }
     }
 
     fileprivate func setupRetry(_ message: String) {
@@ -253,13 +359,16 @@ final class WatchState: NSObject, ObservableObject {
         WKInterfaceDevice.current().play(.retry)
     }
 
-    fileprivate func setupOK() {
+    fileprivate func setupOK(detail: String?) {
+        setupDetail = detail
         setupPhase = "ok"
         WKInterfaceDevice.current().play(.success)
     }
 
     func setupEnd() {
         stopCountdown()
+        if captureOpen { captureOpen = false; MotionRecorder.shared.endCapture { _ in } }   // nothing to send
+        setupDetail = nil
         setup = nil
         setupPhase = "ready"
         setupMessage = nil
@@ -336,15 +445,21 @@ final class WatchState: NSObject, ObservableObject {
         cardDemo = demo
         if let step, step > 0 { weightStep = step }
         if let warn { restWarning = warn }
-        if let a = c.accent, a != accentHex {
+        applyTheme(c.accent, inkWhite: c.accentInkWhite)
+        scheduleRestTaps()
+    }
+
+    /// Your theme accent — from the card during a workout, and from every pull otherwise (setup from
+    /// Settings has no card, and a reinstalled Watch app starts with no saved accent).
+    fileprivate func applyTheme(_ accent: UInt32?, inkWhite: Bool?) {
+        if let a = accent, a != 0, a != accentHex {
             accentHex = a
             UserDefaults.standard.set(Int(a), forKey: "bst.watch.accent")
         }
-        if let ink = c.accentInkWhite, ink != accentInkWhite {
+        if let ink = inkWhite, ink != accentInkWhite {
             accentInkWhite = ink
             UserDefaults.standard.set(ink, forKey: "bst.watch.accentInk")
         }
-        scheduleRestTaps()
     }
 
     /// No card. `finished`: the phone's workout ended, so the session ends too
@@ -504,7 +619,7 @@ final class WatchState: NSObject, ObservableObject {
     /// sound cue — is a live stream: best-effort, a missed sample doesn't matter.
     nonisolated private static let eventKeys: Set<String> =
         ["cardAction", "setupGo", "setupStillDone", "setupStillFailed", "setupExit", "setupReps",
-         "setStarted", "detectedSet", "sessionActive"]
+         "setStarted", "detectedSet", "sessionActive", "motionCapture", "dbgGo", "dbgStopped", "dbgDone"]
 
     nonisolated static func sendLive(_ msg: [String: Any]) {
         guard WCSession.default.activationState == .activated else { return }
@@ -616,6 +731,7 @@ final class WatchState: NSObject, ObservableObject {
         let ex = w.exercises.first { $0.id == focusedExerciseId }
             ?? w.exercises.first { $0.sets.contains { $0.loggedReps == nil } }
         MotionRecorder.shared.setPauseTarget(ex?.pauseTarget)
+        MotionRecorder.shared.setRepOrder(.forExercise(ex?.name))
     }
 
     private func attachDetectionsToPhoneLoggedSets(old: WatchWorkout?, new: WatchWorkout) {
@@ -665,8 +781,14 @@ final class WatchState: NSObject, ObservableObject {
             Self.sendLive(["setStarted": true, "workoutId": wid])
         }
         // Phase 3: every rep so far, as each is counted, for the phone's live card.
-        MotionRecorder.shared.onCalibReps = { [weak self] reps in self?.setupLive(reps) }
-        MotionRecorder.shared.onCalibEnded = { [weak self] reps, _, _ in self?.setupSetEnded(reps) }
+        MotionRecorder.shared.onCalibReps = { [weak self] reps in
+            self?.setupLive(reps)
+            WatchDebugRecorder.shared.live(reps)              // DEBUG recorder (removed before release)
+        }
+        MotionRecorder.shared.onCalibEnded = { [weak self] reps, _, _ in
+            self?.setupSetEnded(reps)
+            WatchDebugRecorder.shared.setEnded(reps)          // DEBUG recorder
+        }
         MotionRecorder.shared.onLiveReps = { [weak self] reps in
             self?.liveSpeeds = reps.map(\.meanVelocity)
             guard let wid = self?.activeWorkout?.id, let data = try? JSONEncoder().encode(reps) else { return }
@@ -822,6 +944,10 @@ extension WatchState: WCSessionDelegate {
             let warn = message["cardWarn"] as? Bool
             Task { @MainActor in self.applyCard(data, note: note, live: live, demo: demo, step: step, warn: warn) }
         }
+        if let a = message["themeAccent"] as? Int {
+            let ink = message["themeInkWhite"] as? Bool
+            Task { @MainActor in self.applyTheme(UInt32(truncatingIfNeeded: a), inkWhite: ink) }
+        }
         if message["cardEnd"] as? Bool == true {
             let finished = message["endSession"] as? Bool == true
             Task { @MainActor in self.endCard(finished: finished) }
@@ -835,14 +961,24 @@ extension WatchState: WCSessionDelegate {
             }
             Task { @MainActor in
                 var typed: [String: Any] = step
-                for k in ["target", "n", "of", "solo"] { if let s = step[k], let i = Int(s) { typed[k] = i } }
+                for k in ["target", "n", "of", "solo", "grip"] { if let s = step[k], let i = Int(s) { typed[k] = i } }
                 self.applySetup(typed)
             }
         }
         if let m = message["setupRetry"] as? String { Task { @MainActor in self.setupRetry(m) } }
         if message["setupActive"] as? Bool == false { Task { @MainActor in self.phoneHasNoSetup() } }
-        if message["setupOK"] as? Bool == true { Task { @MainActor in self.setupOK() } }
+        if message["setupOK"] as? Bool == true {
+            let detail = message["detail"] as? String
+            Task { @MainActor in self.setupOK(detail: detail) }
+        }
         if message["setupEnd"] as? Bool == true { Task { @MainActor in self.setupEnd() } }
+        // DEBUG recorder (removed before release): the phone arms / ends it.
+        if let d = message["dbgArm"] as? [String: Any] {
+            let lift = d["lift"] as? String ?? "other", title = d["title"] as? String ?? "Recording"
+            let upFirst = (d["upFirst"] as? Int ?? 0) == 1
+            Task { @MainActor in WatchDebugRecorder.shared.armed(lift: lift, title: title, upFirst: upFirst) }
+        }
+        if message["dbgEnd"] as? Bool == true { Task { @MainActor in WatchDebugRecorder.shared.ended() } }
     }
 
     // A finished workout queued while the Watch was away.
@@ -865,7 +1001,7 @@ private extension UInt32 {
 /// Which build of the Watch app this is — shown on Home and reported to the phone, so a Watch
 /// that missed an update is obvious instead of a mystery. Bump with each Watch delivery.
 enum WatchBuild {
-    static let tag = "2026-10-05.12"
+    static let tag = "2026-10-06.10"
 }
 
 // MARK: - The live link

@@ -17,6 +17,7 @@ struct SettingsView: View {
     // Phase 5: theme, menu layout, workout and Stats defaults
     @ObservedObject private var theme = ThemeStore.shared
     @AppStorage("bst_launch_tab") private var launchTab = AppTab.dashboard.rawValue
+    @AppStorage("bst_hand") private var hand = "right"
     @AppStorage("bst_keep_awake") private var keepAwake = true
     @AppStorage("bst_auto_rest") private var autoRest = true
     @AppStorage("bst_live_activity") private var liveActivity = true
@@ -27,6 +28,8 @@ struct SettingsView: View {
     @AppStorage(SetupEngine.cameraKey) private var setupCamera = true
     @ObservedObject private var push = PushCenter.shared
     @State private var showNotifications = false
+    @State private var showCaptures = false
+    @ObservedObject private var captureStore = MotionCaptureStore.shared
     @AppStorage("bst_stats_window") private var statsWindow = StatsWindow.w12.rawValue
     @State private var editingMenu = false
     @State private var customPick: Color = Color(hex: 0x00E5FF)
@@ -94,6 +97,7 @@ struct SettingsView: View {
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $editingMenu) { MenuOrderEditor() }
         .sheet(isPresented: $showNotifications) { NotificationSettingsView().environmentObject(store) }
+        .sheet(isPresented: $showCaptures) { MotionCapturesView().presentationBackground(Brand.bg) }
         .confirmationDialog("Delete your account?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Account", role: .destructive) { performDelete() }
             Button("Cancel", role: .cancel) {}
@@ -348,6 +352,22 @@ struct SettingsView: View {
             rowDivider
             subToggle("Check squat depth with the camera", "Prop the phone side-on — nothing is recorded", $setupCamera)
             rowDivider
+            Button { showCaptures = true } label: {      // DEBUG — removed before release
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Motion captures").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text("Debug — the Watch's raw motion from each setup step, to copy and tune the counting")
+                            .font(BrandFont.body(11)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Text("\(captureStore.captures.count)").font(BrandFont.body(13, .heavy)).foregroundColor(Brand.mute)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(Brand.mute)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            rowDivider
             Button {
                 SetupEngine.resetAll()
                 setupEngine.recalibrate(.body)
@@ -426,6 +446,23 @@ struct SettingsView: View {
     private var navigation: some View {
         section("Navigation") {
             tapRow("Menu order", systemIcon: "line.3.horizontal") { editingMenu = true }
+            rowDivider
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Hand").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                    Spacer()
+                    Picker("Hand", selection: $hand) {
+                        Text("Right").tag("right")
+                        Text("Left").tag("left")
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 150)
+                }
+                Text(hand == "left" ? "Swipe the right edge to go back, the left edge for the menu."
+                                    : "Swipe the left edge to go back, the right edge for the menu.")
+                    .font(BrandFont.body(12)).foregroundColor(Brand.mute)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
             rowDivider
             HStack {
                 Text("Open on launch").font(BrandFont.body(15)).foregroundColor(Brand.text)

@@ -28,12 +28,31 @@ nonisolated struct MotionSample: Sendable {
 }
 
 nonisolated enum RepAnalyzer {
-    static let version = 1
+    static let version = 5          // 2: true sign of vertical acceleration (1 had it upside down)
+                                    // 3: lift order (press/deadlift pair with the lowering after), pauses
+                                    //    measured from where you actually stop, not where the phase ends
+                                    // 4: a press/deadlift rep counts only once it's back down
+                                    // 5: a squat/bench rep needs its lowering first
     static let sampleRate = 100.0
+
+    /// Which way a rep goes first. Squats and bench lower first, then lift; a press or a deadlift
+    /// lifts first, then lowers. It decides which lowering belongs to which lift (the count is the
+    /// same either way; the tempo split, start time and pauses aren't).
+    enum Order: Sendable { case downFirst, upFirst, either
+
+        /// From the exercise's name (nil name or no match → either).
+        static func forExercise(_ name: String?) -> Order {
+            guard let n = name?.lowercased() else { return .either }
+            func has(_ words: String...) -> Bool { words.contains { n.contains($0) } }
+            if has("bench", "squat", "dip", "romanian", "rdl", "good morning", "lunge", "incline", "decline", "leg press", "push-up", "push up") { return .downFirst }
+            if has("deadlift", "press", "ohp", "row", "pull", "chin", "clean", "snatch", "curl", "raise", "shrug", "jerk") { return .upFirst }
+            return .either
+        }
+    }
 
     private struct Phase { var s: Int; var e: Int; var disp: Double }
 
-    static func analyze(_ s: [MotionSample], fs: Double = sampleRate) -> [RepMotion] {
+    static func analyze(_ s: [MotionSample], fs: Double = sampleRate, order: Order = .either) -> [RepMotion] {
         let n = s.count
         guard n > Int(fs) else { return [] }
         let dt = 1 / fs
@@ -172,8 +191,10 @@ nonisolated enum RepAnalyzer {
         for c in con {
             if var last = mc.last {
                 var between = 0.0
-                for k in last.e..<c.s { between += min(0, v[k]) }
-                if tt(c.s) - tt(last.e) < 1.5 && between * dt > -0.02 {
+                var stopped = false
+                for k in last.e..<c.s { between += min(0, v[k]); if still[k] { stopped = true } }
+                // …but not across a real stop (e.g. arm up into the rack, a pause, then the press).
+                if tt(c.s) - tt(last.e) < 1.5 && between * dt > -0.02 && !stopped {
                     last.e = c.e
                     last.disp += c.disp
                     mc[mc.count - 1] = last
@@ -194,19 +215,31 @@ nonisolated enum RepAnalyzer {
         ecc = ecc.map { widen($0, -1) }
 
         // 5. Reps.
+        // Pauses are measured between the moments you're really moving (over 0.12 m/s), not the phase
+        // edges — at the bottom of a hold the wrist settles slowly for a second, which the phase edges
+        // counted as still lowering (a 1.8 s hold read as 0.7 s; checked against the camera, Oct 6).
+        let moving = 0.12
+        func liftStart(_ p: Phase) -> Int { (p.s..<p.e).first { v[$0] > moving } ?? p.s }
+        func liftEnd(_ p: Phase) -> Int { (p.s..<p.e).last { v[$0] > moving } ?? p.e }
+        func lowerStart(_ p: Phase) -> Int { (p.s..<p.e).first { v[$0] < -moving } ?? p.s }
+        func lowerEnd(_ p: Phase) -> Int { (p.s..<p.e).last { v[$0] < -moving } ?? p.e }
         var reps: [RepMotion] = []
         for (ci, c) in con.enumerated() {
             let cs = c.s, ce = c.e
             let prevCe = ci > 0 ? con[ci - 1].e : -1
             let nextCs = ci + 1 < con.count ? con[ci + 1].s : n
-            let before = ecc.filter { $0.e <= cs && $0.s >= prevCe }
-            let after = ecc.filter { $0.s >= ce && $0.e <= nextCs }
+            // Lowering phases next to this lift (by where they start/end — the widened phases can
+            // overlap by a few samples, which used to drop real reps).
+            let slack = Int(0.4 * fs)
+            let before = ecc.filter { $0.e <= cs + slack && $0.s < cs && $0.e > prevCe }
+            let after = ecc.filter { $0.s >= ce - slack && $0.s < nextCs && $0.e > ce }
 
-            var eccP = before.last
-            var bottom: Double? = eccP.map { tt(cs) - tt($0.e) }
-            if let b = bottom, b > 8 { eccP = nil; bottom = nil }
-            var top: Double? = after.first.map { tt($0.s) - tt(ce) }
-            if let t0 = top, t0 > 8 { top = nil }
+            var lowerBefore = before.last
+            var lowerAfter = after.first
+            var bottom: Double? = lowerBefore.map { tt(liftStart(c)) - tt(lowerEnd($0)) }
+            if let b = bottom, b > 8 { lowerBefore = nil; bottom = nil }
+            var top: Double? = lowerAfter.map { tt(lowerStart($0)) - tt(liftEnd(c)) }
+            if let t0 = top, t0 > 8 { lowerAfter = nil; top = nil }
 
             let seg = Array(v[cs..<ce])
             guard !seg.isEmpty else { continue }
@@ -214,9 +247,13 @@ nonisolated enum RepAnalyzer {
             let travel = seg.reduce(0, +) * dt
 
             // Must go back the other way, and be a plausible lift.
-            let okBefore = eccP.map { $0.disp >= 0.5 * travel } ?? false
-            let okAfter = after.first.map { $0.disp >= 0.5 * travel } ?? false
-            guard okBefore || okAfter, dur >= 0.2, dur <= 8.0, travel > 0, travel <= 1.2 else { continue }
+            let okBefore = lowerBefore.map { $0.disp >= 0.5 * travel } ?? false
+            let okAfter = lowerAfter.map { $0.disp >= 0.5 * travel } ?? false
+            // A press or deadlift only counts once it's come back down (counting it on the way up
+            // showed half a rep, then took it back). A squat or bench rep needs its lowering first —
+            // standing up out of a crouch (or unracking) isn't a rep. Unknown lifts: either side.
+            let complete = order == .upFirst ? okAfter : (order == .downFirst ? okBefore : (okBefore || okAfter))
+            guard complete, dur >= 0.2, dur <= 8.0, travel > 0, travel <= 1.2 else { continue }
 
             let pk = seg.max() ?? 0
 
@@ -253,13 +290,17 @@ nonisolated enum RepAnalyzer {
                 drift = max(drift, (px * px + py * py).squareRoot())
             }
 
-            let startIdx = eccP?.s ?? cs
-            let eccSec: Double? = eccP.map { tt($0.e - 1) - tt($0.s) + dt }
+            // This rep's own lowering: the one before the lift (squat, bench), or after it (press,
+            // deadlift). The rep runs from the start of its first phase to the end of its last.
+            let own: Phase? = order == .upFirst ? (okAfter ? lowerAfter : nil) : (okBefore ? lowerBefore : nil)
+            let startIdx = order == .upFirst ? cs : (own?.s ?? cs)
+            let endIdx = order == .upFirst ? (own?.e ?? ce) : ce
+            let eccSec: Double? = own.map { tt($0.e - 1) - tt($0.s) + dt }
 
             reps.append(RepMotion(
                 index: reps.count + 1,
                 start: Date(timeIntervalSince1970: tt(startIdx)),
-                end: Date(timeIntervalSince1970: tt(ce)),
+                end: Date(timeIntervalSince1970: tt(endIdx)),
                 eccentricSec: eccSec,
                 bottomPauseSec: bottom.map { max(0, $0) },
                 concentricSec: dur,

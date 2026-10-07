@@ -125,13 +125,34 @@ struct ChatThreadView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                ScrollView {
-                    VStack(spacing: 14) {
-                        ForEach(thread.messages) { m in
-                            bubble(m)
+                if thread.messages.isEmpty {
+                    EmptyState(icon: "bubble.left.and.text.bubble",
+                               title: "Say the first thing",
+                               message: "Describe what's going on. A short video of the set helps your coach see it.")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                let ms = thread.messages
+                                ForEach(Array(ms.enumerated()), id: \.element.id) { i, m in
+                                    let prev = i > 0 ? ms[i - 1] : nil
+                                    let next = i + 1 < ms.count ? ms[i + 1] : nil
+                                    if startsNewDay(prev, m) { daySeparator(m.timestamp) }
+                                    bubble(m, joinsPrevious: grouped(prev, m), joinsNext: grouped(m, next))
+                                        .padding(.top, grouped(prev, m) ? 3 : 12)
+                                        .id(m.id)
+                                }
+                            }
+                            .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
+                        }
+                        // Newest at the bottom: opens there, and stays there as messages land.
+                        .defaultScrollAnchor(.bottom)
+                        .onChange(of: thread.messages.count) { _, _ in
+                            guard let last = thread.messages.last else { return }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     }
-                    .padding(20)
                 }
                 if isProcessing {
                     HStack(spacing: 8) {
@@ -148,8 +169,9 @@ struct ChatThreadView: View {
                     TextField("", text: $draft, prompt: Text("Message coach…").foregroundColor(Brand.mute))
                         .foregroundColor(Brand.text).padding(12).background(Brand.black)
                         .overlay(Capsule().stroke(Brand.line, lineWidth: 1)).clipShape(Capsule())
+                    let canSend = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     Button {
-                        guard !draft.isEmpty else { return }
+                        guard canSend else { return }
                         let text = draft
                         thread.messages.append(ChatMessage(id: UUID().uuidString, text: text, fromTrainer: false, timestamp: Date()))
                         draft = ""
@@ -157,9 +179,14 @@ struct ChatThreadView: View {
                             Task { try? await APIClient.shared.sendMessage(threadId: thread.id, text: text) }
                         }
                     } label: {
-                        Image(systemName: "arrow.up").foregroundColor(Brand.onVolt).font(.system(size: 18, weight: .bold))
-                            .frame(width: 40, height: 40).background(Circle().fill(Brand.volt))
+                        Image(systemName: "arrow.up").foregroundColor(canSend ? Brand.onVolt : Brand.mute)
+                            .font(.system(size: 18, weight: .bold))
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(canSend ? Brand.volt : Brand.text.opacity(0.10)))
                     }
+                    .disabled(!canSend)
+                    .animation(.easeInOut(duration: 0.15), value: canSend)
+                    .accessibilityLabel("Send")
                 }
                 .padding(14).background(Brand.bg)
                 .overlay(Rectangle().fill(Brand.line).frame(height: 1), alignment: .top)
@@ -224,8 +251,46 @@ struct ChatThreadView: View {
         localVideos[m.id] != nil || m.videoKey != nil
     }
 
-    func bubble(_ m: ChatMessage) -> some View {
-        HStack {
+    func startsNewDay(_ prev: ChatMessage?, _ m: ChatMessage) -> Bool {
+        guard let prev else { return true }
+        return !Calendar.current.isDate(prev.timestamp, inSameDayAs: m.timestamp)
+    }
+
+    /// Same sender, same day, within five minutes: the bubbles read as one run.
+    func grouped(_ a: ChatMessage?, _ b: ChatMessage?) -> Bool {
+        guard let a, let b, a.fromTrainer == b.fromTrainer,
+              Calendar.current.isDate(a.timestamp, inSameDayAs: b.timestamp) else { return false }
+        return abs(b.timestamp.timeIntervalSince(a.timestamp)) < 5 * 60
+    }
+
+    func daySeparator(_ d: Date) -> some View {
+        let cal = Calendar.current
+        let label: String = cal.isDateInToday(d) ? "TODAY"
+            : cal.isDateInYesterday(d) ? "YESTERDAY"
+            : d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased()
+        return HStack(spacing: 10) {
+            Rectangle().fill(Brand.line).frame(height: 1)
+            Text(label).font(BrandFont.body(10, .heavy)).tracking(1.5).foregroundColor(Brand.mute).fixedSize()
+            Rectangle().fill(Brand.line).frame(height: 1)
+        }
+        .padding(.top, 14).padding(.bottom, 2)
+    }
+
+    /// Corners tighten on the sender's side where a bubble joins the one before or after it.
+    func bubbleShape(_ m: ChatMessage, joinsPrevious: Bool, joinsNext: Bool) -> UnevenRoundedRectangle {
+        let r: CGFloat = 18, j: CGFloat = 6
+        if m.fromTrainer {
+            return UnevenRoundedRectangle(topLeadingRadius: joinsPrevious ? j : r, bottomLeadingRadius: joinsNext ? j : r,
+                                          bottomTrailingRadius: r, topTrailingRadius: r)
+        } else {
+            return UnevenRoundedRectangle(topLeadingRadius: r, bottomLeadingRadius: r,
+                                          bottomTrailingRadius: joinsNext ? j : r, topTrailingRadius: joinsPrevious ? j : r)
+        }
+    }
+
+    func bubble(_ m: ChatMessage, joinsPrevious: Bool, joinsNext: Bool) -> some View {
+        let shape = bubbleShape(m, joinsPrevious: joinsPrevious, joinsNext: joinsNext)
+        return HStack {
             if !m.fromTrainer { Spacer(minLength: 40) }
             VStack(alignment: m.fromTrainer ? .leading : .trailing, spacing: 4) {
                 if hasVideo(m) { videoThumb(m) }
@@ -235,10 +300,14 @@ struct ChatThreadView: View {
                         .foregroundColor(m.fromTrainer ? Brand.text : Brand.onVolt)
                         .padding(.horizontal, 16).padding(.vertical, 11)
                         .background(m.fromTrainer ? Brand.black : Brand.volt)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .overlay(m.fromTrainer ? RoundedRectangle(cornerRadius: 18).stroke(Brand.line, lineWidth: 1) : nil)
+                        .clipShape(shape)
+                        .overlay(m.fromTrainer ? shape.stroke(Brand.line, lineWidth: 1) : nil)
                 }
-                Text(time(m.timestamp)).font(BrandFont.body(10)).foregroundColor(Brand.mute)
+                // One time per run of bubbles; the day separator carries the date.
+                if !joinsNext {
+                    Text(m.timestamp.formatted(.dateTime.hour().minute()))
+                        .font(BrandFont.body(10)).foregroundColor(Brand.mute).padding(.horizontal, 4)
+                }
             }
             if m.fromTrainer { Spacer(minLength: 40) }
         }

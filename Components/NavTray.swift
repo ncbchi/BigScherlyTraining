@@ -17,9 +17,10 @@ struct FloatingMenuButton: View {
                     }
                 }
                 .padding(10)
-                // subtle backing so it stays legible over any content
-                .background(Brand.bg.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                // Solid backing with a hairline edge: content scrolling under the button
+                // is cleanly covered, not smeared through a translucent square.
+                .background(RoundedRectangle(cornerRadius: 10).fill(Brand.bg))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.line, lineWidth: 1))
 
                 if store.unreadMessages > 0 || !store.liveAnnouncements.isEmpty {
                     Circle().fill(Brand.volt).frame(width: 9, height: 9)

@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import Combine
 import AVFoundation
+import AudioToolbox
 import UserNotifications
 
 // MARK: - Sounds (bundled in BigScherlyTraining/Sounds, made for the app)
@@ -275,11 +276,14 @@ final class SoundPlayer {
 
     func play(_ snd: BSTSound, respectOutput: Bool = true) {
         if respectOutput && !AudioOutput.soundsAllowed { return }
+        if snd == .system {
+            // The same tone the background notification uses for "iPhone default".
+            AudioServicesPlaySystemSound(1007)
+            return
+        }
         let url: URL?
         if let f = snd.file, snd != .none {
             url = Bundle.main.url(forResource: (f as NSString).deletingPathExtension, withExtension: "wav")
-        } else if snd == .system {
-            url = Bundle.main.url(forResource: "bell", withExtension: "mp3")
         } else {
             url = nil
         }
@@ -886,7 +890,7 @@ struct WatchBuzzSettingsView: View {
                         }
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         NDivider()
-                        NToggle(title: "Countdown ticks", sub: "A light tick each second while you hold", on: $prefs.s.pauseTicks)
+                        NToggle(title: "Build-up taps", sub: "Gentle taps that get faster and firmer while you hold, then the finish buzz", on: $prefs.s.pauseTicks)
                     }
                 }
                 NSection(title: "Slow-rep buzz") {

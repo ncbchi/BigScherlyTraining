@@ -24,6 +24,15 @@ nonisolated enum MotionSettings {
     }
 }
 
+/// What the grip check measured: how steady, and how the Watch sits in your grip.
+nonisolated struct GripReading: Sendable {
+    var shake: Double       // m/s², spread of vertical acceleration
+    var rot: Double         // rad/s, median rotation
+    var count: Int          // samples (0 = the Watch wasn't measuring)
+    var tiltDeg: Double     // how far the Watch face is tipped from level in this grip
+    var restZero: Double    // m/s², the resting vertical reading — the sensor's zero
+}
+
 @MainActor
 final class MotionRecorder: ObservableObject {
     static let shared = MotionRecorder()
@@ -60,7 +69,7 @@ final class MotionRecorder: ObservableObject {
     var onCalibEnded: ((_ reps: [RepMotion], _ start: Date, _ end: Date) -> Void)?
     /// Briefly after setup, a set ending is still setup motion — ignore it.
     private var ignoreSetsUntil: Date?
-    private var stillDone: ((Double, Double, Int) -> Void)?
+    private var stillDone: ((GripReading) -> Void)?
 
     /// Setup finished. If a set is still open, stay in setup mode until it closes, so its tail
     /// can't be mistaken for a real set.
@@ -71,16 +80,27 @@ final class MotionRecorder: ObservableObject {
 
     /// "Hold still": measure how much the Watch moves (vertical shake m/s², rotation rad/s).
     func beginStillProbe() { processor.beginStillProbe() }
-    func endStillProbe(_ done: @escaping (Double, Double, Int) -> Void) {
+
+    /// Setup, rep steps: after the countdown, wait until you've settled into the starting position
+    /// (still for `needed` seconds) — then it starts measuring. `done(false)` = gave up waiting.
+    func waitForStillness(needed: Double, timeout: Double, _ done: @escaping @Sendable (Bool) -> Void) {
+        processor.waitForStillness(needed: needed, timeout: timeout, done)
+    }
+    func cancelStillnessWait() { processor.cancelStillnessWait() }
+    func endStillProbe(_ done: @escaping (GripReading) -> Void) {
         stillDone = done
-        processor.endStillProbe { shake, rot, n in
-            Task { @MainActor in MotionRecorder.shared.finishStill(shake, rot, n) }
+        processor.endStillProbe { reading in
+            Task { @MainActor in MotionRecorder.shared.finishStill(reading) }
         }
     }
-    private func finishStill(_ shake: Double, _ rot: Double, _ n: Int) {
-        stillDone?(shake, rot, n)
+    private func finishStill(_ reading: GripReading) {
+        stillDone?(reading)
         stillDone = nil
     }
+
+    // MARK: Motion capture (debug tool) — every raw sample from Go to hand-over
+    func beginCapture() { processor.beginCapture() }
+    func endCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) { processor.endCapture(done) }
 
     private init() {
         // The recorder is a singleton, so the callbacks reach it through `shared`
@@ -136,23 +156,31 @@ final class MotionRecorder: ObservableObject {
         }
     }
 
-    /// The pause tap, at the strength chosen on the phone.
+    /// Pause done: the clear "drive up" buzz, at the strength chosen on the phone (setup: at least medium).
     private func pauseTap() {
-        let device = WKInterfaceDevice.current()
-        switch haptics.pauseStrength {
-        case 0: device.play(.click)
-        case 2:
-            device.play(.notification)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { device.play(.click) }
-        default: device.play(.success)
-        }
+        WatchBuzz.pauseDone(strength: calibrating ? max(1, haptics.pauseStrength) : haptics.pauseStrength)
     }
 
-    /// A light tick each whole second while held (if switched on).
-    func pauseTick() {
-        guard haptics.pauseTicks else { return }
-        WKInterfaceDevice.current().play(.click)
+    /// While you hold: gentle taps that come faster and firmer as the pause fills, so you can feel
+    /// how far along you are. Always in setup; in workouts when "Build-up taps" is on (phone setting).
+    private var buildTask: Task<Void, Never>?
+    private func startBuildUp(from start: Date) {
+        buildTask?.cancel()
+        guard pauseTarget > 0, calibrating || haptics.pauseTicks else { return }
+        let target = pauseTarget
+        buildTask = Task { @MainActor in
+            while !Task.isCancelled {
+                let f = Date().timeIntervalSince(start) / target
+                guard f < 0.97, self.pauseStart == start, !self.pauseReached else { return }
+                WatchBuzz.pauseBuild(f)
+                try? await Task.sleep(nanoseconds: UInt64(WatchBuzz.pauseGap(f) * 1_000_000_000))
+            }
+        }
     }
+    private func stopBuildUp() { buildTask?.cancel(); buildTask = nil }
+
+    /// Which way this exercise's reps go first (see RepAnalyzer.Order).
+    func setRepOrder(_ o: RepAnalyzer.Order) { processor.setOrder(o) }
 
     /// The exercise you're on asks for this bottom pause (nil or 0 = off).
     func setPauseTarget(_ seconds: Double?) {
@@ -163,14 +191,18 @@ final class MotionRecorder: ObservableObject {
     }
 
     private func applyPause(bottomAt: TimeInterval?, reached: Bool) {
-        guard let bottomAt else { pauseStart = nil; pauseReached = false; return }
-        pauseStart = Date(timeIntervalSince1970: bottomAt)
+        guard let bottomAt else { stopBuildUp(); pauseStart = nil; pauseReached = false; return }
+        let start = Date(timeIntervalSince1970: bottomAt)
+        let isNew = pauseStart != start
+        pauseStart = start
         pauseReached = reached
-        if reached { pauseTap() }                                   // the tap: drive up
+        if reached { stopBuildUp(); pauseTap() }                    // the tap: drive up
+        else if isNew { startBuildUp(from: start) }
     }
 
     private func applySetEnded(reps: [RepMotion], start: Date, end: Date) {
         announcedStart = false
+        stopBuildUp()
         pauseStart = nil; pauseReached = false
         liveRepCount = nil
         liveLastVelocity = nil
@@ -231,35 +263,76 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
     private var buzzThreshold = 20.0
 
     // Pause buzz: a light, per-sample bottom detector (the rep analyser runs only twice a
-    // second, too coarse to tap at exactly 2 s). Leaky-integrated vertical velocity tells
-    // descending from settled; stillness after a descent is the bottom.
+    // second, too coarse to tap at exactly 2 s). Velocity is integrated and zeroed whenever the
+    // Watch is truly still; a real descent (15 cm+, faster than 0.3 m/s) followed by a quarter
+    // second of barely moving is the bottom; moving up again ends it. (Rewritten Oct 6 against the
+    // camera: the old one fired at the top of every squat and missed a real 1.8 s hold.)
     private var pauseTarget = 0.0
     private var vel = 0.0
     private var lastT: TimeInterval = 0
-    private var descendFor = 0.0
+    private var pA = 0.0                  // vertical acceleration, lightly smoothed
+    private var pQuiet = 0.0              // seconds truly still
+    private var pSeg = 0.0                // height change since the last still moment (m)
+    private var pVmin = 0.0               // fastest descent in it (m/s, negative)
+    private var pSlow = 0.0               // seconds barely moving after a descent
+    private var pDescended = false
     private var bottomAt: TimeInterval? = nil
     private var pauseReached = false
 
+    /// Which way reps go first, for the analyser (set from the exercise or the setup step).
+    private var order: RepAnalyzer.Order = .either
+    func setOrder(_ o: RepAnalyzer.Order) { queue.addOperation { [self] in self.order = o } }
+    /// What was last handed to the live callback, so a rep's numbers still settling get sent again.
+    private var liveSignature = ""
+
     // "Hold still" probe: vertical acceleration and rotation while it runs (touched only on `queue`).
-    private var probe: [(av: Double, rot: Double)]? = nil
+    private var probe: [(av: Double, rot: Double, nz: Double)]? = nil
 
     func beginStillProbe() { queue.addOperation { [self] in self.probe = [] } }
+
+    // Waiting for the starting position (touched only on `queue`).
+    private var armWait: (needed: Double, since: TimeInterval?, deadline: TimeInterval, done: @Sendable (Bool) -> Void)?
+
+    func waitForStillness(needed: Double, timeout: Double, _ done: @escaping @Sendable (Bool) -> Void) {
+        queue.addOperation { [self] in
+            let now = ProcessInfo.processInfo.systemUptime + self.bootOffset
+            self.armWait = (needed, nil, now + timeout, done)
+        }
+    }
+    func cancelStillnessWait() { queue.addOperation { [self] in self.armWait = nil } }
+
+    // Motion capture (debug tool): every sample from Go until hand-over (touched only on `queue`).
+    private var capture: [MotionSample]? = nil
+    private let captureLimit = 6000                       // 60 s at 100 Hz
+
+    func beginCapture() { queue.addOperation { [self] in self.capture = [] } }
+    func endCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) {
+        queue.addOperation { [self] in
+            let c = self.capture ?? []
+            self.capture = nil
+            done(c)
+        }
+    }
 
     /// The steady part of the hold: shake = spread of vertical acceleration (m/s², the largest 5% of
     /// deviations ignored, so one stray bump doesn't fail it); rot = median rotation (rad/s).
     /// Also the sample count — 0 means the Watch wasn't measuring at all.
-    func endStillProbe(_ done: @escaping @Sendable (Double, Double, Int) -> Void) {
+    func endStillProbe(_ done: @escaping @Sendable (GripReading) -> Void) {
         queue.addOperation { [self] in
             let p = self.probe ?? []
             self.probe = nil
-            guard p.count >= 30 else { done(0, 0, p.count); return }
+            guard p.count >= 30 else {
+                done(GripReading(shake: 0, rot: 0, count: p.count, tiltDeg: 0, restZero: 0)); return
+            }
             let avs = p.map { $0.av }.sorted()
             let median = avs[avs.count / 2]
             let dev = avs.map { abs($0 - median) }.sorted()
             let kept = dev.prefix(max(1, Int(Double(dev.count) * 0.95)))
             let shake = (kept.reduce(0) { $0 + $1 * $1 } / Double(kept.count)).squareRoot()
             let rots = p.map { $0.rot }.sorted()
-            done(shake, rots[rots.count / 2], p.count)
+            let nzs = p.map { $0.nz }.sorted()
+            let tilt = acos(min(1, abs(nzs[nzs.count / 2]))) * 180 / .pi      // face tipped from level
+            done(GripReading(shake: shake, rot: rots[rots.count / 2], count: p.count, tiltDeg: tilt, restZero: median))
         }
     }
 
@@ -311,7 +384,11 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         let gl = (gx * gx + gy * gy + gz * gz).squareRoot()
         guard gl > 0.1 else { return }
         let nx = gx / gl, ny = gy / gl, nz = gz / gl
-        let ux = m.userAcceleration.x, uy = m.userAcceleration.y, uz = m.userAcceleration.z
+        // CoreMotion reports userAcceleration with the opposite sign to the real movement (the same
+        // convention as its raw accelerometer: lifting the Watch reads as acceleration toward the
+        // ground). Flipped here so everything below is the true acceleration. Confirmed against the
+        // camera on Oct 6: unflipped, every press read as a lowering.
+        let ux = -m.userAcceleration.x, uy = -m.userAcceleration.y, uz = -m.userAcceleration.z
         let along = ux * nx + uy * ny + uz * nz          // along gravity (down)
         let av = -along * G                              // up positive
 
@@ -330,8 +407,10 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         let rr = m.rotationRate
         let rot = (rr.x * rr.x + rr.y * rr.y + rr.z * rr.z).squareRoot()
         let t = m.timestamp + bootOffset
-        if probe != nil { probe?.append((av: av, rot: rot)) }
-        buffer.append(MotionSample(t: t, av: av, h1: h1, h2: h2, rot: rot))
+        if probe != nil { probe?.append((av: av, rot: rot, nz: nz)) }
+        let sample = MotionSample(t: t, av: av, h1: h1, h2: h2, rot: rot)
+        buffer.append(sample)
+        if capture != nil, capture!.count < captureLimit { capture!.append(sample) }
 
         // Activity (≈0.3 s smoothing).
         let alpha = 0.032
@@ -339,6 +418,17 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         smoothR += alpha * (rot - smoothR)
         let active = smoothA > activeAccel || smoothR > activeRot
         let idx = buffer.count - 1
+
+        if let a = armWait {                                 // settled into the starting position?
+            if smoothA < 0.22 && smoothR < 0.5 {
+                let since = a.since ?? t
+                armWait?.since = since
+                if t - since >= a.needed { armWait = nil; a.done(true) }
+            } else {
+                armWait?.since = nil
+            }
+            if armWait != nil, t >= a.deadline { armWait = nil; a.done(false) }
+        }
 
         if !inSet {
             if active {
@@ -348,7 +438,9 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
                 liveReps = 0
                 buzzed = false
                 lastLiveAnalysis = t
-                vel = 0; lastT = t; descendFor = 0; bottomAt = nil; pauseReached = false
+                vel = 0; lastT = t; bottomAt = nil; pauseReached = false
+                pA = 0; pQuiet = 0; pSeg = 0; pVmin = 0; pSlow = 0; pDescended = false
+                liveSignature = ""
             } else if buffer.count > 600 {
                 // Idle: keep just a couple of seconds for the preroll.
                 buffer.removeFirst(buffer.count - 300)
@@ -357,7 +449,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         }
 
         if active { lastActiveIndex = idx }
-        pauseStep(av: av, t: t)
+        pauseStep(av: av, rot: rot, t: t)
         let quietFor = t - buffer[lastActiveIndex].t
         let setLength = t - buffer[setStartIndex].t
 
@@ -373,27 +465,35 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
     }
 
     /// Runs on every sample during a set.
-    private func pauseStep(av: Double, t: TimeInterval) {
+    private func pauseStep(av: Double, rot: Double, t: TimeInterval) {
         let dt = lastT > 0 ? min(0.05, max(0, t - lastT)) : 1.0 / RepAnalyzer.sampleRate
         lastT = t
-        vel = (vel + av * dt) * 0.985               // local direction, without long-term drift
+        pA += (1 - pow(0.75, dt * 25)) * (av - pA)
+        pQuiet = (abs(pA) < 0.35 && rot < 1.0) ? pQuiet + dt : 0
+        vel += pA * dt
+        if pQuiet >= 0.2 { vel = 0 }                  // truly still: no speed, whatever the sums say
+        pSeg += vel * dt
         guard pauseTarget > 0 else { return }
-        let still = smoothA < 0.22 && smoothR < 0.5
         if let b = bottomAt {
-            if vel > 0.10 || smoothA > 0.45 {         // driving up (or moving): the pause is over
-                bottomAt = nil; descendFor = 0
+            if vel > 0.15 {                           // driving up: the pause is over
+                bottomAt = nil
+                pDescended = false; pSeg = 0; pVmin = 0; pSlow = 0
                 onPause?(nil, false)
             } else if !pauseReached, t - b >= pauseTarget {
                 pauseReached = true
                 onPause?(b, true)
             }
         } else {
-            if vel < -0.12 { descendFor += dt } else if vel > 0.08 { descendFor = 0 }
-            if descendFor >= 0.3, still, abs(vel) < 0.08 {
-                let at = t - 0.25                     // stillness is spotted about ¼ s after it starts
+            if pQuiet >= 0.2 && !pDescended { pSeg = 0; pVmin = 0 }   // standing still: re-zero
+            pVmin = min(pVmin, vel)
+            if vel > 0.15 { pDescended = false; pSeg = 0; pVmin = 0 }  // going up: not heading for a bottom
+            if pSeg <= -0.15 && pVmin <= -0.3 { pDescended = true }
+            pSlow = (pDescended && abs(vel) < 0.10) ? pSlow + dt : 0
+            if pSlow >= 0.25 {
+                let at = t - 0.25                     // settled a quarter second ago
                 bottomAt = at
                 pauseReached = false
-                descendFor = 0
+                pSlow = 0
                 onPause?(at, false)
             }
         }
@@ -401,11 +501,18 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
 
     private func liveAnalysis() {
         let slice = Array(buffer[setStartIndex...])
-        let reps = RepAnalyzer.analyze(slice)
-        guard reps.count != liveReps else { return }
+        let reps = RepAnalyzer.analyze(slice, order: order)
+        // Send again whenever the count OR the last rep's numbers change: a rep is counted as soon as
+        // it's clear, but its travel and pauses keep settling for a moment after (only sending on a new
+        // count left the setup's last squat at 15 cm instead of 62).
+        let sig = reps.last.map { String(format: "%d|%.2f|%.2f|%.2f|%.2f", reps.count, $0.end.timeIntervalSince1970,
+                                         $0.travelM, $0.bottomPauseSec ?? -1, $0.topPauseSec ?? -1) } ?? "0"
+        guard sig != liveSignature else { return }
+        liveSignature = sig
+        let countChanged = reps.count != liveReps
         liveReps = reps.count
         var buzz = false
-        if buzzEnabled, !buzzed, reps.count >= 3 {
+        if countChanged, buzzEnabled, !buzzed, reps.count >= 3 {
             let best = max(reps[0].meanVelocity, reps[1].meanVelocity)
             if let last = reps.last?.meanVelocity, best > 0,
                (best - last) / best * 100 >= buzzThreshold {
@@ -422,7 +529,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         let endIdx = min(buffer.count, lastActiveIndex + Int(1.5 * RepAnalyzer.sampleRate))
         guard endIdx > setStartIndex else { return }
         let slice = Array(buffer[setStartIndex..<endIdx])
-        let reps = RepAnalyzer.analyze(slice)
+        let reps = RepAnalyzer.analyze(slice, order: order)
         let start = reps.first?.start ?? Date(timeIntervalSince1970: slice.first?.t ?? 0)
         let end = reps.last?.end ?? Date(timeIntervalSince1970: slice.last?.t ?? 0)
         // Keep the tail so a quick next set still has its preroll.
@@ -446,7 +553,6 @@ struct PauseCountdownOverlay: View {
                 let target = motion.pauseTarget
                 let held = max(0, ctx.date.timeIntervalSince(start))
                 let done = motion.pauseReached || held >= target
-                let second = Int(held)
                 ZStack {
                     Color.black.opacity(0.9).ignoresSafeArea()
                     if done {
@@ -467,7 +573,6 @@ struct PauseCountdownOverlay: View {
                         }
                     }
                 }
-                .onChange(of: second) { _, s in if s > 0 && !done { motion.pauseTick() } }   // countdown ticks
             }
             .allowsHitTesting(false)
             .transition(.opacity)
@@ -475,3 +580,49 @@ struct PauseCountdownOverlay: View {
     }
 }
 
+
+// MARK: - The wrist's vocabulary
+// One pattern per meaning, so each can be told apart without looking:
+//   countdown   tick-tick each second (a quick triple on the last one) — get set
+//   go          one firm tap — measuring from now
+//   rep         a rising double tap — a rep was counted (setup screens; ready for workouts)
+//   pause       taps that start gentle and slow, then come faster and firmer as the hold fills…
+//   pause done  …then a strong buzz and a rising flourish — drive up
+// (Apple Watch haptics come in fixed types, so "stronger" means firmer types, closer together.)
+
+@MainActor
+enum WatchBuzz {
+    private static func play(_ t: WKHapticType, after s: Double = 0) {
+        if s <= 0 { WKInterfaceDevice.current().play(t); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + s) { WKInterfaceDevice.current().play(t) }
+    }
+
+    /// A plain acknowledgement (the Go tap).
+    static func tap() { play(.click) }
+
+    /// Countdown: `left` seconds still to go.
+    static func countdown(_ left: Int) {
+        play(.click); play(.click, after: 0.14)
+        if left <= 1 { play(.click, after: 0.28) }
+    }
+
+    /// Measuring starts now.
+    static func go() { play(.start) }
+
+    /// A rep was counted.
+    static func rep() { play(.directionUp) }
+
+    /// One tap of the pause build-up; `f` = how far through the hold (0…1).
+    static func pauseBuild(_ f: Double) { play(f < 0.7 ? .click : .start) }
+    /// Seconds until the next build-up tap: 0.6 s at first, down to about 0.2 s near the end.
+    static func pauseGap(_ f: Double) -> Double { max(0.2, 0.6 - 0.45 * min(1, max(0, f))) }
+
+    /// The pause is complete. 0 light · 1 medium · 2 strong (the phone's setting).
+    static func pauseDone(strength: Int) {
+        switch strength {
+        case 0: play(.success)
+        case 2: play(.notification); play(.notification, after: 0.3); play(.success, after: 0.6)
+        default: play(.notification); play(.success, after: 0.3)
+        }
+    }
+}

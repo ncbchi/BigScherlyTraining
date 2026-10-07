@@ -35,13 +35,12 @@
 		A555A8803007DABA0026B8B9 /* AwardCelebrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */; };
 		A555A8823007DAC10026B8B9 /* PRCelebrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */; };
 		A555A88630082C930026B8B9 /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A555A88530082C930026B8B9 /* HealthKitManager.swift */; };
+		A58149393075727E00A35FE9 /* NewAnnouncementSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A58149383075727E00A35FE9 /* NewAnnouncementSheet.swift */; };
 		A585FB8D300865DF008E8BE1 /* WatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A585FB8C300865DF008E8BE1 /* WatchBridge.swift */; };
 		A585FBB030086679008E8BE1 /* BigScherlyWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A585FBCA3008678A008E8BE1 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBC93008678A008E8BE1 /* WidgetKit.framework */; };
 		A585FBCC3008678A008E8BE1 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A585FBCB3008678A008E8BE1 /* SwiftUI.framework */; };
 		A585FBD73008678B008E8BE1 /* BSTComplicationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		A5976FB32FF82FC20088A450 /* bell.caf in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB12FF82FC20088A450 /* bell.caf */; };
-		A5976FB42FF82FC20088A450 /* bell.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = A5976FB22FF82FC20088A450 /* bell.mp3 */; };
 		A5A491BC3071B811001B07A1 /* WidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A491BB3071B811001B07A1 /* WidgetBridge.swift */; };
 		A5AB68902FF8CE9C004396CD /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68862FF8CE9C004396CD /* LoginView.swift */; };
 		A5AB68912FF8CE9C004396CD /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AB68852FF8CE9C004396CD /* HistoryView.swift */; };
@@ -179,13 +178,12 @@
 		A555A87F3007DABA0026B8B9 /* AwardCelebrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwardCelebrationView.swift; sourceTree = "<group>"; };
 		A555A8813007DAC10026B8B9 /* PRCelebrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRCelebrationView.swift; sourceTree = "<group>"; };
 		A555A88530082C930026B8B9 /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
+		A58149383075727E00A35FE9 /* NewAnnouncementSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewAnnouncementSheet.swift; sourceTree = "<group>"; };
 		A585FB8C300865DF008E8BE1 /* WatchBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchBridge.swift; sourceTree = "<group>"; };
 		A585FB9230086678008E8BE1 /* BigScherlyWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "BigScherlyWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A585FBC73008678A008E8BE1 /* BSTComplicationExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BSTComplicationExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A585FBC93008678A008E8BE1 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		A585FBCB3008678A008E8BE1 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
-		A5976FB12FF82FC20088A450 /* bell.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = bell.caf; sourceTree = "<group>"; };
-		A5976FB22FF82FC20088A450 /* bell.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = bell.mp3; sourceTree = "<group>"; };
 		A5A491BB3071B811001B07A1 /* WidgetBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetBridge.swift; sourceTree = "<group>"; };
 		A5A491BE3071B980001B07A1 /* BigScherlyWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BigScherlyWidgetsExtension.entitlements; sourceTree = "<group>"; };
 		A5AB687B2FF8CE9C004396CD /* ExerciseHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseHistoryView.swift; sourceTree = "<group>"; };
@@ -335,8 +333,6 @@
 			isa = PBXGroup;
 			children = (
 				A5A491BE3071B980001B07A1 /* BigScherlyWidgetsExtension.entitlements */,
-				A5976FB12FF82FC20088A450 /* bell.caf */,
-				A5976FB22FF82FC20088A450 /* bell.mp3 */,
 				A5976F962FF829630088A450 /* BigScherlyTraining */,
 				A585FB9330086678008E8BE1 /* BigScherlyWatch Watch App */,
 				A5F6672430717255005E9580 /* BigScherlyWidgets */,
@@ -446,6 +442,7 @@
 				A52E98FC3001CCFC002EFD8C /* SupplementsView.swift */,
 				FF1000800000000000000000 /* TrainerClientView.swift */,
 				FF1000900000000000000000 /* TrainerSections.swift */,
+				A58149383075727E00A35FE9 /* NewAnnouncementSheet.swift */,
 				A5B90C0B300FF81F0081F533 /* TrainerShareView.swift */,
 				FF1001000000000000000000 /* TrainerShell.swift */,
 				A5DC6C563068A1D10077FFCD /* TrainerWorkoutsView.swift */,
@@ -645,8 +642,6 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				A5976FB32FF82FC20088A450 /* bell.caf in Resources */,
-				A5976FB42FF82FC20088A450 /* bell.mp3 in Resources */,
 			);
 		};
 		A585FB9030086678008E8BE1 /* Resources */ = {
@@ -700,6 +695,7 @@
 				FF2000800000000000000000 /* TrainerClientView.swift in Sources */,
 				A52401A13070A9FF004524F5 /* EffortEstimator.swift in Sources */,
 				A52401A23070A9FF004524F5 /* HealthActivityReader.swift in Sources */,
+				A58149393075727E00A35FE9 /* NewAnnouncementSheet.swift in Sources */,
 				A585FB8D300865DF008E8BE1 /* WatchBridge.swift in Sources */,
 				FF2000900000000000000000 /* TrainerSections.swift in Sources */,
 				A5D04AB8300EED4B0051D2DF /* CheckInFlow.swift in Sources */,

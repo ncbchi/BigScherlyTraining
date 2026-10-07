@@ -198,13 +198,18 @@ struct DSProgressBar: View {
     }
 }
 
-// MARK: Top fade (keeps content from colliding with the floating menu button)
+// MARK: Top fade (keeps scrolled content out from under the status bar)
+// Solid behind the status bar, then a short feather — content a few points below
+// the clock is fully readable. (It used to be a 70pt gradient that also stretched
+// through the safe area, which hazed the first row of real content.)
 
 extension View {
-    func dsTopFade(_ height: CGFloat = 70) -> some View {
+    func dsTopFade(_ feather: CGFloat = 20) -> some View {
         overlay(alignment: .top) {
             LinearGradient(colors: [Brand.bg, Brand.bg.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .frame(height: height).ignoresSafeArea(edges: .top).allowsHitTesting(false)
+                .frame(height: feather)
+                .background(Brand.bg.ignoresSafeArea(edges: .top))
+                .allowsHitTesting(false)
         }
     }
 }

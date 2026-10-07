@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Progress photo compare (reveal slider)
 // One photo over the other with a draggable divider: drag left/right to reveal
@@ -36,10 +37,9 @@ struct PhotoRevealSlider: View {
                     .shadow(color: .black.opacity(0.4), radius: 4)
                     .offset(x: w * split - 20, y: h / 2 - 20)
             }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                split = min(0.98, max(0.02, v.location.x / max(w, 1)))
-            })
+            // Sideways drags move the divider; anything with up/down in it is refused
+            // and goes to the scroll view, so the page still scrolls over the photo.
+            .overlay(HorizontalPan { x in split = min(0.98, max(0.02, x)) })
         }
         .aspectRatio(0.8, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -61,7 +61,7 @@ struct PhotoRevealSlider: View {
             Text(t).font(BrandFont.body(9, .heavy)).tracking(1)
             Text(d.formatted(.dateTime.month(.abbreviated).day())).font(BrandFont.body(12, .bold))
         }
-        .foregroundColor(Brand.text)
+        .foregroundColor(.white)        // the scrim is black in both themes
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.55)))
     }
@@ -166,6 +166,50 @@ struct PhotoCompareCard: View {
                 }
             }
             .card(padding: 16)
+        }
+    }
+}
+
+
+// MARK: - A pan that only begins for clearly sideways movement
+// UIKit decides whether a pan begins from its first few points of movement. Refusing
+// anything that isn't mostly horizontal hands the touch to the scroll view underneath,
+// which a SwiftUI DragGesture can't do once it has claimed the touch.
+
+struct HorizontalPan: UIViewRepresentable {
+    /// Called with the touch's x as a fraction of the view's width.
+    var onChanged: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = context.coordinator
+        v.addGestureRecognizer(pan)
+        return v
+    }
+
+    func updateUIView(_ v: UIView, context: Context) { context.coordinator.onChanged = onChanged }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGFloat) -> Void
+        init(onChanged: @escaping (CGFloat) -> Void) { self.onChanged = onChanged }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let pan = g as? UIPanGestureRecognizer, let v = pan.view else { return false }
+            let t = pan.translation(in: v)
+            return abs(t.x) > abs(t.y) * 2          // clearly sideways, or it isn't ours
+        }
+
+        @objc func pan(_ g: UIPanGestureRecognizer) {
+            guard let v = g.view else { return }
+            switch g.state {
+            case .began, .changed: onChanged(g.location(in: v).x / max(v.bounds.width, 1))
+            default: break
+            }
         }
     }
 }

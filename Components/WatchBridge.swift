@@ -68,7 +68,7 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
     @Published private(set) var watchBuild: String?
     /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
-    static let expectedWatchBuild = "2026-10-05.12"
+    static let expectedWatchBuild = "2026-10-06.7"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -135,8 +135,12 @@ final class WatchBridge: NSObject, ObservableObject {
         let config = HKWorkoutConfiguration()
         config.activityType = .traditionalStrengthTraining
         config.locationType = .indoor
-        HKHealthStore().startWatchApp(with: config) { ok, _ in
-            DispatchQueue.main.async { completion(ok) }
+        // Launching the Watch app can stall the calling thread for seconds while HealthKit
+        // talks to the Watch. Never on the main thread: the workout card must open now.
+        DispatchQueue.global(qos: .userInitiated).async {
+            HKHealthStore().startWatchApp(with: config) { ok, _ in
+                DispatchQueue.main.async { completion(ok) }
+            }
         }
     }
 
@@ -151,15 +155,29 @@ final class WatchBridge: NSObject, ObservableObject {
     // so the Watch always has the latest even if it reconnects).
     /// The live card for the Watch (see LiveSessionController.pushCardToWatch). Live only:
     /// when the Watch isn't reachable it asks for the latest when it comes back.
+    private var cardRetried = false
+
     func sendCard(_ data: Data, extras: [String: Any]) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         var msg = extras
         msg["card"] = data
-        // Live, on every change (no "reachable" gate). If a send fails, the newest card goes again.
+        cardRetried = false
+        // Live, on every change (no "reachable" gate). A transient failure gets one retry.
         WCSession.default.sendMessage(msg, replyHandler: nil) { e in
-            print("[Link] card: \(e.localizedDescription) — sending the newest card again")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { LiveSessionController.shared.pushCardToWatch() }
+            DispatchQueue.main.async { self.cardFailed(e) }
         }
+    }
+
+    /// Watch off the wrist or out of range: nothing to retry into — sessionReachabilityDidChange
+    /// sends the newest card the moment it's back. Anything else: one retry, never a loop.
+    /// (Retrying on "not reachable" used to rebuild and resend the card three times a second
+    /// for as long as the Watch was away, which is what made the app crawl without it.)
+    private func cardFailed(_ e: Error) {
+        if (e as NSError).code == WCError.notReachable.rawValue { return }
+        guard !cardRetried else { return }
+        cardRetried = true
+        print("[Link] card: \(e.localizedDescription) — sending the newest card once more")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { LiveSessionController.shared.pushCardToWatch() }
     }
 
     /// No card on the Watch. `endSession`: the workout finished, so the Watch ends its session
@@ -289,6 +307,10 @@ extension WatchBridge: WCSessionDelegate {
             var payload = LiveSessionController.shared.watchCardPayload()
             if let step = SetupEngine.shared.pendingStepPayload() { payload.merge(step) { current, _ in current } }
             payload["setupActive"] = SetupEngine.shared.active        // none here → the Watch clears its own
+            // Your theme accent on every pull, workout or not (made readable on the Watch's black).
+            let accent = RGBColor(hex: ThemeStore.shared.accent).readableOnDark(RGBColor(hex: 0x010101))
+            payload["themeAccent"] = Int(accent.hex)
+            payload["themeInkWhite"] = accent.textOn == .white
             let ours = LinkBook.shared.pendingMessages()
             if !ours.isEmpty { payload["events"] = ours }
             replyHandler(payload)
@@ -321,6 +343,12 @@ extension WatchBridge: WCSessionDelegate {
             }
             return
         }
+        // Motion capture (debug tool): the raw stream from a setup step.
+        if message["motionCapture"] is Data {
+            let box = WatchLink.Box(message)
+            Task { @MainActor in MotionCaptureStore.shared.ingest(box.m) }
+            return
+        }
         // Watch setup: Go tapped, the hold done, or the setup set captured.
         if message["setupGo"] as? Bool == true {
             let wrist = message["wrist"] as? String, crown = message["crown"] as? String
@@ -341,7 +369,8 @@ extension WatchBridge: WCSessionDelegate {
             return
         }
         if message["setupStillDone"] as? Bool == true {
-            Task { @MainActor in SetupEngine.shared.watchStillDone() }
+            let tilt = message["gripTilt"] as? Double, zero = message["gripZero"] as? Double
+            Task { @MainActor in SetupEngine.shared.watchStillDone(tilt: tilt, zero: zero) }
             return
         }
         if let data = message["setupReps"] as? Data {
