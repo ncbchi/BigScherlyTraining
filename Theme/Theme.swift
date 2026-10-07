@@ -273,10 +273,11 @@ final class ThemeStore: ObservableObject {
 
     func accentName(_ hex: UInt32) -> String { ThemeStore.accents.first { $0.hex == hex }?.name ?? "Custom" }
 
-    // MARK: The app icon follows your accent and your light/dark choice
-    // One ready-made icon per preset and background (Assets: AppIcon-Red, AppIcon-Red-Light,
-    // AppIcon-Volt-Light…; dark Volt is the main icon). "System" follows the iPhone's setting.
-    // iOS shows its own short "icon changed" notice whenever an app switches its icon.
+    // MARK: The app icon follows your accent
+    // One ready-made icon per preset (Assets: AppIcon-Red, AppIcon-Cobalt…; Volt is the main
+    // icon): the dumbbell on the accent, ink or white by the on-accent rule. Light/dark
+    // doesn't change it. iOS shows its own short "icon changed" notice whenever an app
+    // switches its icon.
 
     private var iconTask: Task<Void, Never>?
 
@@ -293,20 +294,14 @@ final class ThemeStore: ObservableObject {
     func applyAppIcon() {
         let app = UIApplication.shared
         guard app.supportsAlternateIcons else { return }
-        // Palette.current is what's drawing right now: your choice, or the iPhone's for System.
-        let name = ThemeStore.iconName(for: accent, light: Palette.current.scheme == .light)
+        let name = ThemeStore.iconName(for: accent)
         guard app.alternateIconName != name else { return }
         app.setAlternateIconName(name) { _ in }
     }
 
-    static func iconName(for hex: UInt32, light: Bool) -> String? {
-        let base = iconBase(for: hex)                       // nil = Volt
-        switch (base, light) {
-        case (nil, false): return nil                       // the main icon: Volt on black
-        case (nil, true): return "AppIcon-Volt-Light"
-        case (let n?, false): return "AppIcon-" + n
-        case (let n?, true): return "AppIcon-" + n + "-Light"
-        }
+    static func iconName(for hex: UInt32) -> String? {
+        guard let n = iconBase(for: hex) else { return nil }   // nil = the main icon: Volt
+        return "AppIcon-" + n
     }
 
     private static func iconBase(for hex: UInt32) -> String? {
@@ -337,7 +332,6 @@ struct ThemeHost<Content: View>: View {
         SchemeReader { scheme in
             let _ = (Palette.current = theme.palette(for: scheme))
             content()
-                .onChange(of: scheme) { _, _ in theme.scheduleIcon() }   // System: the iPhone flipped light/dark
         }
         .preferredColorScheme(theme.forcedScheme)
         .task {                                   // once a launch: make sure the icon matches your accent

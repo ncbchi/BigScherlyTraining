@@ -34,13 +34,50 @@ nonisolated enum WidgetShared {
         return WidgetSnapshot(generatedAt: Date(), state: isConnected ? .waiting : .notConnected)
     }
 
+    /// A number safe to draw or save: NaN and infinity become 0 (JSON can't hold them, and
+    /// Int(…) of one crashes).
+    static func finite(_ v: Double) -> Double { v.isFinite ? v : 0 }
+
     static func load() -> WidgetSnapshot? {
         guard let data = defaults?.data(forKey: snapshotKey) else { return nil }
-        return try? JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        do {
+            return try JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        } catch {
+            diag("decode", "FAILED — \(error.localizedDescription)")
+            return nil
+        }
     }
 
-    static func save(_ s: WidgetSnapshot) {
-        if let data = try? JSONEncoder().encode(s) { defaults?.set(data, forKey: snapshotKey) }
+    /// The saved snapshot's raw bytes (the app compares them to skip redraws that change nothing).
+    static func savedData() -> Data? { defaults?.data(forKey: snapshotKey) }
+
+    @discardableResult
+    static func save(_ s: WidgetSnapshot) -> Bool {
+        do {
+            let data = try JSONEncoder().encode(s)
+            defaults?.set(data, forKey: snapshotKey)
+            return true
+        } catch {
+            diag("save", "FAILED — \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    // MARK: DIAGNOSTIC — where the widgets got to (shown at the bottom of Settings). Remove before release.
+    // Each stage writes "what · time" under its own key: the app's save, the widget's
+    // timeline start/finish, and every time a widget actually draws.
+    private static let diagKey = "bst_widget_diag"
+
+    static func diag(_ stage: String, _ what: String) {
+        guard let d = defaults else { return }
+        var m = (d.dictionary(forKey: diagKey) as? [String: String]) ?? [:]
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm:ss a"
+        m[stage] = "\(what) · \(f.string(from: Date()))"
+        d.set(m, forKey: diagKey)
+    }
+
+    static func diagnostics() -> [String: String] {
+        (defaults?.dictionary(forKey: diagKey) as? [String: String]) ?? [:]
     }
 
     // Supplements ticked on a widget: marked in the snapshot straight away (so the widget
@@ -82,6 +119,21 @@ nonisolated struct WidgetSnapshot: Codable, Sendable {
     var latestDate: Date? = nil
     var unreadCoach: Int = 0
     var month: Month = .init()
+    var look: Look? = nil                // your theme, worked out by the app (nil = default dark Volt)
+
+    /// Your theme for the Home Screen widgets. The app works the shades out (it owns the
+    /// theme rules in Theme.swift); the widget only picks dark or light.
+    nonisolated struct Look: Codable, Sendable, Equatable {
+        var base: String?                // "dark" | "light" | nil = follow the Home Screen (System)
+        var accent: UInt32               // the fill
+        var onAccent: UInt32             // ink or white on the fill
+        var darkText: UInt32             // accent text/lines on the dark card
+        var lightLine: UInt32            // accent as a line on white: the accent, or grey for pale ones
+        var lightHeader: UInt32          // accent on the smoke-pill labels (light)
+
+        static let volt = Look(base: nil, accent: 0xEDFF3D, onAccent: 0x111113, darkText: 0xEDFF3D,
+                               lightLine: 0x8E8E93, lightHeader: 0xEDFF3D)
+    }
 
     nonisolated struct Day: Codable, Sendable, Identifiable {
         var id: Date { date }

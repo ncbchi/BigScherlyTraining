@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WidgetKit
 
 // MARK: - Settings
 // Client settings: Apple Health connect/status, account + change password, notification
@@ -39,6 +40,8 @@ struct SettingsView: View {
     @State private var deleting = false
     @State private var connecting = false
     @State private var errorMessage: String?
+    @State private var widgetsOnScreen = "checking…"      // DIAGNOSTIC (widget status below)
+    @State private var widgetDiag: [String: String] = [:] // DIAGNOSTIC
 
     /// Whether the Home & Lock Screen widgets can see the app's data (the App Group).
     private var widgetStatus: some View {
@@ -54,7 +57,49 @@ struct SettingsView: View {
         }
         .font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
         .frame(maxWidth: .infinity, alignment: .center)
-        .onAppear { WidgetBridge.shared.refreshNow() }
+        .onAppear { WidgetBridge.shared.refreshNow(force: true) }
+    }
+
+    // MARK: DIAGNOSTIC — what each widget step last did (remove before release)
+    // The app's save, then the widget's own steps: iOS asking for a placeholder / gallery
+    // snapshot / timeline, and each time a widget actually drew. Tap to refresh.
+    private var widgetDiagnostics: some View {
+        let order: [(String, String)] = [
+            ("app.save", "App saved"), ("save", "Save error"), ("decode", "Widget read error"),
+            ("timeline.start", "Timeline asked"), ("timeline.done", "Timeline sent"),
+            ("drew.home", "Home widget drew"), ("drew.lock", "Lock Screen drew"),
+            ("placeholder", "Placeholder asked"), ("drew.placeholder", "Placeholder drew"),
+            ("snapshot", "Snapshot asked"),
+        ]
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("WIDGET STEPS").font(BrandFont.body(10, .heavy)).tracking(1)
+            Text("On screen: \(widgetsOnScreen)")
+            ForEach(order.indices, id: \.self) { i in
+                Text("\(order[i].1): \(widgetDiag[order[i].0] ?? "never")")
+            }
+        }
+        .font(BrandFont.body(10, .medium)).foregroundColor(Brand.mute)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Brand.card))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+        .onTapGesture { Task { await loadWidgetDiagnostics() } }
+        .task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)   // let the forced redraw land first
+            await loadWidgetDiagnostics()
+        }
+    }
+
+    private func loadWidgetDiagnostics() async {
+        widgetDiag = WidgetShared.diagnostics()
+        do {
+            let list = try await WidgetCenter.shared.currentConfigurations()
+            widgetsOnScreen = list.isEmpty ? "none added"
+                : list.map { "\($0.kind.replacingOccurrences(of: "bst.", with: "")) \($0.family)" }.joined(separator: ", ")
+        } catch {
+            widgetsOnScreen = "iOS couldn't list them — \(error.localizedDescription)"
+        }
     }
 
     var body: some View {
@@ -79,6 +124,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 6)
                 widgetStatus
+                widgetDiagnostics       // DIAGNOSTIC
             }
             .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 28)
         }

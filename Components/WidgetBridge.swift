@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 import WidgetKit
 
 // MARK: - Keeps the Home & Lock Screen widgets current
@@ -14,6 +15,7 @@ final class WidgetBridge {
     private weak var store: AppStore?
     private var bag = Set<AnyCancellable>()
     private var pending: Task<Void, Never>?
+    private var redrewThisLaunch = false
 
     private init() {}
 
@@ -30,6 +32,7 @@ final class WidgetBridge {
             store.$isLoggedIn.map { _ in () }.eraseToAnyPublisher(),
             store.$isTrainer.map { _ in () }.eraseToAnyPublisher(),
             MacroPlanStore.shared.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            ThemeStore.shared.objectWillChange.map { _ in () }.eraseToAnyPublisher(),   // widgets follow your theme
         ]
         Publishers.MergeMany(changes)
             .sink { [weak self] in self?.refreshSoon() }
@@ -47,10 +50,31 @@ final class WidgetBridge {
         }
     }
 
-    func refreshNow() {
+    /// Saves the snapshot and asks iOS to redraw — but only when something the widgets show
+    /// actually changed (or `force`). Redraw requests that arrive faster than a widget can
+    /// draw keep it on its loading placeholder, and every one counts against iOS's budget.
+    func refreshNow(force: Bool = false) {
         guard let store else { return }
-        WidgetShared.save(build(store))
+        let snap = build(store)
+        let force = force || !redrewThisLaunch          // always one redraw per launch (a new build, a reinstall)
+        redrewThisLaunch = true
+        if !force, let old = WidgetShared.savedData(), Self.sameContent(old, snap) {
+            WidgetShared.diag("app.save", "unchanged — no redraw")          // DIAGNOSTIC
+            return
+        }
+        guard WidgetShared.save(snap) else { return }                       // (failure is noted in diag)
+        WidgetShared.diag("app.save", "saved · \(snap.state.rawValue) · \(snap.days.count) days · redraw asked")   // DIAGNOSTIC
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// Same content apart from when it was made (the day still counts: supplement ticks reset daily).
+    private static func sameContent(_ oldData: Data, _ new: WidgetSnapshot) -> Bool {
+        guard var old = try? JSONDecoder().decode(WidgetSnapshot.self, from: oldData) else { return false }
+        let cal = WidgetSnapshot.calendar
+        guard cal.isDate(old.generatedAt, inSameDayAs: new.generatedAt) else { return false }
+        old.generatedAt = new.generatedAt
+        guard let a = try? JSONEncoder().encode(old), let b = try? JSONEncoder().encode(new) else { return false }
+        return a == b
     }
 
     // MARK: Supplements ticked on a widget → your log
@@ -133,10 +157,11 @@ final class WidgetBridge {
         snap.lifts = byName.compactMap { name, list -> WidgetSnapshot.Lift? in
             let sorted = list.sorted { $0.0 < $1.0 }.filter { $0.1.bestE1RM > 0 }
             guard let last = sorted.last else { return nil }
-            let values = sorted.map { StatsUnits.weight($0.1.bestE1RM) }
-            let baseline = sorted.first { $0.0 >= eightWeeksAgo }.map { StatsUnits.weight($0.1.bestE1RM) } ?? values.first ?? 0
-            let reps = last.1.reps
-            let speed = reps.isEmpty ? nil : reps.map { $0.meanVelocity }.reduce(0, +) / Double(reps.count)
+            let values = sorted.map { WidgetShared.finite(StatsUnits.weight($0.1.bestE1RM)) }
+            let baseline = sorted.first { $0.0 >= eightWeeksAgo }.map { WidgetShared.finite(StatsUnits.weight($0.1.bestE1RM)) } ?? values.first ?? 0
+            // JSON can't hold NaN/infinity — one bad number would make the whole save fail.
+            let speeds = last.1.reps.map { $0.meanVelocity }.filter { $0.isFinite }
+            let speed: Double? = speeds.isEmpty ? nil : speeds.reduce(0, +) / Double(speeds.count)
             return .init(name: name, e1rm: values.last ?? 0, change: (values.last ?? 0) - baseline,
                          points: Array(values.suffix(12)), sessions: sorted.count, last: last.0, speed: speed)
         }
@@ -151,7 +176,7 @@ final class WidgetBridge {
             if inMonth {
                 snap.month.sessions += 1
                 snap.month.sets += s.setCount
-                snap.month.volume += Int(StatsUnits.weight(s.volume).rounded())
+                snap.month.volume += Int(WidgetShared.finite(StatsUnits.weight(s.volume)).rounded())
             }
             for e in s.exercises {
                 let prior = best[e.name] ?? 0
@@ -177,6 +202,21 @@ final class WidgetBridge {
             snap.latestDate = a.earnedAt
         }
         snap.unreadCoach = store.unreadMessages
+        snap.look = Self.look()
         return snap
+    }
+
+    // MARK: Your theme, for the widgets (same rules as Palette.make in Theme.swift)
+
+    static func look() -> WidgetSnapshot.Look {
+        let theme = ThemeStore.shared
+        let acc = RGBColor(hex: theme.accent)
+        let base: String? = theme.forcedScheme.map { $0 == .light ? "light" : "dark" }
+        // Pale accents (Volt, Toxic, Ice, Amber) vanish as thin lines on white: those lines go grey.
+        let pale = acc.contrast(.white) < 1.6
+        return WidgetSnapshot.Look(base: base, accent: theme.accent, onAccent: acc.textOn.hex,
+                                   darkText: acc.readableOnDark(RGBColor(hex: 0x010101)).hex,
+                                   lightLine: pale ? 0x8E8E93 : theme.accent,
+                                   lightHeader: acc.readableOnDark(RGBColor(hex: 0x39393B)).hex)
     }
 }

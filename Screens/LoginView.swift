@@ -137,6 +137,7 @@ struct LoginView: View {
 // Revolving grid of #bigscherlytraining photos with the big overlay headline.
 struct WelcomeBoardView: View {
     @EnvironmentObject var store: AppStore
+    @StateObject private var motion = MotionManager()     // the QUEENS sheen follows the phone's tilt
     @Binding var showBoard: Bool
 
     var body: some View {
@@ -161,23 +162,38 @@ struct WelcomeBoardView: View {
                 outlinedWord("GET")
                 filledWord("BIG")
                 outlinedWord("TOGETHER")
-                SparkleWord(text: "QUEENS", width: UIScreen.main.bounds.width - 44)   // glittery, still
+                MetallicRainbowText(text: "QUEENS", size: 140, fillWidth: true, motion: motion)
                 Spacer()
-                EnterCard { withAnimation { showBoard = false } }
+                enterButton
                     .padding(.top, 12)
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 30)
         }
-
+        .onAppear { motion.start() }
+        .onDisappear { motion.stop() }
     }
 
     // Big, heavy, one line each — shrinks to fit width so TOGETHER never wraps.
     private let headlineSize: CGFloat = 96
 
+    // The original Enter: a Volt capsule with black type, whatever accent is chosen.
+    private var enterButton: some View {
+        Button { withAnimation { showBoard = false } } label: {
+            Text("ENTER")
+                .font(BrandFont.body(14, .bold))
+                .tracking(1.5)
+                .foregroundColor(BrandDark.onVolt)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(BrandDark.volt)
+                .clipShape(Capsule())
+        }
+    }
+
     func filledWord(_ w: String) -> some View {
         Text(w)
-            .font(BrandFont.display(headlineSize))
+            .font(BrandFont.welcome(headlineSize))
             .foregroundColor(.white)
             .lineLimit(1)
             .minimumScaleFactor(0.4)
@@ -337,18 +353,30 @@ struct StrokeText: View {
             ForEach(0..<8, id: \.self) { i in
                 let angle = Double(i) / 8 * 2 * .pi
                 Text(text)
-                    .font(BrandFont.display(size))
+                    .font(BrandFont.welcome(size))
                     .foregroundColor(.white)
                     .offset(x: CGFloat(cos(angle)) * 2.2, y: CGFloat(sin(angle)) * 2.2)
             }
             // Knock out the center so it's hollow (shows the board behind)
             Text(text)
-                .font(BrandFont.display(size))
+                .font(BrandFont.welcome(size))
                 .foregroundColor(.black)
                 .blendMode(.destinationOut)
         }
         .compositingGroup()
         .lineLimit(1)
         .minimumScaleFactor(0.4)
+    }
+}
+
+// MARK: - The welcome board's face
+// The original welcome board asked for the display font by name before the font file was
+// bundled, so iOS drew every word (and QUEENS) in its own system face. That look is the
+// welcome board. Asking for a name that isn't installed takes exactly the same path, so it
+// renders identically now that Big Shoulders is bundled for the rest of the app.
+extension BrandFont {
+    static func welcome(_ size: CGFloat) -> Font {
+        .custom("BST-WelcomeBoard-SystemFace", size: size)
+            .weight(.black)
     }
 }

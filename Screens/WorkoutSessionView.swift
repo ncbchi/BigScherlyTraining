@@ -1270,6 +1270,9 @@ struct LiveCard: View {
     @AppStorage("bst_live_windows") private var windowCount = 1      // 1–4 (the side dots)
     @AppStorage("bst_live_metrics") private var metricsRaw = "heartRate,speed,tempo,pause"
     @State private var autoNotes = false     // a set just finished: the top window shows its notes
+    // The windows mount one per frame once the card is on screen, so four charts laying
+    // out for the first time don't hold up the card appearing or the first touch.
+    @State private var readyWindows = 0
 
     /// One full window; two split it in half (same height); three and four add half windows below.
     static let windowHeight: CGFloat = 284
@@ -1325,17 +1328,17 @@ struct LiveCard: View {
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     if windows == 1 {
-                        pane(0, ctx, compact: false).frame(height: Self.windowHeight)
+                        staged(0, ctx, compact: false).frame(height: Self.windowHeight)
                         dotsRow(0)
                     } else {
-                        pane(0, ctx, compact: true).frame(height: Self.half - 1)
+                        staged(0, ctx, compact: true).frame(height: Self.half - 1)
                         dotsRow(0)
                         divider
-                        pane(1, ctx, compact: true).frame(height: Self.half)
+                        staged(1, ctx, compact: true).frame(height: Self.half)
                         dotsRow(1)
                         ForEach(2..<windows, id: \.self) { i in
                             divider
-                            pane(i, ctx, compact: true).frame(height: Self.half)
+                            staged(i, ctx, compact: true).frame(height: Self.half)
                             dotsRow(i)
                         }
                     }
@@ -1347,6 +1350,14 @@ struct LiveCard: View {
         }
         .background(RoundedRectangle(cornerRadius: 22).fill(Brand.card))
         .clipShape(RoundedRectangle(cornerRadius: 22))
+        .task {
+            guard readyWindows == 0 else { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)           // let the card finish sliding in
+            for i in 1...Self.maxWindows {
+                readyWindows = i
+                try? await Task.sleep(nanoseconds: 32_000_000)        // a couple of frames each: touches get through
+            }
+        }
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(Brand.line, lineWidth: 1))
         .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
         // A set finished (the Watch saw it end, or you logged it): show its coach notes.
@@ -1404,6 +1415,10 @@ struct LiveCard: View {
     }
 
     // MARK: A window (swipe left or right to change its metric)
+
+    @ViewBuilder private func staged(_ i: Int, _ ctx: LiveMetricContext, compact: Bool) -> some View {
+        if i < readyWindows { pane(i, ctx, compact: compact) } else { Color.clear }
+    }
 
     private func pane(_ i: Int, _ ctx: LiveMetricContext, compact: Bool) -> some View {
         metricView(shown(i), ctx, compact: compact)
@@ -1660,19 +1675,28 @@ private struct SpeedMetric: View {
                         }
                     }
                 }
-                Chart(bars) { b in
-                    BarMark(x: .value("Rep", b.rep), y: .value("m/s", b.v), width: .ratio(0.6))
-                        .foregroundStyle(b.slow ? orange : Brand.voltLine)
-                        .cornerRadius(4)
-                        .annotation(position: .top, spacing: 2) {
-                            if !compact { Text(String(format: "%.2f", b.v)).font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute) }
-                        }
+                if bars.isEmpty {
+                    // Live but no rep yet: no chart. A chart with no marks (or a line through one
+                    // point) lays out invalid sizes on every redraw and ties up the main thread.
+                    Spacer(minLength: 0)
+                    Text("Waiting for rep 1…").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    Spacer(minLength: 0)
+                } else {
+                    Chart(bars) { b in
+                        BarMark(x: .value("Rep", b.rep), y: .value("m/s", b.v), width: .ratio(0.6))
+                            .foregroundStyle(b.slow ? orange : Brand.voltLine)
+                            .cornerRadius(4)
+                            .annotation(position: .top, spacing: 2) {
+                                if !compact { Text(String(format: "%.2f", b.v)).font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute) }
+                            }
+                    }
+                    .chartXScale(domain: (1...target).map { "\($0)" })
+                    .chartYScale(domain: 0...max(0.6, (vals.max() ?? 0.5) * 1.2))
+                    .repAxis()
+                    .liveAxes(x: "rep", y: "m/s")
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: vals)
                 }
-                .chartXScale(domain: (1...target).map { "\($0)" })
-                .chartYScale(domain: 0...max(0.6, (vals.max() ?? 0.5) * 1.2))
-                .repAxis()
-                .liveAxes(x: "rep", y: "m/s")
-                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: vals)
             }
         }
     }
@@ -1702,16 +1726,25 @@ private struct TempoMetric: View {
             VStack(alignment: .leading, spacing: compact ? 4 : 6) {
                 MetricHeader(metric: .tempo, right: ctx.isLive || ctx.lastTime != nil ? ctx.badge
                              : "lower \(avg { $0.eccentricSec }) · pause \(avg { $0.bottomPauseSec }) · lift \(avg { $0.concentricSec }) s")
-                Chart(segs) { s in
-                    BarMark(x: .value("Rep", s.rep), y: .value("Seconds", s.sec), width: .ratio(0.6))
-                        .foregroundStyle(by: .value("Phase", s.phase))
+                if segs.isEmpty {
+                    // Live but no rep yet: no chart. A chart with no marks (or a line through one
+                    // point) lays out invalid sizes on every redraw and ties up the main thread.
+                    Spacer(minLength: 0)
+                    Text("Waiting for rep 1…").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    Spacer(minLength: 0)
+                } else {
+                    Chart(segs) { s in
+                        BarMark(x: .value("Rep", s.rep), y: .value("Seconds", s.sec), width: .ratio(0.6))
+                            .foregroundStyle(by: .value("Phase", s.phase))
+                    }
+                    .chartForegroundStyleScale(["Lower": blue, "Pause": Brand.text.opacity(0.65), "Lift": Brand.voltLine])
+                    .chartLegend(compact ? .hidden : .visible)
+                    .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                    .repAxis()
+                    .liveAxes(x: "rep", y: "sec")
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
                 }
-                .chartForegroundStyleScale(["Lower": blue, "Pause": Brand.text.opacity(0.65), "Lift": Brand.voltLine])
-                .chartLegend(compact ? .hidden : .visible)
-                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
-                .repAxis()
-                .liveAxes(x: "rep", y: "sec")
-                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
             }
         }
     }
@@ -1743,28 +1776,39 @@ private struct PauseMetric: View {
                     .font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             } else {
-                Chart {
-                    ForEach(pts) { p in
-                        LineMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
-                            .foregroundStyle(orange).lineStyle(StrokeStyle(lineWidth: 1.5))
-                        PointMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
-                            .foregroundStyle(target.map { p.sec >= $0 - 0.25 } ?? true ? Brand.voltLine : orange)
-                            .symbolSize(compact ? 40 : 70)
-                    }
-                    if let t = target {
-                        RuleMark(y: .value("Target", t))
-                            .foregroundStyle(Brand.mute)
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                            .annotation(position: .top, alignment: .trailing) {
-                                Text("target \(PauseTarget.text(t))").font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute)
+                if pts.isEmpty {
+                    // Live but no rep yet: no chart. A chart with no marks (or a line through one
+                    // point) lays out invalid sizes on every redraw and ties up the main thread.
+                    Spacer(minLength: 0)
+                    Text("Waiting for rep 1…").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    Spacer(minLength: 0)
+                } else {
+                    Chart {
+                        ForEach(pts) { p in
+                            if pts.count >= 2 {                       // a line through one point is degenerate
+                                LineMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
+                                    .foregroundStyle(orange).lineStyle(StrokeStyle(lineWidth: 1.5))
                             }
+                            PointMark(x: .value("Rep", p.rep), y: .value("Seconds", p.sec))
+                                .foregroundStyle(target.map { p.sec >= $0 - 0.25 } ?? true ? Brand.voltLine : orange)
+                                .symbolSize(compact ? 40 : 70)
+                        }
+                        if let t = target {
+                            RuleMark(y: .value("Target", t))
+                                .foregroundStyle(Brand.mute)
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                .annotation(position: .top, alignment: .trailing) {
+                                    Text("target \(PauseTarget.text(t))").font(.system(size: 8, weight: .bold)).foregroundColor(Brand.mute)
+                                }
+                        }
                     }
+                    .chartYScale(domain: 0...max(target ?? 0, pts.map { $0.sec }.max() ?? 1, 1) * 1.3)
+                    .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                    .repAxis()
+                    .liveAxes(x: "rep", y: "sec")
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
                 }
-                .chartYScale(domain: 0...max(target ?? 0, pts.map { $0.sec }.max() ?? 1, 1) * 1.3)
-                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
-                .repAxis()
-                .liveAxes(x: "rep", y: "sec")
-                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
             }
         }
     }
@@ -1813,19 +1857,28 @@ private struct DepthMetric: View {
             VStack(alignment: .leading, spacing: compact ? 4 : 6) {
                 MetricHeader(metric: .depth, right: ctx.isLive || ctx.lastTime != nil ? ctx.badge
                              : "typical \(String(format: "%.1f", med)) \(StatsUnits.depthLabel)")
-                Chart {
-                    ForEach(bars) { b in
-                        BarMark(x: .value("Rep", b.rep), y: .value("Depth", b.d), width: .ratio(0.6))
-                            .foregroundStyle(b.shallow ? orange : blue).cornerRadius(4)
+                if bars.isEmpty {
+                    // Live but no rep yet: no chart. A chart with no marks (or a line through one
+                    // point) lays out invalid sizes on every redraw and ties up the main thread.
+                    Spacer(minLength: 0)
+                    Text("Waiting for rep 1…").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    Spacer(minLength: 0)
+                } else {
+                    Chart {
+                        ForEach(bars) { b in
+                            BarMark(x: .value("Rep", b.rep), y: .value("Depth", b.d), width: .ratio(0.6))
+                                .foregroundStyle(b.shallow ? orange : blue).cornerRadius(4)
+                        }
+                        RuleMark(y: .value("Typical", med))
+                            .foregroundStyle(Brand.mute).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     }
-                    RuleMark(y: .value("Typical", med))
-                        .foregroundStyle(Brand.mute).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .chartYScale(domain: 0...max(1, (depths.max() ?? 1) * 1.2))
+                    .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
+                    .repAxis()
+                    .liveAxes(x: "rep", y: StatsUnits.depthLabel)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
                 }
-                .chartYScale(domain: 0...max(1, (depths.max() ?? 1) * 1.2))
-                .chartXScale(domain: (1...max(reps.count, ctx.exercise.flatMap { ex in ex.sets.first { $0.loggedReps == nil }?.targetReps } ?? 1, 1)).map { "\($0)" })
-                .repAxis()
-                .liveAxes(x: "rep", y: StatsUnits.depthLabel)
-                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: reps.count)
             }
         }
     }

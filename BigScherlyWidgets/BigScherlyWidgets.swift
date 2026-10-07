@@ -1,6 +1,7 @@
 import WidgetKit
 import SwiftUI
 import AppIntents
+import CoreText
 
 // MARK: - Home & Lock Screen widgets
 // Six widgets — Small, Medium, Large, and Lock Screen circle / rectangle / inline — each
@@ -8,14 +9,92 @@ import AppIntents
 // saves (WidgetSnapshot.swift) and roll over to the next day at midnight on their own.
 // Tapping opens the matching screen; Start opens the workout; supplements tick in place.
 
+/// The colours every Home Screen widget draws with, chosen per draw from your theme (sent in
+/// the snapshot by the app) and the Home Screen's light/dark look — the same rules as the app:
+///   accent       the accent as a FILL (Start, done days, ticks); onAccent = ink or white on it
+///   accentText   accent as TEXT/ICONS (dark: readable accent · light: ink)
+///   stroke       accent as a LINE (rings, bars, sparkline, today's outline). Light: the real
+///                accent — plain grey for pale accents (Volt, Toxic, Ice, Amber) that vanish on white
+///   label        section labels (light: the accent on a smoke pill, `pill`)
+/// Lock Screen widgets don't use these — iOS draws those in one colour.
+nonisolated struct WidgetPalette {
+    var light = false, pill = false
+    var card = Color(hex6: 0x010101), text = Color.white, mute = Color(hex6: 0x9C9C9F)
+    var track = Color.white.opacity(0.12), line = Color.white.opacity(0.10)
+    var planned = Color.white.opacity(0.35), rest = Color.white.opacity(0.16)
+    var accent = Color(hex6: 0xEDFF3D), onAccent = Color(hex6: 0x111113)
+    var accentText = Color(hex6: 0xEDFF3D), stroke = Color(hex6: 0xEDFF3D), label = Color(hex6: 0xEDFF3D)
+    var highlight = Color(hex6: 0xEDFF3D).opacity(0.12)
+    var blue = Color(hex6: 0x3D9BE0), orange = Color(hex6: 0xF2A03D), orangeText = Color(hex6: 0xF2A03D)
+
+    static func make(_ look: WidgetSnapshot.Look?, light: Bool) -> WidgetPalette {
+        let lk = look ?? .volt
+        var p = WidgetPalette()
+        p.accent = Color(hex6: lk.accent); p.onAccent = Color(hex6: lk.onAccent)
+        if light {
+            p.light = true; p.pill = true
+            p.card = .white; p.text = Color(hex6: 0x111113); p.mute = Color(hex6: 0x6E6E73)
+            p.track = Color.black.opacity(0.08); p.line = Color.black.opacity(0.08)
+            p.planned = Color.black.opacity(0.30); p.rest = Color.black.opacity(0.16)
+            p.accentText = Color(hex6: 0x111113); p.stroke = Color(hex6: lk.lightLine)
+            p.label = Color(hex6: lk.lightHeader); p.highlight = Color.black.opacity(0.05)
+            p.orange = Color(hex6: 0xD97D0F); p.orangeText = Color(hex6: 0xAC630C)
+        } else {
+            p.accentText = Color(hex6: lk.darkText); p.stroke = Color(hex6: lk.darkText)
+            p.label = Color(hex6: lk.darkText); p.highlight = Color(hex6: lk.accent).opacity(0.12)
+        }
+        return p
+    }
+}
+
 private enum W {
-    static let volt = Color(red: 237 / 255, green: 1, blue: 61 / 255)
-    static let card = Color(red: 1 / 255, green: 1 / 255, blue: 1 / 255)
-    static let mute = Color(white: 0.56)
-    static let line = Color(white: 1, opacity: 0.10)
-    static let blue = Color(red: 61 / 255, green: 155 / 255, blue: 224 / 255)
-    static let orange = Color(red: 242 / 255, green: 160 / 255, blue: 61 / 255)
-    static let red = Color(red: 1, green: 85 / 255, blue: 85 / 255)
+    /// Set at the top of every Home Screen widget draw (HomeView), before anything below reads it.
+    nonisolated(unsafe) static var p = WidgetPalette()
+
+    static func use(_ look: WidgetSnapshot.Look?, scheme: ColorScheme, mode: WidgetRenderingMode) {
+        _ = fontsReady
+        let light: Bool
+        if mode != .fullColor { light = false }                 // tinted / clear: iOS recolours; draw the dark set
+        else if let base = look?.base { light = base == "light" } // your Dark or Light theme
+        else { light = scheme == .light }                        // System: follow the Home Screen
+        p = WidgetPalette.make(look, light: light)
+    }
+
+    static var card: Color { p.card }
+    static var text: Color { p.text }
+    static var mute: Color { p.mute }
+    static var line: Color { p.line }
+    static var track: Color { p.track }
+    static var planned: Color { p.planned }
+    static var rest: Color { p.rest }
+    static var accent: Color { p.accent }
+    static var onAccent: Color { p.onAccent }
+    static var accentText: Color { p.accentText }
+    static var stroke: Color { p.stroke }
+    static var label: Color { p.label }
+    static var highlight: Color { p.highlight }
+    static var blue: Color { p.blue }
+    static var orange: Color { p.orange }
+    static var orangeText: Color { p.orangeText }
+
+    /// Big Shoulders Display Black ships inside the widget too (BigScherlyWidgets folder) and is
+    /// registered once per widget process — the app's registration doesn't reach here.
+    private static let fontsReady: Bool = {
+        if let url = Bundle.main.url(forResource: "BigShouldersDisplay-Black", withExtension: "ttf") {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+        return true
+    }()
+}
+
+/// The display face for titles and big numbers (falls back to the system font if missing).
+private func disp(_ size: CGFloat) -> Font { .custom("BigShouldersDisplay-Black", size: size) }
+
+private extension Color {
+    init(hex6 h: UInt32) {
+        self.init(.sRGB, red: Double((h >> 16) & 0xff) / 255, green: Double((h >> 8) & 0xff) / 255,
+                  blue: Double(h & 0xff) / 255, opacity: 1)
+    }
 }
 
 private func openURL(_ tab: String) -> URL { URL(string: "bigscherly://open?tab=\(tab)")! }
@@ -25,7 +104,12 @@ private func sessionURL(_ id: String) -> URL {
     return c.url ?? openURL("workouts")
 }
 private func kcalShort(_ k: Int) -> String { k >= 1000 ? String(format: "%.1fk", Double(k) / 1000) : "\(k)" }
-private func num(_ v: Double) -> String { v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v) }
+private func num(_ x: Double) -> String {
+    let v = WidgetShared.finite(x)
+    return v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
+}
+/// 0…1, and 0 for NaN/infinity (a NaN width makes an invalid frame).
+private func unit(_ f: Double) -> CGFloat { f.isFinite ? CGFloat(max(0, min(f, 1))) : 0 }
 private func dayLabel(_ d: Date, now: Date) -> String {
     let cal = WidgetSnapshot.calendar
     if cal.isDate(d, inSameDayAs: now) { return "Today" }
@@ -178,21 +262,26 @@ nonisolated struct SnapEntry<C: WidgetConfigurationIntent>: TimelineEntry {
     let date: Date
     let snap: WidgetSnapshot
     let config: C
+    var placeholder = false          // iOS's grey loading skeleton (sample data, redacted)
 }
 
 nonisolated struct SnapProvider<C: WidgetConfigurationIntent>: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> SnapEntry<C> {
-        SnapEntry(date: Date(), snap: .sample, config: C())
+        WidgetShared.diag("placeholder", "\(C.self) \(context.family)")     // DIAGNOSTIC
+        return SnapEntry(date: Date(), snap: .sample, config: C(), placeholder: true)
     }
     func snapshot(for configuration: C, in context: Context) async -> SnapEntry<C> {
-        SnapEntry(date: Date(), snap: context.isPreview ? .sample : (WidgetShared.load() ?? .sample), config: configuration)
+        WidgetShared.diag("snapshot", "\(C.self) \(context.family)\(context.isPreview ? " · gallery" : "")")   // DIAGNOSTIC
+        return SnapEntry(date: Date(), snap: context.isPreview ? .sample : (WidgetShared.load() ?? .sample), config: configuration)
     }
     func timeline(for configuration: C, in context: Context) async -> Timeline<SnapEntry<C>> {
+        WidgetShared.diag("timeline.start", "\(C.self) \(context.family)")            // DIAGNOSTIC
         let snap = WidgetShared.loadOrExplain()
         let cal = WidgetSnapshot.calendar
         let now = Date()
         let midnight = cal.startOfDay(for: now).addingTimeInterval(86_400)
         let dates = [now, midnight, midnight.addingTimeInterval(86_400)]
+        WidgetShared.diag("timeline.done", "\(C.self) \(context.family) · \(snap.state.rawValue)")   // DIAGNOSTIC
         return Timeline(entries: dates.map { SnapEntry(date: $0, snap: snap, config: configuration) },
                         policy: .after(midnight.addingTimeInterval(2 * 86_400)))
     }
@@ -204,7 +293,7 @@ nonisolated struct SnapProvider<C: WidgetConfigurationIntent>: AppIntentTimeline
 struct BigScherlyHomeWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "bst.home", intent: HomeConfig.self, provider: SnapProvider<HomeConfig>()) { e in
-            HomeView(e: e).containerBackground(for: .widget) { W.card }
+            HomeView(e: e)            // sets the palette, then its own background
         }
         .configurationDisplayName("Big Scherly")
         .description("Today, exercises, macros, your week, lifts, supplements, check-in, this month or coach — any size.")
@@ -214,14 +303,23 @@ struct BigScherlyHomeWidget: Widget {
 
 private struct HomeView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.widgetRenderingMode) private var mode
     let e: SnapEntry<HomeConfig>
     var body: some View {
         let s = e.snap, now = e.date, k = e.config.kind
-        switch family {
-        case .systemMedium: MediumView(s: s, now: now, kind: k.medium)
-        case .systemLarge:  LargeView(s: s, now: now, kind: k.large)
-        default:            SmallView(s: s, now: now, kind: k.small, lift: e.config.lift?.id)
+        let _ = W.use(s.look, scheme: scheme, mode: mode)
+        let _ = WidgetShared.diag(e.placeholder ? "drew.placeholder" : "drew.home",
+                                  "\(family) · \(k.rawValue) · \(s.state.rawValue)")   // DIAGNOSTIC
+        let card = W.card
+        Group {
+            switch family {
+            case .systemMedium: MediumView(s: s, now: now, kind: k.medium)
+            case .systemLarge:  LargeView(s: s, now: now, kind: k.large)
+            default:            SmallView(s: s, now: now, kind: k.small, lift: e.config.lift?.id)
+            }
         }
+        .containerBackground(for: .widget) { card }
     }
 }
 
@@ -262,22 +360,29 @@ struct BigScherlyInlineWidget: Widget {
 
 private struct Label8: View {
     let text: String
-    var color: Color = W.volt
+    var color: Color = W.label
     var body: some View {
-        Text(text).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(color).lineLimit(1)
-            .widgetAccentable()
+        if W.p.pill {
+            Text(text).font(.system(size: 8.5, weight: .heavy)).tracking(1).foregroundStyle(color).lineLimit(1)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Capsule().fill(Color(.sRGB, red: 30 / 255, green: 30 / 255, blue: 33 / 255, opacity: 0.88)))
+                .widgetAccentable()
+        } else {
+            Text(text).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(color).lineLimit(1)
+                .widgetAccentable()
+        }
     }
 }
 
 private struct Ring<Inner: View>: View {
     let frac: Double
     var width: CGFloat = 6
-    var color: Color = W.volt
+    var color: Color = W.stroke
     @ViewBuilder var inner: Inner
     var body: some View {
         ZStack {
-            Circle().stroke(Color.white.opacity(0.12), lineWidth: width)
-            Circle().trim(from: 0, to: max(0, min(frac, 1)))
+            Circle().stroke(W.track, lineWidth: width)
+            Circle().trim(from: 0, to: unit(frac))
                 .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .widgetAccentable()
@@ -288,13 +393,13 @@ private struct Ring<Inner: View>: View {
 
 private struct Bar: View {
     let frac: Double
-    var color: Color = W.volt
+    var color: Color = W.stroke
     var height: CGFloat = 5
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
-                Capsule().fill(color).frame(width: g.size.width * max(0, min(frac, 1))).widgetAccentable()
+                Capsule().fill(W.track)
+                Capsule().fill(color).frame(width: g.size.width * unit(frac)).widgetAccentable()
             }
         }
         .frame(height: height)
@@ -303,8 +408,9 @@ private struct Bar: View {
 
 private struct Spark: View {
     let values: [Double]
-    var color: Color = W.volt
+    var color: Color = W.stroke
     var body: some View {
+        let values = self.values.filter { $0.isFinite }
         GeometryReader { g in
             if values.count >= 2, let lo = values.min(), let hi = values.max() {
                 let span = max(hi - lo, 0.0001)
@@ -334,20 +440,20 @@ private struct WeekStrip: View {
                 let isToday = WidgetSnapshot.calendar.isDate(d.date, inSameDayAs: now)
                 VStack(spacing: 3) {
                     Text(["M", "T", "W", "T", "F", "S", "S"][i]).font(.system(size: 8, weight: .heavy))
-                        .foregroundStyle(isToday ? Color.white : W.mute)
+                        .foregroundStyle(isToday ? W.text : W.mute)
                     ZStack {
                         switch st {
                         case .done:
-                            Circle().fill(W.volt).widgetAccentable()
-                            Image(systemName: "checkmark").font(.system(size: size * 0.45, weight: .heavy)).foregroundStyle(.black)
+                            Circle().fill(W.accent).widgetAccentable()
+                            Image(systemName: "checkmark").font(.system(size: size * 0.45, weight: .heavy)).foregroundStyle(W.onAccent)
                         case .today:
-                            Circle().stroke(W.volt, lineWidth: 2).widgetAccentable()
+                            Circle().stroke(W.stroke, lineWidth: 2).widgetAccentable()
                         case .planned:
-                            Circle().stroke(Color.white.opacity(0.35), lineWidth: 1.5)
+                            Circle().stroke(W.planned, lineWidth: 1.5)
                         case .missed:
                             Circle().stroke(W.orange, lineWidth: 1.5)
                         case .rest:
-                            Circle().stroke(Color.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
+                            Circle().stroke(W.rest, style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
                         }
                     }
                     .frame(width: size, height: size)
@@ -364,9 +470,9 @@ private struct StartPill: View {
             Image(systemName: "play.fill").font(.system(size: 10, weight: .heavy))
             Text("Start").font(.system(size: 12, weight: .heavy))
         }
-        .foregroundStyle(.black)
+        .foregroundStyle(W.onAccent)
         .frame(maxWidth: .infinity).frame(height: 28)
-        .background(Capsule().fill(W.volt).widgetAccentable())
+        .background(Capsule().fill(W.accent).widgetAccentable())
     }
 }
 
@@ -377,7 +483,7 @@ private struct StateMessage: View {
         VStack(alignment: .leading, spacing: 4) {
             Label8(text: "BIG SCHERLY")
             Text(stateText(snap.state))
-                .font(.system(size: compact ? 11 : 13, weight: .bold)).foregroundStyle(.white)
+                .font(.system(size: compact ? 11 : 13, weight: .bold)).foregroundStyle(W.text)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(openURL("home"))
@@ -396,7 +502,7 @@ private func stateText(_ st: WidgetSnapshot.State) -> String {
 
 private func stat(_ value: String, _ label: String) -> some View {
     VStack(alignment: .leading, spacing: 1) {
-        Text(value).font(.system(size: 18, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+        Text(value).font(disp(22)).foregroundStyle(W.text)
             .lineLimit(1).minimumScaleFactor(0.6)
         Text(label).font(.system(size: 7.5, weight: .heavy)).tracking(0.6).foregroundStyle(W.mute).lineLimit(1)
     }
@@ -413,7 +519,7 @@ private struct TodayBlock: View {
         if let w = snap.day(now)?.workout {
             VStack(alignment: .leading, spacing: 3) {
                 Label8(text: w.completed ? "TODAY · DONE" : "TODAY")
-                Text(w.title).font(.system(size: 15, weight: .heavy)).foregroundStyle(.white).lineLimit(2)
+                Text(w.title.uppercased()).font(disp(20)).foregroundStyle(W.text).lineLimit(2)
                 Text("\(w.exercises.count) exercises · \(w.setsDone)/\(w.setsTotal) sets")
                     .font(.system(size: 10, weight: .semibold)).foregroundStyle(W.mute).lineLimit(1)
                 Spacer(minLength: 4)
@@ -425,11 +531,11 @@ private struct TodayBlock: View {
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 Label8(text: "TODAY")
-                Text("Rest day").font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
+                Text("REST DAY").font(disp(20)).foregroundStyle(W.text)
                 if let n = snap.upcoming(from: now, limit: 1).first {
                     Spacer(minLength: 4)
-                    Text("Next: \(n.workout.title)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-                    Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .semibold)).foregroundStyle(W.volt)
+                    Text("Next: \(n.workout.title)").font(.system(size: 11, weight: .bold)).foregroundStyle(W.text).lineLimit(2)
+                    Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .semibold)).foregroundStyle(W.accentText)
                 }
             }
         }
@@ -442,12 +548,12 @@ private struct MacroBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(m.kcal.formatted()).font(.system(size: big, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                Text(m.kcal.formatted()).font(disp(big * 1.15)).foregroundStyle(W.text)
                     .lineLimit(1).minimumScaleFactor(0.6)
                 Text("kcal").font(.system(size: 9, weight: .heavy)).foregroundStyle(W.mute)
             }
             let total = Double(max(m.protein * 4 + m.carbs * 4 + m.fat * 9, 1))
-            row("P", m.protein, Double(m.protein * 4) / total, W.volt)
+            row("P", m.protein, Double(m.protein * 4) / total, W.stroke)
             row("C", m.carbs, Double(m.carbs * 4) / total, W.blue)
             row("F", m.fat, Double(m.fat * 9) / total, W.orange)
         }
@@ -456,7 +562,7 @@ private struct MacroBlock: View {
         HStack(spacing: 5) {
             Text(k).font(.system(size: 8, weight: .heavy)).foregroundStyle(W.mute).frame(width: 8)
             Bar(frac: share * 1.6, color: c, height: 4)
-            Text("\(g)g").font(.system(size: 9, weight: .bold)).foregroundStyle(.white).frame(width: 34, alignment: .trailing)
+            Text("\(g)g").font(.system(size: 9, weight: .bold)).foregroundStyle(W.text).frame(width: 34, alignment: .trailing)
         }
     }
 }
@@ -470,14 +576,14 @@ private struct ExerciseList: View {
             ForEach(w.exercises.prefix(limit)) { ex in
                 HStack(spacing: 6) {
                     Text(ex.name).font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(ex.done < ex.total ? Color.white : W.mute).lineLimit(1)
+                        .foregroundStyle(ex.done < ex.total ? W.text : W.mute).lineLimit(1)
                     Spacer(minLength: 4)
                     Text("\(ex.done)/\(ex.total)").font(.system(size: 10, weight: .heavy))
-                        .foregroundStyle(ex.done == ex.total ? W.volt : (ex.name == cur ? Color.white : W.mute))
+                        .foregroundStyle(ex.done == ex.total ? W.accentText : (ex.name == cur ? W.text : W.mute))
                     Bar(frac: Double(ex.done) / Double(max(ex.total, 1)), height: 4).frame(width: 40)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(RoundedRectangle(cornerRadius: 7).fill(ex.name == cur ? W.volt.opacity(0.12) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: 7).fill(ex.name == cur ? W.highlight : Color.clear))
             }
             if w.exercises.count > limit {
                 Text("+\(w.exercises.count - limit) more").font(.system(size: 9, weight: .semibold)).foregroundStyle(W.mute)
@@ -493,15 +599,15 @@ private struct LiftRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(l.name).font(.system(size: 11.5, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                Text(l.name).font(.system(size: 11.5, weight: .heavy)).foregroundStyle(W.text).lineLimit(1)
                 Text((l.speed.map { String(format: "%.2f m/s · ", $0) } ?? "") + "\(l.sessions) sessions")
                     .font(.system(size: 8.5, weight: .semibold)).foregroundStyle(W.mute).lineLimit(1)
             }
             Spacer(minLength: 4)
             Spark(values: l.points).frame(width: 60, height: 20)
             VStack(alignment: .trailing, spacing: 0) {
-                Text("\(num(l.e1rm)) \(unit)").font(.system(size: 12, weight: .heavy, design: .rounded)).foregroundStyle(.white)
-                Text(change(l.change)).font(.system(size: 8.5, weight: .heavy)).foregroundStyle(l.change >= 0 ? W.volt : W.orange)
+                Text("\(num(l.e1rm)) \(unit)").font(.system(size: 12, weight: .heavy, design: .rounded)).foregroundStyle(W.text)
+                Text(change(l.change)).font(.system(size: 8.5, weight: .heavy)).foregroundStyle(l.change >= 0 ? W.accentText : W.orangeText)
             }
             .frame(width: 66, alignment: .trailing)
         }
@@ -525,16 +631,16 @@ private struct SmallView: View {
                 if let w = s.day(now)?.workout {
                     VStack(alignment: .leading, spacing: 3) {
                         Label8(text: w.completed ? "TODAY · DONE" : "TODAY")
-                        Text(w.title).font(.system(size: 14, weight: .heavy)).foregroundStyle(.white).lineLimit(2)
+                        Text(w.title.uppercased()).font(disp(19)).foregroundStyle(W.text).lineLimit(2)
                         Spacer(minLength: 2)
                         HStack(spacing: 8) {
                             Ring(frac: Double(w.setsDone) / Double(max(w.setsTotal, 1))) {
-                                Text("\(w.setsDone)/\(w.setsTotal)").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white)
+                                Text("\(w.setsDone)/\(w.setsTotal)").font(.system(size: 10, weight: .heavy)).foregroundStyle(W.text)
                             }
                             .frame(width: 44, height: 44)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("sets").font(.system(size: 9, weight: .bold)).foregroundStyle(W.mute)
-                                Text(w.current?.name ?? "All logged").font(.system(size: 10.5, weight: .heavy)).foregroundStyle(.white).lineLimit(2)
+                                Text(w.current?.name ?? "All logged").font(.system(size: 10.5, weight: .heavy)).foregroundStyle(W.text).lineLimit(2)
                             }
                         }
                         Spacer(minLength: 2)
@@ -550,23 +656,23 @@ private struct SmallView: View {
                         HStack { Label8(text: "MACROS"); Spacer(); Text(m.training ? "Training" : "Rest day").font(.system(size: 8.5, weight: .heavy)).foregroundStyle(W.mute) }
                         Spacer(minLength: 0)
                         MacroBlock(m: m)
-                        if let n = m.note { Text(n).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(W.volt).lineLimit(1) }
+                        if let n = m.note { Text(n).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(W.accentText).lineLimit(1) }
                     }
                     .widgetURL(openURL("macros"))
                 } else {
-                    VStack(alignment: .leading) { Label8(text: "MACROS"); Text("No macro plan for today yet.").font(.system(size: 12, weight: .bold)).foregroundStyle(.white) }
+                    VStack(alignment: .leading) { Label8(text: "MACROS"); Text("No macro plan for today yet.").font(.system(size: 12, weight: .bold)).foregroundStyle(W.text) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).widgetURL(openURL("macros"))
                 }
             case .week:
                 let p = s.weekProgress(now)
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack { Label8(text: "THIS WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 11, weight: .heavy)).foregroundStyle(.white) }
+                    HStack { Label8(text: "THIS WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 11, weight: .heavy)).foregroundStyle(W.text) }
                     Spacer(minLength: 0)
                     WeekStrip(snap: s, now: now, size: 17)
                     Spacer(minLength: 0)
                     if let n = s.upcoming(from: now, limit: 1).first {
-                        Text("Next: \(n.workout.title)").font(.system(size: 11, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
-                        Text(dayLabel(n.date, now: now)).font(.system(size: 9.5, weight: .bold)).foregroundStyle(W.volt)
+                        Text("Next: \(n.workout.title)").font(.system(size: 11, weight: .heavy)).foregroundStyle(W.text).lineLimit(1)
+                        Text(dayLabel(n.date, now: now)).font(.system(size: 9.5, weight: .bold)).foregroundStyle(W.accentText)
                     } else {
                         Text("Nothing else planned this week").font(.system(size: 10, weight: .bold)).foregroundStyle(W.mute)
                     }
@@ -578,21 +684,21 @@ private struct SmallView: View {
                         Label8(text: l.name.uppercased())
                         Text("est. 1RM").font(.system(size: 8.5, weight: .bold)).foregroundStyle(W.mute)
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
-                            Text(num(l.e1rm)).font(.system(size: 30, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                            Text(num(l.e1rm)).font(disp(40)).foregroundStyle(W.text)
                             Text(s.unit).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.mute)
                         }
-                        Text("\(change(l.change)) · 8 weeks").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(l.change >= 0 ? W.volt : W.orange)
+                        Text("\(change(l.change)) · 8 weeks").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(l.change >= 0 ? W.accentText : W.orangeText)
                         Spark(values: l.points).frame(maxHeight: .infinity)
                     }
                     .widgetURL(openURL("stats"))
                 } else {
-                    VStack(alignment: .leading) { Label8(text: "LIFT"); Text("Log a lift to see its trend here.").font(.system(size: 12, weight: .bold)).foregroundStyle(.white) }
+                    VStack(alignment: .leading) { Label8(text: "LIFT"); Text("Log a lift to see its trend here.").font(.system(size: 12, weight: .bold)).foregroundStyle(W.text) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).widgetURL(openURL("stats"))
                 }
             case .supplements:
                 let list = s.supplements(at: now)
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack { Label8(text: "SUPPLEMENTS"); Spacer(); Text("\(list.filter { $0.taken }.count)/\(list.count)").font(.system(size: 11, weight: .heavy)).foregroundStyle(.white) }
+                    HStack { Label8(text: "SUPPLEMENTS"); Spacer(); Text("\(list.filter { $0.taken }.count)/\(list.count)").font(.system(size: 11, weight: .heavy)).foregroundStyle(W.text) }
                     if list.isEmpty {
                         Text("No supplements set up.").font(.system(size: 11, weight: .bold)).foregroundStyle(W.mute)
                     }
@@ -600,13 +706,13 @@ private struct SmallView: View {
                         Button(intent: TickSupplementIntent(sp.id)) {
                             HStack(spacing: 7) {
                                 ZStack {
-                                    Circle().fill(sp.taken ? W.volt : Color.clear).widgetAccentable()
-                                    Circle().stroke(sp.taken ? W.volt : Color.white.opacity(0.3), lineWidth: 1.5)
-                                    if sp.taken { Image(systemName: "checkmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(.black) }
+                                    Circle().fill(sp.taken ? W.accent : Color.clear).widgetAccentable()
+                                    Circle().stroke(sp.taken ? W.accent : W.planned, lineWidth: 1.5)
+                                    if sp.taken { Image(systemName: "checkmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(W.onAccent) }
                                 }
                                 .frame(width: 17, height: 17)
                                 Text(sp.name).font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(sp.taken ? W.mute : Color.white).strikethrough(sp.taken).lineLimit(1)
+                                    .foregroundStyle(sp.taken ? W.mute : W.text).strikethrough(sp.taken).lineLimit(1)
                             }
                         }
                         .buttonStyle(.plain)
@@ -621,13 +727,13 @@ private struct SmallView: View {
                     Spacer(minLength: 0)
                     if let d = s.daysToCheckIn(now) {
                         Text(d > 0 ? "\(d)" : (d == 0 ? "Today" : "\(-d)"))
-                            .font(.system(size: d == 0 ? 30 : 40, weight: .heavy, design: .rounded)).foregroundStyle(d < 0 ? W.orange : .white)
+                            .font(disp(d == 0 ? 34 : 50)).foregroundStyle(d < 0 ? W.orangeText : W.text)
                         Text(d > 0 ? "day\(d == 1 ? "" : "s") to go" : (d == 0 ? "weekly check-in due" : "day\(d == -1 ? "" : "s") overdue"))
-                            .font(.system(size: 10, weight: .heavy)).foregroundStyle(d < 0 ? W.orange : W.volt)
+                            .font(.system(size: 10, weight: .heavy)).foregroundStyle(d < 0 ? W.orangeText : W.accentText)
                         Spacer(minLength: 0)
                         if let l = s.lastCheckIn { Text("Last: \(l.formatted(.dateTime.month(.abbreviated).day()))").font(.system(size: 9, weight: .semibold)).foregroundStyle(W.mute) }
                     } else {
-                        Text("Send your first check-in").font(.system(size: 13, weight: .heavy)).foregroundStyle(.white)
+                        Text("Send your first check-in").font(.system(size: 13, weight: .heavy)).foregroundStyle(W.text)
                         Spacer(minLength: 0)
                     }
                 }
@@ -645,11 +751,11 @@ private struct SmallView: View {
                     Label8(text: "COACH")
                     Spacer(minLength: 0)
                     if s.unreadCoach > 0 {
-                        Text("\(s.unreadCoach)").font(.system(size: 40, weight: .heavy, design: .rounded)).foregroundStyle(.white)
-                        Text("new message\(s.unreadCoach == 1 ? "" : "s")").font(.system(size: 10, weight: .heavy)).foregroundStyle(W.volt)
+                        Text("\(s.unreadCoach)").font(disp(50)).foregroundStyle(W.text)
+                        Text("new message\(s.unreadCoach == 1 ? "" : "s")").font(.system(size: 10, weight: .heavy)).foregroundStyle(W.accentText)
                     } else {
-                        Image(systemName: "checkmark.message.fill").font(.system(size: 26)).foregroundStyle(W.volt).widgetAccentable()
-                        Text("All caught up").font(.system(size: 12, weight: .heavy)).foregroundStyle(.white)
+                        Image(systemName: "checkmark.message.fill").font(.system(size: 26)).foregroundStyle(W.accentText).widgetAccentable()
+                        Text("All caught up").font(.system(size: 12, weight: .heavy)).foregroundStyle(W.text)
                     }
                     Spacer(minLength: 0)
                 }
@@ -675,11 +781,11 @@ private struct MediumView: View {
                     Rectangle().fill(W.line).frame(width: 1)
                     VStack(alignment: .leading, spacing: 6) {
                         let p = s.weekProgress(now)
-                        HStack { Label8(text: "WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(.white) }
+                        HStack { Label8(text: "WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(W.text) }
                         WeekStrip(snap: s, now: now, size: 14)
                         Spacer(minLength: 0)
                         if let m = s.day(now)?.macros {
-                            HStack { Label8(text: "MACROS"); Spacer(); Text("\(m.kcal.formatted()) kcal").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(.white) }
+                            HStack { Label8(text: "MACROS"); Spacer(); Text("\(m.kcal.formatted()) kcal").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(W.text) }
                             Text("P \(m.protein) · C \(m.carbs) · F \(m.fat)").font(.system(size: 9.5, weight: .bold)).foregroundStyle(W.mute)
                         }
                     }
@@ -692,7 +798,7 @@ private struct MediumView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 0) {
                                 Label8(text: "TODAY · \(w.setsDone)/\(w.setsTotal) SETS")
-                                Text(w.title).font(.system(size: 13, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                                Text(w.title.uppercased()).font(disp(18)).foregroundStyle(W.text).lineLimit(1)
                             }
                             Spacer()
                             if !w.completed { Link(destination: sessionURL(w.id)) { StartPill().frame(width: 74) } }
@@ -707,7 +813,7 @@ private struct MediumView: View {
             case .lifts:
                 VStack(alignment: .leading, spacing: 5) {
                     HStack { Label8(text: "LIFT TRENDS"); Spacer(); Text("est. 1RM · 8 weeks").font(.system(size: 8.5, weight: .bold)).foregroundStyle(W.mute) }
-                    if s.lifts.isEmpty { Text("Log a few lifts to see trends here.").font(.system(size: 12, weight: .bold)).foregroundStyle(.white) }
+                    if s.lifts.isEmpty { Text("Log a few lifts to see trends here.").font(.system(size: 12, weight: .bold)).foregroundStyle(W.text) }
                     ForEach(s.lifts.prefix(3)) { l in LiftRow(l: l, unit: s.unit) }
                     Spacer(minLength: 0)
                 }
@@ -722,23 +828,23 @@ private struct MediumView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Label8(text: "CALORIES THIS WEEK")
                         let week = s.week(of: now)
-                        let maxK = Double(week.compactMap { $0.day?.macros?.kcal }.max() ?? 1)
+                        let maxK = Double(max(week.compactMap { $0.day?.macros?.kcal }.max() ?? 1, 1))
                         HStack(alignment: .bottom, spacing: 4) {
                             ForEach(Array(week.enumerated()), id: \.offset) { i, d in
                                 let m = d.day?.macros
                                 VStack(spacing: 2) {
                                     RoundedRectangle(cornerRadius: 3)
-                                        .fill(m?.training == true ? W.volt : Color.white.opacity(0.25))
+                                        .fill(m?.training == true ? W.stroke : W.rest)
                                         .frame(height: max(4, 70 * CGFloat(Double(m?.kcal ?? 0) / maxK)))
                                         .widgetAccentable()
                                     Text(["M", "T", "W", "T", "F", "S", "S"][i]).font(.system(size: 8, weight: .heavy))
-                                        .foregroundStyle(WidgetSnapshot.calendar.isDate(d.date, inSameDayAs: now) ? Color.white : W.mute)
+                                        .foregroundStyle(WidgetSnapshot.calendar.isDate(d.date, inSameDayAs: now) ? W.text : W.mute)
                                 }
                                 .frame(maxWidth: .infinity)
                             }
                         }
                         .frame(maxHeight: .infinity, alignment: .bottom)
-                        Text("volt = training day").font(.system(size: 8, weight: .semibold)).foregroundStyle(W.mute)
+                        Text("highlighted = training day").font(.system(size: 8, weight: .semibold)).foregroundStyle(W.mute)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -747,12 +853,12 @@ private struct MediumView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label8(text: "COMING UP")
                     let next = s.upcoming(from: now, limit: 3)
-                    if next.isEmpty { Text("Nothing planned yet.").font(.system(size: 12, weight: .bold)).foregroundStyle(.white) }
+                    if next.isEmpty { Text("Nothing planned yet.").font(.system(size: 12, weight: .bold)).foregroundStyle(W.text) }
                     ForEach(Array(next.enumerated()), id: \.offset) { _, n in
                         HStack(spacing: 10) {
-                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.volt)
+                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.accentText)
                                 .frame(width: 78, alignment: .leading).lineLimit(1).minimumScaleFactor(0.8)
-                            Text(n.workout.title).font(.system(size: 12, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                            Text(n.workout.title).font(.system(size: 12, weight: .heavy)).foregroundStyle(W.text).lineLimit(1)
                             Spacer(minLength: 4)
                             Text("\(n.workout.exercises.count) ex").font(.system(size: 9.5, weight: .bold)).foregroundStyle(W.mute)
                         }
@@ -774,16 +880,16 @@ private struct MediumView: View {
             case .week:
                 VStack(alignment: .leading, spacing: 6) {
                     let p = s.weekProgress(now)
-                    HStack { Label8(text: "THIS WEEK"); Spacer(); Text("\(p.done) of \(p.planned) sessions").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white) }
+                    HStack { Label8(text: "THIS WEEK"); Spacer(); Text("\(p.done) of \(p.planned) sessions").font(.system(size: 10, weight: .heavy)).foregroundStyle(W.text) }
                     WeekStrip(snap: s, now: now, size: 16)
                     Spacer(minLength: 0)
                     let next = s.upcoming(from: now, limit: 2)
                     if next.isEmpty { Text("Nothing else planned yet").font(.system(size: 11, weight: .bold)).foregroundStyle(W.mute) }
                     ForEach(Array(next.enumerated()), id: \.offset) { _, n in
                         HStack(spacing: 10) {
-                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.volt)
+                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.accentText)
                                 .frame(width: 78, alignment: .leading).lineLimit(1).minimumScaleFactor(0.8)
-                            Text(n.workout.title).font(.system(size: 12, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                            Text(n.workout.title).font(.system(size: 12, weight: .heavy)).foregroundStyle(W.text).lineLimit(1)
                             Spacer(minLength: 0)
                         }
                     }
@@ -819,7 +925,7 @@ private struct LargeView: View {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 5) {
                             let p = s.weekProgress(now)
-                            HStack { Label8(text: "WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(.white) }
+                            HStack { Label8(text: "WEEK"); Spacer(); Text("\(p.done) of \(p.planned)").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(W.text) }
                             WeekStrip(snap: s, now: now, size: 14)
                         }
                         Rectangle().fill(W.line).frame(width: 1)
@@ -838,8 +944,8 @@ private struct LargeView: View {
                     Label8(text: "COMING UP")
                     ForEach(Array(s.upcoming(from: now, limit: 4).filter { !WidgetSnapshot.calendar.isDate($0.date, inSameDayAs: now) }.prefix(3).enumerated()), id: \.offset) { _, n in
                         HStack(spacing: 8) {
-                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.volt).frame(width: 82, alignment: .leading)
-                            Text(n.workout.title).font(.system(size: 11.5, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                            Text(dayLabel(n.date, now: now)).font(.system(size: 10, weight: .heavy)).foregroundStyle(W.accentText).frame(width: 82, alignment: .leading)
+                            Text(n.workout.title).font(.system(size: 11.5, weight: .heavy)).foregroundStyle(W.text).lineLimit(1)
                             Spacer(minLength: 0)
                         }
                     }
@@ -850,7 +956,7 @@ private struct LargeView: View {
             case .lifts:
                 VStack(alignment: .leading, spacing: 7) {
                     HStack { Label8(text: "LIFT TRENDS"); Spacer(); Text("est. 1RM · change over 8 weeks").font(.system(size: 8.5, weight: .bold)).foregroundStyle(W.mute) }
-                    if s.lifts.isEmpty { Text("Log a few lifts to see trends here.").font(.system(size: 13, weight: .bold)).foregroundStyle(.white) }
+                    if s.lifts.isEmpty { Text("Log a few lifts to see trends here.").font(.system(size: 13, weight: .bold)).foregroundStyle(W.text) }
                     ForEach(s.lifts.prefix(6)) { l in
                         LiftRow(l: l, unit: s.unit)
                         if l.id != s.lifts.prefix(6).last?.id { Rectangle().fill(W.line).frame(height: 1) }
@@ -879,9 +985,9 @@ private struct LargeView: View {
                     Label8(text: today?.training == false ? "MACROS · TODAY · REST DAY" : "MACROS · TODAY · TRAINING DAY")
                     if let m = today {
                         MacroBlock(m: m, big: 30)
-                        if let n = m.note { Text(n).font(.system(size: 10, weight: .bold)).foregroundStyle(W.volt).lineLimit(1) }
+                        if let n = m.note { Text(n).font(.system(size: 10, weight: .bold)).foregroundStyle(W.accentText).lineLimit(1) }
                     } else {
-                        Text("No macro plan for today yet.").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                        Text("No macro plan for today yet.").font(.system(size: 13, weight: .bold)).foregroundStyle(W.text)
                     }
                     Rectangle().fill(W.line).frame(height: 1)
                     Label8(text: "THIS WEEK")
@@ -891,21 +997,21 @@ private struct LargeView: View {
                             let isToday = WidgetSnapshot.calendar.isDate(d.date, inSameDayAs: now)
                             HStack(spacing: 8) {
                                 Text(d.date.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .heavy))
-                                    .foregroundStyle(isToday ? Color.white : W.mute).frame(width: 30, alignment: .leading)
+                                    .foregroundStyle(isToday ? W.text : W.mute).frame(width: 30, alignment: .leading)
                                 Text(m == nil ? "—" : (m!.training ? "Training" : "Rest"))
                                     .font(.system(size: 9, weight: .heavy))
-                                    .foregroundStyle(m?.training == true ? Color.black : W.mute)
+                                    .foregroundStyle(m?.training == true ? W.onAccent : W.mute)
                                     .padding(.horizontal, 6).padding(.vertical, 1.5)
-                                    .background(Capsule().fill(m?.training == true ? W.volt : Color.white.opacity(0.08)))
+                                    .background(Capsule().fill(m?.training == true ? W.accent : W.track))
                                     .frame(width: 62, alignment: .leading)
                                 Text(m.map { "\($0.kcal.formatted()) kcal" } ?? "")
-                                    .font(.system(size: 11, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                                    .font(.system(size: 11, weight: .heavy, design: .rounded)).foregroundStyle(W.text)
                                 Spacer(minLength: 4)
                                 Text(m.map { "P \($0.protein) · C \($0.carbs) · F \($0.fat)" } ?? "")
                                     .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(W.mute).lineLimit(1)
                             }
                             .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(isToday ? W.volt.opacity(0.12) : Color.clear))
+                            .background(RoundedRectangle(cornerRadius: 7).fill(isToday ? W.highlight : Color.clear))
                         }
                     }
                     Spacer(minLength: 0)
@@ -920,7 +1026,7 @@ private struct LargeView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 1) {
                 Label8(text: "TODAY · \(now.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased())")
-                Text(s.day(now)?.workout?.title ?? "Rest day").font(.system(size: 16, weight: .heavy)).foregroundStyle(.white).lineLimit(1)
+                Text((s.day(now)?.workout?.title ?? "Rest day").uppercased()).font(disp(22)).foregroundStyle(W.text).lineLimit(1)
             }
             Spacer()
             if let w = s.day(now)?.workout, !w.completed {
@@ -941,8 +1047,8 @@ private struct LargeView: View {
 
     private func item(_ icon: String, _ t: String) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(W.volt).widgetAccentable()
-            Text(t).font(.system(size: 9.5, weight: .bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
+            Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(W.accentText).widgetAccentable()
+            Text(t).font(.system(size: 9.5, weight: .bold)).foregroundStyle(W.text).lineLimit(1).minimumScaleFactor(0.75)
         }
     }
 }
@@ -953,6 +1059,7 @@ private struct CircleView: View {
     let e: SnapEntry<CircleConfig>
     var body: some View {
         let s = e.snap, now = e.date
+        let _ = e.placeholder ? () : WidgetShared.diag("drew.lock", "circle · \(e.config.kind.rawValue)")   // DIAGNOSTIC
         Group {
             if s.state != .client {
                 ZStack { AccessoryWidgetBackground(); Image(systemName: "dumbbell.fill") }
@@ -1015,6 +1122,7 @@ private struct RectView: View {
     let e: SnapEntry<RectConfig>
     var body: some View {
         let s = e.snap, now = e.date
+        let _ = e.placeholder ? () : WidgetShared.diag("drew.lock", "rectangle · \(e.config.kind.rawValue)")   // DIAGNOSTIC
         VStack(alignment: .leading, spacing: 2) {
             if s.state != .client {
                 Text("Big Scherly").font(.system(size: 13, weight: .heavy))
@@ -1107,6 +1215,7 @@ private struct InlineView: View {
     let e: SnapEntry<InlineConfig>
     var body: some View {
         let s = e.snap, now = e.date
+        let _ = e.placeholder ? () : WidgetShared.diag("drew.lock", "inline · \(e.config.kind.rawValue)")   // DIAGNOSTIC
         Group {
             if s.state != .client {
                 Label("Big Scherly", systemImage: "dumbbell.fill")

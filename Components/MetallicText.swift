@@ -79,7 +79,7 @@ struct MetallicRainbowText: View {
     // identically, so they always shrink to the same size and stay aligned.
     private func glyphText() -> some View {
         Text(text)
-            .font(BrandFont.display(fillWidth ? 240 : size))
+            .font(BrandFont.welcome(fillWidth ? 240 : size))
             .lineLimit(1)
             .minimumScaleFactor(fillWidth ? 0.1 : 1)
             .frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
