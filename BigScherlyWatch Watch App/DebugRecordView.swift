@@ -7,6 +7,8 @@ import Combine
 // one big tile: tap to record, do any reps, tap to stop. No steps, targets or checks — every
 // recording goes to the phone as a motion capture (with the camera's track when it's on), counted
 // by the same analyser as a workout. Tap again for another recording; Done ends it.
+// LIVE session: no tapping at all — once the phone starts it, the Watch records continuously and
+// sends what it has every 15 seconds (raw motion + its rep count), so Claude can watch nearly live.
 //
 // Lives in the Watch app folder (added automatically).
 
@@ -14,7 +16,12 @@ import Combine
 final class WatchDebugRecorder: ObservableObject {
     static let shared = WatchDebugRecorder()
 
-    struct Arm: Equatable { var lift: String; var title: String; var upFirst: Bool }
+    struct Arm: Equatable {
+        var lift: String; var title: String
+        var order: String                                // "up" (press, deadlift) · "down" (squat, bench) · "either"
+        var live = false; var session = ""
+        var analyserOrder: RepAnalyzer.Order { order == "up" ? .upFirst : order == "down" ? .downFirst : .either }
+    }
 
     @Published private(set) var arm: Arm?
     @Published private(set) var phase = "ready"          // ready · countdown · recording · sending
@@ -27,24 +34,44 @@ final class WatchDebugRecorder: ObservableObject {
     private var solo = false
     private var finishedSets = 0                         // reps in sets that already closed (rests of 7 s+)
     private var tapped = 0
+    // Live session
+    private var liveTask: Task<Void, Never>?
+    private var seq = 0
+    private var finishedReps: [RepMotion] = []
+    private var currentReps: [RepMotion] = []
+    private var wrist = "left"
+    static let chunkSeconds: UInt64 = 15
 
     private init() {}
 
     // MARK: From the phone
 
-    func armed(lift: String, title: String, upFirst: Bool) {
-        let a = Arm(lift: lift, title: title, upFirst: upFirst)
+    func armed(lift: String, title: String, order: String, live: Bool, session: String) {
+        let a = Arm(lift: lift, title: title, order: order, live: live, session: session)
         if arm == a { return }                            // the same arm, resent
-        if phase == "recording" || phase == "countdown" { return }   // don't switch mid-recording
+        if phase == "recording" || phase == "countdown" {
+            // Mid-recording: only the lift (and so the counting order) can change.
+            if var cur = arm, cur.live, a.live, cur.session == a.session {
+                cur.lift = a.lift; cur.title = a.title; cur.order = a.order
+                arm = cur
+                MotionRecorder.shared.setRepOrder(cur.analyserOrder)
+            }
+            return
+        }
         arm = a
         phase = "ready"
         note = nil
         ensureSession()
+        if a.live { go() }                                // live: no tap — it starts on its own
     }
 
     func ended() {
         task?.cancel(); task = nil
-        if phase == "recording" { MotionRecorder.shared.endCapture { _ in } }
+        liveTask?.cancel(); liveTask = nil
+        if phase == "recording" {
+            if arm?.live == true { sendChunk(final: true) }   // what's left, before closing
+            MotionRecorder.shared.endCapture { _ in }
+        }
         arm = nil
         phase = "ready"
         countdownEnds = nil
@@ -63,7 +90,8 @@ final class WatchDebugRecorder: ObservableObject {
     func tap() {
         switch phase {
         case "ready": go()
-        case "recording": stop()
+        case "recording":
+            if arm?.live == true { done() } else { stop() }   // live: tapping ends the session
         default: break
         }
     }
@@ -90,8 +118,8 @@ final class WatchDebugRecorder: ObservableObject {
         note = nil
         phase = "countdown"
         countdownEnds = Date().addingTimeInterval(3)
-        MotionRecorder.shared.calibrating = true          // not a workout set
-        MotionRecorder.shared.setRepOrder(a.upFirst ? .upFirst : .downFirst)
+        MotionRecorder.shared.beginCalibration()          // not a workout set
+        MotionRecorder.shared.setRepOrder(a.analyserOrder)
         WatchBuzz.tap()
         task?.cancel()
         task = Task {
@@ -115,18 +143,55 @@ final class WatchDebugRecorder: ObservableObject {
             }
             self.recStart = Date()
             self.count = 0; self.finishedSets = 0; self.tapped = 0
+            self.finishedReps = []; self.currentReps = []; self.seq = 0
             self.phase = "recording"
             MotionRecorder.shared.beginCapture()
             WatchBuzz.go()
             let device = WKInterfaceDevice.current()
-            WatchState.sendLive(["dbgGo": true, "wrist": device.wristLocation == .left ? "left" : "right"])
+            self.wrist = device.wristLocation == .left ? "left" : "right"
+            WatchState.sendLive(["dbgGo": true, "wrist": self.wrist])
+            if a.live { self.startLiveLoop() }
+        }
+    }
+
+    // MARK: Live session — a chunk every 15 seconds
+
+    private func startLiveLoop() {
+        liveTask?.cancel()
+        liveTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.chunkSeconds * 1_000_000_000)
+                guard !Task.isCancelled, self.phase == "recording", self.arm?.live == true else { return }
+                self.sendChunk(final: false)
+            }
+        }
+    }
+
+    /// Everything since the last chunk: raw motion (packed like a capture), plus every rep counted
+    /// so far this session (the phone keeps the newest list).
+    private func sendChunk(final: Bool) {
+        guard let a = arm else { return }
+        seq += 1
+        let n = seq, session = a.session, lift = a.lift, wrist = self.wrist
+        let build = WatchBuild.tag
+        let reps = finishedReps + currentReps
+        let repsData = (try? JSONEncoder().encode(reps)) ?? Data()
+        MotionRecorder.shared.drainCapture { samples in
+            let packed = MotionCapturePack.pack(samples)
+            WatchState.sendLive(["dbgChunk": packed.data, "dbgSession": session, "dbgSeq": n,
+                                 "dbgStart": packed.startT, "dbgHz": MotionCapturePack.outRate,
+                                 "dbgRaw": samples.count, "dbgReps": repsData, "dbgLift": lift,
+                                 "dbgWrist": wrist, "dbgBuild": build, "dbgAnalyzer": RepAnalyzer.version,
+                                 "dbgFinal": final ? 1 : 0])
         }
     }
 
     /// Live reps from the analyser (the set in progress).
     func live(_ reps: [RepMotion]) {
         guard phase == "recording", let s = recStart else { return }
-        let now = reps.filter { $0.start >= s.addingTimeInterval(-0.5) }.count
+        let mine = reps.filter { $0.start >= s.addingTimeInterval(-0.5) }
+        currentReps = mine
+        let now = mine.count
         count = finishedSets + now
         if count > tapped { tapped = count; WatchBuzz.rep() }
     }
@@ -134,7 +199,10 @@ final class WatchDebugRecorder: ObservableObject {
     /// A set closed (7 s without moving) while recording: keep its reps in the running count.
     func setEnded(_ reps: [RepMotion]) {
         guard phase == "recording", let s = recStart else { return }
-        finishedSets += reps.filter { $0.start >= s.addingTimeInterval(-0.5) }.count
+        let mine = reps.filter { $0.start >= s.addingTimeInterval(-0.5) }
+        finishedSets += mine.count
+        finishedReps += mine
+        currentReps = []
         count = finishedSets
     }
 
@@ -143,7 +211,7 @@ final class WatchDebugRecorder: ObservableObject {
         phase = "sending"
         WKInterfaceDevice.current().play(.stop)
         WatchState.sendLive(["dbgStopped": true])         // the phone stops the camera
-        let order: RepAnalyzer.Order = a.upFirst ? .upFirst : .downFirst
+        let order = a.analyserOrder
         let build = WatchBuild.tag, title = a.title, lift = a.lift
         MotionRecorder.shared.endCapture { samples in
             guard samples.count >= 150 else {
@@ -189,7 +257,7 @@ struct DebugRecordOverlay: View {
                 ScrollView {
                     VStack(spacing: 7) {
                         VStack(spacing: 1) {
-                            Text("DEBUG · RECORD").font(.system(size: 8.5, weight: .heavy)).tracking(1.2).foregroundColor(mute)
+                            Text(a.live ? "DEBUG · LIVE" : "DEBUG · RECORD").font(.system(size: 8.5, weight: .heavy)).tracking(1.2).foregroundColor(mute)
                             Text(a.title).font(.system(size: 16, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7)
                         }
                         TimelineView(.periodic(from: .now, by: 0.1)) { ctx in tile(ctx.date) }
@@ -215,7 +283,7 @@ struct DebugRecordOverlay: View {
         switch rec.phase {
         case "ready": return "Tap to record. Do any reps, then tap to stop."
         case "countdown": return "Get into position…"
-        case "recording": return "Recording — tap to stop"
+        case "recording": return rec.arm?.live == true ? "Live — Claude sees it every 15 s. Tap to end the session." : "Recording — tap to stop"
         default: return "Sending to the phone…"
         }
     }
@@ -241,7 +309,7 @@ struct DebugRecordOverlay: View {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
                     Text("\(rec.count)").font(.system(size: 32, weight: .heavy, design: .rounded))
                 }
-                Text(String(format: "REPS · %d:%02d · TAP TO STOP", secs / 60, secs % 60))
+                Text(String(format: rec.arm?.live == true ? "LIVE · %d:%02d · TAP TO END" : "REPS · %d:%02d · TAP TO STOP", secs / 60, secs % 60))
                     .font(.system(size: 7.5, weight: .heavy)).tracking(0.8).opacity(0.7).lineLimit(1)
             })
         default:

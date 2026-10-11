@@ -18,6 +18,9 @@ enum APIConfig {
 final class APIClient {
     static let shared = APIClient()
     private var token: String?
+    /// A coach's own training profile (POST /admin/self). While set, client routes use it
+    /// and coach routes keep the login token — see token(for:).
+    private var selfToken: String?
 
     private var base: URL { URL(string: APIConfig.baseURL)! }
 
@@ -32,7 +35,21 @@ final class APIClient {
     // Called on logout — forget the saved login so the app returns to the login screen.
     func clearToken() {
         token = nil
+        selfToken = nil
         TokenStore.clear()
+    }
+
+    func setSelfToken(_ t: String?) { selfToken = t }
+    var hasSelfToken: Bool { selfToken != nil }
+
+    /// Which login a request goes out under. Coach routes (/admin…), auth, this phone's
+    /// push registration and its notification prefs always use the login token; with a
+    /// coach's self profile active, every client route uses that profile's token instead.
+    func token(for path: String) -> String? {
+        guard let selfToken else { return token }
+        let p = path.hasPrefix("/") ? path : "/" + path
+        let coachRoutes = ["/admin", "/auth", "/devices", "/notification-prefs", "/change-password", "/account"]
+        return coachRoutes.contains(where: { p.hasPrefix($0) }) ? token : selfToken
     }
 
     struct APIError: Error { let message: String }
@@ -80,7 +97,7 @@ final class APIClient {
         var req = URLRequest(url: base.appendingPathComponent("/photos"))
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token = token(for: "/photos") { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
 
         var body = Data()
         func field(_ s: String) { body.append(s.data(using: .utf8)!) }
@@ -173,7 +190,7 @@ final class APIClient {
         var req = URLRequest(url: base.appendingPathComponent("/chats/\(threadId)/video"))
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token = token(for: "/chats") { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
 
         var body = Data()
         let fileData = try Data(contentsOf: fileURL)
@@ -223,7 +240,7 @@ final class APIClient {
         var req = URLRequest(url: url(path))
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token = token(for: path) { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.httpBody = body
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
@@ -298,9 +315,46 @@ final class APIClient {
                               body: try JSONSerialization.data(withJSONObject: ["body": body]))
     }
     // Announcements — one post to all clients (replaces the old per-client broadcast).
-    func createAnnouncement(title: String, body: String) async throws {
+    /// publishAt nil = post now. A future time keeps it hidden (and unpushed) until then.
+    func createAnnouncement(title: String, body: String, publishAt: Date? = nil) async throws {
+        var payload: [String: Any] = ["title": title, "body": body]
+        if let publishAt { payload["publishAt"] = ISO8601DateFormatter().string(from: publishAt) }
         _ = try await request("/admin/announcements", method: "POST",
-            body: try JSONSerialization.data(withJSONObject: ["title": title, "body": body]))
+            body: try JSONSerialization.data(withJSONObject: payload))
+    }
+
+    // MARK: Coach tools (Oct 8, 2026)
+    func selfProfile() async throws -> APISelfProfile {
+        let data = try await request("/admin/self", method: "POST")
+        return try decoder.decode(APISelfProfile.self, from: data)
+    }
+    func trainerSetting(_ key: String) async throws -> APITrainerSetting { try await get("/admin/settings/\(key)") }
+    @discardableResult
+    func saveTrainerSetting(_ key: String, json: String) async throws -> APITrainerSetting {
+        let data = try await request("/admin/settings/\(key)", method: "PUT",
+                                     body: try JSONSerialization.data(withJSONObject: ["json": json]))
+        return try decoder.decode(APITrainerSetting.self, from: data)
+    }
+    /// The client's coach's check-in questions (json nil = the standard form).
+    func checkInForm() async throws -> APITrainerSetting { try await get("/checkin-form") }
+
+    /// Schedule a workout for any client — or the coach himself (his self profile id).
+    func trainerCreateWorkout(clientId: String, payload: [String: Any]) async throws {
+        _ = try await request("/admin/clients/\(clientId)/workouts", method: "POST",
+                              body: try JSONSerialization.data(withJSONObject: payload))
+    }
+    /// One day's macro targets for a client (or the coach himself). The calendar day is
+    /// sent as-is (its local y/m/d at noon UTC), so it lands on the same day everywhere.
+    func trainerSetMacros(clientId: String, day: Date, training: Bool, kcal: Int, protein: Int, carbs: Int, fat: Int) async throws {
+        let c = Calendar.training.dateComponents([.year, .month, .day], from: day)
+        let stamp = String(format: "%04ld-%02ld-%02ldT12:00:00Z", c.year ?? 2000, c.month ?? 1, c.day ?? 1)
+        _ = try await request("/admin/clients/\(clientId)/macros", method: "POST",
+                              body: try JSONSerialization.data(withJSONObject: [
+                                "id": "", "date": stamp, "isTrainingDay": training,
+                                "calorieGoal": kcal, "proteinGoal": protein, "carbGoal": carbs, "fatGoal": fat]))
+    }
+    func trainerDeleteWorkout(id: String) async throws {
+        _ = try await request("/admin/workouts/\(id)", method: "DELETE")
     }
     func adminAnnouncements() async throws -> [APIAnnouncement] {
         try await get("/admin/announcements")
@@ -349,7 +403,7 @@ final class APIClient {
         var req = URLRequest(url: url("/devices"))
         req.httpMethod = "DELETE"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token = token(for: "/devices") { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["apnsToken": apnsToken])
         Task { _ = try? await URLSession.shared.data(for: req) }
     }
@@ -460,3 +514,6 @@ extension ISO8601DateFormatter {
         return f
     }()
 }
+
+struct APISelfProfile: Decodable { let clientId: String; let token: String; let name: String }
+struct APITrainerSetting: Decodable { let key: String; let json: String?; let updatedAt: Date? }

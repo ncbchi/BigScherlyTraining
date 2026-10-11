@@ -29,6 +29,9 @@ struct SettingsView: View {
     @AppStorage(SetupEngine.cameraKey) private var setupCamera = true
     @ObservedObject private var push = PushCenter.shared
     @State private var showNotifications = false
+    @State private var showSavedReplies = false
+    @State private var showCheckInForm = false
+    @State private var showLockCard = false
     @State private var showCaptures = false
     @ObservedObject private var captureStore = MotionCaptureStore.shared
     @AppStorage("bst_stats_window") private var statsWindow = StatsWindow.w12.rawValue
@@ -109,6 +112,7 @@ struct SettingsView: View {
 
                 appearance          // first: a theme change redraws the app, and this stays in view
                 account
+                if store.isTrainer { coachTools }
                 appleHealth
                 notifications
                 preferences
@@ -143,6 +147,9 @@ struct SettingsView: View {
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $editingMenu) { MenuOrderEditor() }
         .sheet(isPresented: $showNotifications) { NotificationSettingsView().environmentObject(store) }
+        .sheet(isPresented: $showSavedReplies) { SavedRepliesEditor().environmentObject(store) }
+        .sheet(isPresented: $showCheckInForm) { CheckInFormsLibrary() }
+        .sheet(isPresented: $showLockCard) { LockCardSettingsView() }
         .sheet(isPresented: $showCaptures) { MotionCapturesView().presentationBackground(Brand.bg) }
         .confirmationDialog("Delete your account?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Account", role: .destructive) { performDelete() }
@@ -167,6 +174,38 @@ struct SettingsView: View {
             rowDivider
             tapRow("Change Password", systemIcon: "lock.fill") { showChangePassword = true }
         }
+    }
+
+    // Coach-only: how clients reach him, and the words and questions he reuses.
+    private var coachTools: some View {
+        section("Coach") {
+            coachRow("Client alerts", "Messages, videos, check-ins, PRs, going quiet", icon: "bell.badge.fill") {
+                showNotifications = true
+            }
+            rowDivider
+            coachRow("Saved replies", "\(store.savedReplies.count) one-tap phrases for chat and check-ins",
+                     icon: "text.bubble.fill") { showSavedReplies = true }
+            rowDivider
+            coachRow("Check-in forms", "Your default form, plus forms for specific clients",
+                     icon: "list.bullet.clipboard.fill") { showCheckInForm = true }
+        }
+    }
+
+    private func coachRow(_ title: String, _ sub: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).foregroundColor(Brand.voltText).frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(BrandFont.body(15)).foregroundColor(Brand.text)
+                    Text(sub).font(BrandFont.body(11)).foregroundColor(Brand.mute).lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundColor(Brand.mute)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var appleHealth: some View {
@@ -222,7 +261,30 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            rowDivider
+            // Settings ▸ Lock Screen & Dynamic Island: the workout card outside the app.
+            Button { showLockCard = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "platter.filled.top.iphone").foregroundColor(Brand.voltText).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Lock Screen & Dynamic Island").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text(lockCardSummary).font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundColor(Brand.mute)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
+    }
+
+    /// Re-read whenever the sheet closes (the row's line says how it's set).
+    private var lockCardSummary: String {
+        _ = showLockCard
+        return CardPrefs.summary
     }
 
     private var preferences: some View {
@@ -398,6 +460,26 @@ struct SettingsView: View {
             rowDivider
             subToggle("Check squat depth with the camera", "Prop the phone side-on — nothing is recorded", $setupCamera)
             rowDivider
+            Button {                                      // DEBUG — removed before release
+                PhoneDebugRecorder.shared.goLive()        // starts straight away; the screen shows it running
+                showCaptures = true
+            } label: {
+                HStack {
+                    Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Brand.voltText).frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start live session").font(BrandFont.body(15, .semibold)).foregroundColor(Brand.text)
+                        Text("Debug — Watch + camera saved every 15 s for Claude. No tapping, any exercise.")
+                            .font(BrandFont.body(11)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(Brand.mute)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            rowDivider
             Button { showCaptures = true } label: {      // DEBUG — removed before release
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -458,21 +540,7 @@ struct SettingsView: View {
     private var workoutPrefs: some View {
         section("Workouts") {
             subToggle("Keep screen awake", "While the workout screen is open", $keepAwake)
-            rowDivider
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Weight steps").font(BrandFont.body(15)).foregroundColor(Brand.text)
-                    Text("The Lock Screen card's −/+").font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                }
-                Spacer()
-                Picker("Weight steps", selection: $weightStep) {
-                    Text(units == "kg" ? "1.25" : "2.5").tag("small")
-                    Text(units == "kg" ? "2.5" : "5").tag("standard")
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            // Weight steps moved to Lock Screen & Dynamic Island (it rounds the weights the card fills in).
         }
     }
 
@@ -514,7 +582,11 @@ struct SettingsView: View {
                 Text("Open on launch").font(BrandFont.body(15)).foregroundColor(Brand.text)
                 Spacer()
                 Picker("Open on launch", selection: $launchTab) {
-                    ForEach(AppTab.allCases) { t in Text(t.rawValue).tag(t.rawValue) }
+                    // Coaches can open straight onto Coach Today (their default); the other
+                    // coach screens aren't launch spots.
+                    ForEach(AppTab.allCases.filter { t in
+                        t == .coachToday ? store.isTrainer : !t.isCoach
+                    }) { t in Text(t.rawValue).tag(t.rawValue) }
                 }
                 .tint(Brand.voltText)
             }
@@ -645,6 +717,7 @@ struct ChangePasswordSheet: View {
         NavigationStack {
             ZStack {
                 Brand.bg.ignoresSafeArea()
+                ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     field("Current password", text: $current)
                     field("New password", text: $newPass)
@@ -676,6 +749,9 @@ struct ChangePasswordSheet: View {
                     Spacer()
                 }
                 .padding(20)
+                }
+                .sheetFitsScrollContent()            // the card is only as tall as what's in it
+                .background(Brand.bg.ignoresSafeArea())
             }
             .navigationTitle("Change Password")
             .navigationBarTitleDisplayMode(.inline)
@@ -725,13 +801,13 @@ struct MenuOrderEditor: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(MenuGroup.allCases) { g in
+                ForEach(MenuGroup.allCases.filter { !(order[$0] ?? []).isEmpty }) { g in
                     Section(g.rawValue.uppercased()) {
                         ForEach(order[g] ?? []) { tab in
                             let off = hidden.contains(tab.rawValue)
                             HStack(spacing: 12) {
                                 Image(systemName: tab.icon).foregroundColor(off ? Brand.mute : Brand.voltText).frame(width: 22)
-                                Text(tab.rawValue).font(BrandFont.body(15, .semibold))
+                                Text(tab.title).font(BrandFont.body(15, .semibold))
                                     .foregroundColor(off ? Brand.mute : Brand.text).strikethrough(off)
                                 Spacer()
                                 Button {

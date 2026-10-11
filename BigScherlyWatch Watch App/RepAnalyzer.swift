@@ -28,11 +28,14 @@ nonisolated struct MotionSample: Sendable {
 }
 
 nonisolated enum RepAnalyzer {
-    static let version = 5          // 2: true sign of vertical acceleration (1 had it upside down)
+    static let version = 6          // 2: true sign of vertical acceleration (1 had it upside down)
                                     // 3: lift order (press/deadlift pair with the lowering after), pauses
                                     //    measured from where you actually stop, not where the phase ends
                                     // 4: a press/deadlift rep counts only once it's back down
                                     // 5: a squat/bench rep needs its lowering first
+                                    // 6: drift taken out per cycle when there's no still moment (half reps,
+                                    //    a fast set straight out of a rest); a lift with a lot of wrist
+                                    //    turning (hand to the head, a flick) isn't a rep — per lift
     static let sampleRate = 100.0
 
     /// Which way a rep goes first. Squats and bench lower first, then lift; a press or a deadlift
@@ -51,6 +54,11 @@ nonisolated enum RepAnalyzer {
     }
 
     private struct Phase { var s: Int; var e: Int; var disp: Double }
+
+    /// Per-lift limits (v6). `angMax`: total wrist turning during the lift, rad — a press keeps the
+    /// forearm upright (reps ≈ 0.5–1.4; a hand to the head ≈ 2.4–5), lying on a bench the wrist
+    /// legitimately turns a lot, so bench gets no filter. Measured live on 2026-10-08.
+    static func angMax(for order: Order) -> Double { order == .upFirst ? 2.0 : .infinity }
 
     static func analyze(_ s: [MotionSample], fs: Double = sampleRate, order: Order = .either) -> [RepMotion] {
         let n = s.count
@@ -118,6 +126,47 @@ nonisolated enum RepAnalyzer {
             let L = n - segStart
             for (m, k) in (segStart..<n).enumerated() {
                 v[k] -= vint * Double(m + 1) / Double(L)
+            }
+        }
+
+        // 3b. (v6) Cycle closure. With no still moment to reset at (half reps, a fast set straight out
+        //     of a rest) the bias drifts and travel balloons until the rep is thrown out. Between two
+        //     consecutive bottoms (velocity crossing up through zero after a real descent) the wrist
+        //     is back at about the same height, so the net displacement over that cycle is ~0: take
+        //     whatever's left out as a constant velocity offset across the cycle.
+        do {
+            var i = 0
+            while i < n {
+                if still[i] { i += 1; continue }
+                var j = i
+                while j < n && !still[j] { j += 1 }
+                if j - i > 5 {
+                    let vs = lowPass(Array(v[i..<j]), fc: 3, fs: fs)
+                    var bots: [Int] = []
+                    var k = 1
+                    while k < vs.count {
+                        if vs[k - 1] < 0 && vs[k] >= 0 {
+                            var back = k
+                            while back > 0 && vs[back - 1] <= 0 { back -= 1 }
+                            if (vs[back..<k].min() ?? 0) < -0.15 { bots.append(k) }
+                        }
+                        k += 1
+                    }
+                    if bots.count >= 2 {
+                        for q in 0..<(bots.count - 1) {
+                            let b1 = i + bots[q], b2 = i + bots[q + 1]
+                            var d = 0.0, amp = 0.0
+                            for k in b1..<b2 { d += v[k]; amp += abs(v[k]) }
+                            d *= dt; amp *= dt / 2
+                            let span = Double(b2 - b1) * dt
+                            if amp > 0.05 && abs(d) > 0.08 * amp {
+                                let c = d / span
+                                for k in b1..<b2 { v[k] -= c }
+                            }
+                        }
+                    }
+                }
+                i = j
             }
         }
 
@@ -254,6 +303,11 @@ nonisolated enum RepAnalyzer {
             // standing up out of a crouch (or unracking) isn't a rep. Unknown lifts: either side.
             let complete = order == .upFirst ? okAfter : (order == .downFirst ? okBefore : (okBefore || okAfter))
             guard complete, dur >= 0.2, dur <= 8.0, travel > 0, travel <= 1.2 else { continue }
+            // (v6) Wrist turning through the lift, total rad: a hand to the head, a wrist flick.
+            var turned = 0.0
+            for k in cs..<ce { turned += r[k] }
+            turned *= dt
+            guard turned <= angMax(for: order) else { continue }
 
             let pk = seg.max() ?? 0
 

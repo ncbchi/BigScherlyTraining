@@ -135,6 +135,105 @@ final class MotionCaptureStore: ObservableObject {
         dir = docs.appendingPathComponent("MotionCaptures", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         load()
+        folderName = folderURL()?.lastPathComponent
+    }
+
+    // MARK: Auto-save to a folder you choose (DEBUG) — iCloud Drive puts it on the Mac in seconds,
+    // where Claude reads it. Every capture is written as its Copy text, and written again when the
+    // camera's track or the phone's verdict joins it.
+
+    static let folderKey = "bst_capture_folder"
+    @Published private(set) var folderName: String?
+    @Published private(set) var lastMirror: Date?
+    @Published private(set) var mirrorError: String?
+    private let mirrorQueue = DispatchQueue(label: "bst.capture.mirror", qos: .utility)
+
+    /// The folder picked in Files: remembered (with permission to keep writing there), and every
+    /// capture already on the phone is written to it straight away.
+    func chooseFolder(_ url: URL) {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            UserDefaults.standard.set(data, forKey: Self.folderKey)
+            folderName = url.lastPathComponent
+            mirrorError = nil
+            for c in captures { mirror(c) }
+        } catch {
+            mirrorError = "Couldn't keep access to that folder — try another"
+        }
+    }
+
+    func forgetFolder() {
+        UserDefaults.standard.removeObject(forKey: Self.folderKey)
+        folderName = nil
+        mirrorError = nil
+    }
+
+    private func folderURL() -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: Self.folderKey) else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+        if stale {                                                  // refresh it while we still can
+            let ok = url.startAccessingSecurityScopedResource()
+            if let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                UserDefaults.standard.set(fresh, forKey: Self.folderKey)
+            }
+            if ok { url.stopAccessingSecurityScopedResource() }
+        }
+        return url
+    }
+
+    /// e.g. "2026-10-08 151203 Overhead press 3A1B2C3D.txt" — sorts by time in Finder.
+    nonisolated static func fileName(_ c: MotionCapture) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HHmmss"
+        let title = c.title.map { ch -> Character in "/\\:?*\"<>|".contains(ch) ? "-" : ch }
+        return "\(f.string(from: c.date)) \(String(title)) \(c.id.uuidString.prefix(8)).txt"
+    }
+
+    /// Any text file into the chosen folder (the live session's file). false = no folder chosen.
+    @discardableResult
+    func writeFile(named name: String, text: String) -> Bool {
+        guard let folder = folderURL() else { return false }
+        mirrorQueue.async {
+            let ok = folder.startAccessingSecurityScopedResource()
+            defer { if ok { folder.stopAccessingSecurityScopedResource() } }
+            var coordinationError: NSError?
+            NSFileCoordinator().coordinate(writingItemAt: folder.appendingPathComponent(name), options: .forReplacing,
+                                           error: &coordinationError) { target in
+                try? Data(text.utf8).write(to: target, options: .atomic)
+            }
+        }
+        return true
+    }
+
+    private func mirror(_ c: MotionCapture) {
+        guard let folder = folderURL() else { return }
+        let text = c.compactText()
+        let name = Self.fileName(c)
+        mirrorQueue.async {
+            let ok = folder.startAccessingSecurityScopedResource()
+            defer { if ok { folder.stopAccessingSecurityScopedResource() } }
+            let file = folder.appendingPathComponent(name)
+            var coordinationError: NSError?
+            var writeFailed = false
+            NSFileCoordinator().coordinate(writingItemAt: file, options: .forReplacing, error: &coordinationError) { target in
+                do { try Data(text.utf8).write(to: target, options: .atomic) } catch { writeFailed = true }
+            }
+            let failed = writeFailed || coordinationError != nil
+            let folderName = folder.lastPathComponent
+            Task { @MainActor in
+                let store = MotionCaptureStore.shared
+                if failed {
+                    store.mirrorError = "Couldn't write to \(folderName) — choose the folder again"
+                } else {
+                    store.lastMirror = Date()
+                    store.mirrorError = nil
+                }
+            }
+        }
     }
 
     /// A capture from the Watch (the message's own keys).
@@ -203,6 +302,7 @@ final class MotionCaptureStore: ObservableObject {
 
     private func save(_ c: MotionCapture) {
         if let data = try? JSONEncoder().encode(c) { try? data.write(to: url(c.id), options: .atomic) }
+        mirror(c)                                           // and to the chosen folder, if there is one
     }
 
     private func load() {

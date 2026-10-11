@@ -33,11 +33,15 @@ struct APISet: Decodable {
     let rpe: Double?
     let setOrder: Int
     let loggedAt: Date?
+    // Set types. Optional so a server that predates them still decodes.
+    let targetRpe: Double?
+    let percent: Double?
+    let amrap: Bool?
 
     func toModel() -> ExerciseSet {
         ExerciseSet(id: id, targetReps: targetReps, targetWeight: targetWeight,
                     loggedReps: loggedReps, loggedWeight: loggedWeight, rpe: rpe,
-                    loggedAt: loggedAt)
+                    loggedAt: loggedAt, targetRpe: targetRpe, percent: percent, amrap: amrap)
     }
 }
 
@@ -53,12 +57,13 @@ struct APIExercise: Decodable {
     let sets: [APISet]
     // Optional so a server that predates this field still decodes cleanly.
     let formInstructions: String?
+    let videoUrl: String?   // coach's exercise library (Oct 8, 2026)
 
     func toModel() -> Exercise {
         Exercise(id: id, name: name, muscleGroup: muscleGroup, description: description,
                  coachNotes: coachNotes, sets: sets.map { $0.toModel() },
                  clientNotes: clientNotes, restSeconds: restSeconds,
-                 formInstructions: formInstructions ?? "")
+                 formInstructions: formInstructions ?? "", videoUrl: videoUrl)
     }
 }
 
@@ -71,6 +76,8 @@ struct APIWorkout: Decodable {
     // v1.1 server. Optional so an older server still decodes.
     let clientNote: String?
     let originalDate: Date?
+    // Programs (Oct 8, 2026): "Strength Base · 3-Day · Base · Wk 4" on program sessions.
+    let programLabel: String?
 
     func toModel() -> Workout {
         Workout(id: id, title: title, date: scheduledDate,
@@ -183,9 +190,19 @@ struct APIChatMessage: Decodable {
     let videoKey: String?
     let isRead: Bool
     let createdAt: Date
+    // Inbox extras (Oct 8, 2026); optional so an older server still decodes.
+    let kind: String?
+    let voiceSeconds: Double?
+    let voiceAvailable: Bool?
+    let voiceExpiresAt: Date?
+    let transcript: String?
+    let setRef: APISetRef?
+    var isVoice: Bool { kind == "voice" }
     func toModel() -> ChatMessage {
         ChatMessage(id: id, text: text, fromTrainer: fromTrainer, timestamp: createdAt,
-                    imageName: imageKey, videoKey: videoKey, isRead: isRead)
+                    imageName: kind == "video" ? nil : imageKey, videoKey: videoKey ?? (kind == "video" ? imageKey : nil), isRead: isRead,
+                    kind: kind, voiceSeconds: voiceSeconds, voiceAvailable: voiceAvailable, voiceExpiresAt: voiceExpiresAt,
+                    transcript: transcript, setRef: setRef)
     }
 }
 
@@ -194,6 +211,8 @@ struct APIAnnouncement: Decodable {
     let title: String
     let body: String
     let createdAt: Date
+    /// Set on the coach's list for a post that hasn't gone out yet.
+    let publishAt: Date?
     func toModel() -> Announcement {
         Announcement(id: id, date: createdAt, title: title, body: body, cleared: false)
     }

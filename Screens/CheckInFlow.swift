@@ -38,9 +38,14 @@ struct CheckInQuestion: Identifiable {
 }
 
 enum CheckInSchema {
+    /// The coach's own form (Settings ▸ Coach ▸ Check-in form), loaded with the rest of
+    /// the client's data. Nil = the standard questions below.
+    static var custom: [CheckInQuestion]? = nil
+    static var questions: [CheckInQuestion] { custom ?? standard }
+
     // Coach's list + the five approved additions. Order is intentional: the quick
     // 1–10 scales first, then weight, then the open-ended reflection last.
-    static let questions: [CheckInQuestion] = [
+    static let standard: [CheckInQuestion] = [
         .init("hydration",   "Hydration",              .scale),
         .init("nutrition",   "Nutrition adherence",    .scale),
         .init("consistency", "Workout consistency",    .scale),
@@ -59,6 +64,34 @@ enum CheckInSchema {
     ]
 
     static func question(_ id: String) -> CheckInQuestion? { questions.first { $0.id == id } }
+
+    /// One question as stored on the server (the coach's form is a JSON array of these).
+    struct Stored: Codable {
+        var id: String
+        var label: String
+        var kind: String
+        var unit: String?
+        var higherIsBetter: Bool?
+        var tracksDelta: Bool?
+    }
+
+    static func parse(_ json: String) -> [CheckInQuestion]? {
+        guard let list = try? JSONDecoder().decode([Stored].self, from: Data(json.utf8)) else { return nil }
+        let qs = list.compactMap { s -> CheckInQuestion? in
+            guard let k = CheckInKind(rawValue: s.kind), !s.label.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return CheckInQuestion(s.id, s.label, k, unit: s.unit ?? "", tracksDelta: s.tracksDelta ?? false,
+                                   higherIsBetter: s.higherIsBetter ?? true)
+        }
+        return qs.isEmpty ? nil : qs
+    }
+
+    static func encode(_ qs: [CheckInQuestion]) -> String {
+        let list = qs.map { Stored(id: $0.id, label: $0.label, kind: $0.kind.rawValue,
+                                   unit: $0.unit.isEmpty ? nil : $0.unit,
+                                   higherIsBetter: $0.higherIsBetter ? nil : false,
+                                   tracksDelta: $0.tracksDelta ? true : nil) }
+        return (try? String(data: JSONEncoder().encode(list), encoding: .utf8)) ?? "[]"
+    }
 }
 
 // MARK: - Reading stored fields

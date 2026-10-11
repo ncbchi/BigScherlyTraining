@@ -118,9 +118,9 @@ struct AwardsView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
-        .sheet(item: $selected) { a in AwardDetailView(award: a) }
+        .sheet(item: $selected) { a in AwardDetailView(award: a).sheetFitsContent() }
         .sheet(item: $locked) { item in
-            LockedAwardSheet(item: item).presentationDetents([.medium])
+            LockedAwardSheet(item: item).sheetFitsContent()
         }
     }
 

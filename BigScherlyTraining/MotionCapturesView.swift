@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Motion captures (DEBUG TOOL — removed before release)
 // Settings ▸ Apple Watch setup ▸ Motion captures. Each capture is the Watch's raw motion from Go to
@@ -14,6 +15,7 @@ struct MotionCapturesView: View {
     @State private var copiedId: UUID?
     @State private var confirmClear = false
     @State private var shareURL: URL?
+    @State private var pickFolder = false
     @AppStorage(MotionCaptureStore.trackKey) private var tracking = true
     @AppStorage(MotionCaptureStore.heightKey) private var heightCm = 178.0
 
@@ -28,6 +30,7 @@ struct MotionCapturesView: View {
                         Text("Developer tool — removed before release").font(BrandFont.body(12)).foregroundColor(Brand.mute)
                     }
                     DebugRecordPanel()
+                    autoSaveCard
                     if !store.captures.isEmpty {
                         Button {
                             shareURL = PhoneDebugRecorder.exportFile()
@@ -85,6 +88,9 @@ struct MotionCapturesView: View {
             .navigationTitle("Motion captures")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .fileImporter(isPresented: $pickFolder, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result { store.chooseFolder(url) }
+            }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
                 if let url = shareURL { CaptureShareSheet(url: url) }
             }
@@ -92,6 +98,49 @@ struct MotionCapturesView: View {
                 Button("Delete all", role: .destructive) { store.deleteAll() }
             }
         }
+    }
+
+    /// Auto-save: every capture also goes to a folder you pick (iCloud Drive → your Mac → Claude).
+    private var autoSaveCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Auto-save for Claude").font(BrandFont.body(16, .heavy)).foregroundColor(Brand.text)
+                Spacer()
+                if let name = store.folderName {
+                    Text(store.mirrorError == nil ? "On · \(name)" : "Problem").font(BrandFont.body(12, .semibold))
+                        .foregroundColor(store.mirrorError == nil ? Brand.voltText : Brand.text)
+                } else {
+                    Text("Off").font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                }
+            }
+            Text("Every capture is also saved as a text file in a folder you choose. Pick iCloud Drive ▸ Auto-save for Claude (in the picker: Browse ▸ iCloud Drive): it appears on your Mac within seconds and Claude reads it from there — no Copy, no AirDrop.")
+                .font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+            if let err = store.mirrorError {
+                Text(err).font(BrandFont.body(12, .semibold)).foregroundColor(Brand.text)
+            } else if let t = store.lastMirror {
+                Text("Last saved \(t.formatted(.dateTime.hour().minute().second()))").font(BrandFont.body(11)).foregroundColor(Brand.mute)
+            }
+            HStack(spacing: 10) {
+                Button { pickFolder = true } label: {
+                    Text(store.folderName == nil ? "Choose folder" : "Change folder").font(BrandFont.body(13, .heavy))
+                        .foregroundColor(store.folderName == nil ? Brand.onVolt : Brand.voltText)
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(Capsule().fill(store.folderName == nil ? Brand.volt : Color.clear))
+                        .overlay(Capsule().stroke(Brand.voltLine, lineWidth: store.folderName == nil ? 0 : 1.5))
+                }
+                .buttonStyle(.plain)
+                if store.folderName != nil {
+                    Button { store.forgetFolder() } label: {
+                        Text("Turn off").font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .background(Brand.card)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
     }
 
     private func card(_ c: MotionCapture) -> some View {

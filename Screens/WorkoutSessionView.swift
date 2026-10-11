@@ -15,6 +15,7 @@ struct WorkoutSessionView: View {
     // Rest + logging live in the session controller, shared with the Lock Screen Live Activity.
     @ObservedObject private var live = LiveSessionController.shared
     @ObservedObject private var setup = SetupEngine.shared
+    @ObservedObject private var link = LiveLink.shared           // the coach's iPad, in the room
     @Environment(\.dismiss) private var dismiss
     @AppStorage("bst_units") private var units = "lb"
     @AppStorage("bst_hand") private var hand = "right"      // the dock chevron sits on the thumb side
@@ -40,6 +41,9 @@ struct WorkoutSessionView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         titleRow(w)
+                        if link.pendingCoach != nil || link.isAllowed || link.cue != nil {
+                            LiveLinkBanner()             // the coach's iPad: allow it, its cues, live status
+                        }
                         // Phase 3: the live card — status bar over a full metric window.
                         VStack(spacing: 10) {
                             LiveCard(workout: w) { editNext(w, proxy) }
@@ -85,6 +89,10 @@ struct WorkoutSessionView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
+                // Edit (the Lock Screen card's, or the live card's): straight to that set's row — the
+                // row selects its reps and brings up the number pad.
+                .onAppear { if let id = live.editRequest { showSet(id, w, proxy) } }
+                .onChange(of: live.editRequest) { _, id in if let id { showSet(id, w, proxy) } }
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .keyboardDoneButton()
@@ -147,7 +155,7 @@ struct WorkoutSessionView: View {
                     SetVideoRecorder.shared.screenVisible = false   // set videos only film on this screen
                     SetupEngine.shared.withdraw(from: .workout)    // offered again when you reopen it
                 }
-                .sheet(item: $store.prToCelebrate) { pr in PRCelebrationView(pr: pr) }
+                .sheet(item: $store.prToCelebrate) { pr in PRCelebrationView(pr: pr).sheetFitsContent() }
             } else {
                 Text("This workout isn't available.").foregroundColor(Brand.mute)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Brand.bg)
@@ -181,10 +189,27 @@ struct WorkoutSessionView: View {
     /// The status bar's Edit: open the next set's exercise and scroll to it.
     private func editNext(_ w: Workout, _ proxy: ScrollViewProxy) {
         guard let nx = nextSet(w) else { return }
+        live.requestEdit(setId: nx.1.id)          // the row selects its reps (number pad up)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             openExercises.insert(nx.0.id)
             editingSetId = nx.1.id
             proxy.scrollTo(nx.0.id, anchor: .top)
+        }
+    }
+
+    /// Edit from the Lock Screen: open the set's exercise and bring its row to the middle — no
+    /// animation, it should just be there. A set already logged opens in its edit row.
+    private func showSet(_ setId: String, _ w: Workout, _ proxy: ScrollViewProxy) {
+        guard let ex = w.exercises.first(where: { $0.sets.contains { $0.id == setId } }) else {
+            live.editRequest = nil
+            return
+        }
+        openExercises.insert(ex.id)
+        if ex.sets.first(where: { $0.id == setId })?.loggedReps != nil { editingSetId = setId }
+        DispatchQueue.main.async { proxy.scrollTo("set-\(setId)", anchor: .center) }
+        // The row has picked it up by now (or never will — e.g. the set's gone): don't leave it pending.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if live.editRequest == setId { live.editRequest = nil }
         }
     }
 
@@ -333,7 +358,7 @@ struct ExerciseSessionCard: View {
                         Text(exercise.name).font(BrandFont.display(isOpen ? 28 : 22)).foregroundColor(Brand.text)
                             .multilineTextAlignment(.leading)
                         if !isOpen {
-                            Text("\(exercise.sets.count) × \(exercise.sets.first?.targetReps ?? 0) · \(exercise.sets.first.map { $0.targetWeight > 0 ? StatsUnits.weightText($0.targetWeight) : "BW" } ?? "")")
+                            Text(SetTarget.summary(exercise))
                                 .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                         }
                     }
@@ -361,6 +386,7 @@ struct ExerciseSessionCard: View {
                                         isEditing: s.loggedReps != nil,
                                         onLog: { r, w, rpe in onLog(s, r, w, rpe) },
                                         onCancel: { editingSetId = nil })
+                                .id("set-\(s.id)")
                         } else if s.loggedReps != nil {
                             doneRow(s, i + 1)
                         } else {
@@ -433,7 +459,7 @@ struct ExerciseSessionCard: View {
             Text("\(n)").font(BrandFont.body(12, .bold)).foregroundColor(Brand.mute)
                 .frame(width: 28, height: 28).overlay(Circle().stroke(Brand.line, lineWidth: 1.5))
             Text("Set \(n)").font(BrandFont.body(13, .bold)).foregroundColor(Brand.mute).frame(width: 46, alignment: .leading)
-            Text("\(s.targetReps) × \(s.targetWeight > 0 ? StatsUnits.weightText(s.targetWeight) : "BW") target")
+            Text("\(SetTarget.text(s, in: exercise)) target")
                 .font(BrandFont.body(14, .semibold)).foregroundColor(Brand.mute)
             Spacer()
         }
@@ -462,13 +488,37 @@ struct ExerciseSessionCard: View {
                     if showForm {
                         Text(cues).font(BrandFont.body(13)).foregroundColor(Brand.text.opacity(0.9))
                             .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                        if let link = exercise.videoUrl, let url = URL(string: link) {
+                            Link(destination: url) {
+                                Label("Watch the demo", systemImage: "play.rectangle.fill")
+                                    .font(BrandFont.body(12, .bold)).foregroundColor(Brand.voltText)
+                            }
+                        }
                     }
                 }
                 if !coach.isEmpty {
                     if !cues.isEmpty { Rectangle().fill(Brand.line).frame(height: 1) }
                     Text("COACH NOTES").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
-                    Text(coach).font(BrandFont.body(13)).foregroundColor(Brand.text.opacity(0.9))
-                        .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                    let parts = CoachNoteLines.split(coach)
+                    if !parts.plain.isEmpty {
+                        Text(parts.plain).font(BrandFont.body(13)).foregroundColor(Brand.text.opacity(0.9))
+                            .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(Array(parts.fromCoach.enumerated()), id: \.offset) { _, n in
+                        HStack(alignment: .top, spacing: 9) {
+                            Text(String(n.who.prefix(1)).uppercased()).font(BrandFont.body(11, .heavy)).foregroundColor(Brand.onVolt)
+                                .frame(width: 24, height: 24).background(Circle().fill(Brand.volt))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("FROM \(n.who.uppercased()) · \(n.when.uppercased())").font(BrandFont.body(9, .heavy)).tracking(1.1).foregroundColor(Brand.voltText)
+                                Text(n.text).font(BrandFont.body(13, .semibold)).foregroundColor(Brand.text)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Brand.volt.opacity(0.08)))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.voltLine.opacity(0.45), lineWidth: 1))
+                    }
                 }
             }
             .padding(12)
@@ -482,8 +532,12 @@ struct ExerciseSessionCard: View {
 // set's weight); the Watch fills in the reps it detected, with a note saying so.
 
 struct SetEntryRow: View {
+    @EnvironmentObject var store: AppStore
     @ObservedObject private var watch = WatchBridge.shared
+    @ObservedObject private var live = LiveSessionController.shared
     @AppStorage("bst_units") private var units = "lb"
+    @ObservedObject private var gym = GymEquipment.shared      // the set-card barbell redraws when My Gym changes
+    @State private var plateRequest: PlateCalcRequest? = nil   // the calculator, opened over the workout itself
 
     let workoutId: String
     let exercise: Exercise
@@ -498,6 +552,8 @@ struct SetEntryRow: View {
     @State private var rpe = ""
     @State private var loaded = false
     @State private var fromWatch: WatchBridge.LiveDetection? = nil
+    @State private var rpeEstimate: String? = nil       // the RPE as estimated (shown as "estimated" until changed)
+    @State private var selectOnFocus = false            // Edit: the reps start selected, so typing replaces them
     @FocusState private var focus: Field?
 
     enum Field { case reps, weight, rpe }
@@ -516,13 +572,23 @@ struct SetEntryRow: View {
                 } else if watch.watchSessionLive && !isEditing {
                     DSChip(text: "Watch will fill reps", icon: "applewatch")
                 }
+                // Barbell lifts and plate-loaded machines: this set's plates, the mirror of the set number.
+                if let lift = plateLift {
+                    Button { openPlates(lift) } label: {
+                        PlateBarIcon(plates: gym.iconPlates(lift: lift, total: weightShown))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Plate calculator")
+                }
             }
 
             HStack(spacing: 10) {
-                field("REPS", text: $reps, placeholder: "\(target.targetReps)", keyboard: .numberPad, f: .reps)
-                field(isKg ? "KG" : "LB", text: $weight,
-                      placeholder: StatsUnits.weightText(target.targetWeight, unit: false), keyboard: .decimalPad, f: .weight)
-                field("RPE", text: $rpe, placeholder: "1–10", keyboard: .decimalPad, f: .rpe)
+                field("REPS", text: $reps, placeholder: SetTarget.repsText(target), keyboard: .numberPad, f: .reps)
+                // A back-off with nothing heavier logged yet: the box is empty and shows its % faded.
+                field(isKg ? "KG" : "LB", text: $weight, placeholder: weightPlaceholder, keyboard: .decimalPad, f: .weight)
+                // An RPE set: its target, faded, in the empty box.
+                field("RPE", text: $rpe, placeholder: target.targetRpe?.rpeText ?? "1–10", keyboard: .decimalPad, f: .rpe,
+                      note: rpeEstimate != nil && rpe == rpeEstimate ? "estimated" : nil)
             }
 
             HStack(spacing: 8) {
@@ -539,11 +605,71 @@ struct SetEntryRow: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Brand.volt.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.voltLine, lineWidth: 1.5))
         .onAppear(perform: prefill)
+        .sheet(item: $plateRequest) { r in
+            PlateCalculatorView(request: r).presentationDragIndicator(.visible)
+        }
         .onReceive(watch.$lastDetection) { d in applyWatch(d) }
+        // Typing in the set that's waiting to be logged: the card (and an auto-log when the next set
+        // starts) use your numbers.
+        .onChange(of: reps) { _, _ in sendDraft() }
+        .onChange(of: weight) { _, _ in sendDraft() }
+        .onChange(of: rpe) { _, _ in sendDraft() }
+        // The set just finished while this row was showing: fill it in like the card (unless you're typing).
+        .onChange(of: live.setAwaitingLog) { _, waiting in
+            if waiting, !isEditing, focus == nil { applyPrefill() }
+        }
+        // Edit (Lock Screen card / live card): fill in the set as the card showed it, select the reps.
+        .onReceive(live.$editRequest) { id in
+            guard let id, id == target.id else { return }
+            if !isEditing { applyPrefill() }
+            selectOnFocus = true
+            for delay in [0.1, 0.4] {                   // again once the card has finished opening
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    guard focus == nil else { return }
+                    focus = .reps
+                    print(String(format: "[Edit] reps selected · %.0f ms after the tap reached the app",
+                                 Date().timeIntervalSince(AppStore.openTapAt) * 1000))
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { n in
+            guard selectOnFocus, focus == .reps, let tf = n.object as? UITextField else { return }
+            selectOnFocus = false
+            DispatchQueue.main.async { tf.selectAll(nil) }
+        }
+    }
+
+    // MARK: Plate calculator
+
+    private var plateLift: PlateLift? { PlateLift.of(exercise.name) }
+
+    /// The weight in the box (or its faded planned weight), in your units.
+    private var weightShown: Double? {
+        if let typed = Double(weight.replacingOccurrences(of: ",", with: ".")) { return typed }
+        return SetTarget.shownWeight(target, in: exercise).map { StatsUnits.weight($0) }
+    }
+
+    private func openPlates(_ lift: PlateLift) {
+        // Opened from here (not the app's root): the workout is already on screen as a sheet,
+        // and iOS shows one sheet at a time — from the root it would wait until the workout closed.
+        plateRequest = (PlateCalcRequest(
+            exerciseName: exercise.name,
+            setLabel: "Set \(number) of \(exercise.sets.count)",
+            useFor: "Set \(number)",
+            startTotal: weightShown,
+            lift: lift,
+            onUse: { shown in weight = display(StatsUnits.isKg ? shown / 0.45359237 : shown) }))
+    }
+
+    /// The faded text in an empty weight box: the planned weight, a back-off's % ("−17%"), or "—".
+    private var weightPlaceholder: String {
+        if let w = SetTarget.shownWeight(target, in: exercise) { return SetTarget.weightText(w, unit: false) }
+        if let p = target.percent { return SetTarget.percentText(p) }
+        return "—"
     }
 
     private func field(_ label: String, text: Binding<String>, placeholder: String,
-                       keyboard: UIKeyboardType, f: Field) -> some View {
+                       keyboard: UIKeyboardType, f: Field, note: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(BrandFont.body(9, .bold)).tracking(1).foregroundColor(Brand.mute)
             TextField("", text: text, prompt: Text(placeholder).foregroundColor(Brand.mute.opacity(0.6)))
@@ -555,6 +681,8 @@ struct SetEntryRow: View {
                 .background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(focus == f ? Brand.voltLine : Brand.line, lineWidth: focus == f ? 2 : 1))
                 .accessibilityLabel(label == "RPE" ? "RPE, 1 to 10" : label)
+            Text(note ?? " ").font(BrandFont.body(9, .semibold)).foregroundColor(Brand.mute)
+                .opacity(note == nil ? 0 : 1)
         }
         .frame(maxWidth: .infinity)
     }
@@ -570,11 +698,37 @@ struct SetEntryRow: View {
             rpe = target.rpe.map { $0.rpeText } ?? ""
             return
         }
-        reps = "\(target.targetReps)"
-        // Carry the weight used on the previous set of this exercise, else the plan.
-        let prev = exercise.sets.last { $0.loggedWeight != nil && $0.id != target.id }?.loggedWeight
-        weight = display(prev ?? target.targetWeight)
+        // A set that's done and waiting to be logged: exactly as the Lock Screen card shows it.
+        if live.prefill(forSet: target.id) != nil {
+            applyPrefill()
+            return
+        }
+        // AMRAP with no minimum: reps stay empty for you (or the Watch) to fill in.
+        reps = SetTarget.isAmrap(target) && target.targetReps <= 0 ? "" : "\(target.targetReps)"
+        if SetTarget.isFixed(target) || SetTarget.isBodyweight(target) {
+            // Carry the weight used on the previous set of this exercise, else the plan.
+            let prev = exercise.sets.last { $0.loggedWeight != nil && $0.id != target.id }?.loggedWeight
+            weight = display(prev ?? target.targetWeight)
+        } else {
+            // Back-off: the heaviest set logged less its % (empty, showing the % faded, until one's logged).
+            // RPE: the last weight you used on this lift today, else last session's top set.
+            weight = SetTarget.startWeight(target, in: exercise, workoutId: workoutId, workouts: store.workouts)
+                .map { display(SetTarget.roundToStep($0)) } ?? ""
+        }
         applyWatch(watch.lastDetection)
+    }
+
+    /// The finished set as the card fills it in: Watch reps, carried weight, estimated RPE.
+    private func applyPrefill() {
+        guard let p = live.prefill(forSet: target.id) else { return }
+        reps = "\(p.reps)"
+        weight = display(p.weightLb)
+        rpe = p.rpe.rpeText
+        rpeEstimate = rpe
+        if let d = watch.lastDetection, d.workoutId == workoutId, Date().timeIntervalSince(d.receivedAt) < 600,
+           d.exerciseId == nil || d.exerciseId == exercise.id, d.setId == nil || d.setId == target.id {
+            fromWatch = d
+        }
     }
 
     private func applyWatch(_ d: WatchBridge.LiveDetection?) {
@@ -590,18 +744,35 @@ struct SetEntryRow: View {
     }
 
     private func display(_ lb: Double) -> String {
-        let v = StatsUnits.weight(lb)
-        return v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
+        SetTarget.weightText(lb, unit: false)          // 76.25, not 76.2
+    }
+
+    private func parsed() -> (reps: Int, weightLb: Double, rpe: Double?) {
+        let r = Int(reps) ?? target.targetReps
+        let typed = Double(weight.replacingOccurrences(of: ",", with: "."))
+        let w = typed.map { isKg ? $0 / 0.45359237 : $0 } ?? SetTarget.plannedWeight(target, in: exercise) ?? target.targetWeight
+        // Half steps: 8.3 → 8.5, 8.7 → 8.5. Comma or point.
+        let p = Double(rpe.replacingOccurrences(of: ",", with: ".")).map { min(10, max(1, ($0 * 2).rounded() / 2)) }
+        return (r, w, p)
+    }
+
+    /// Only once you've typed (focus is in the row) — not when the row fills itself in.
+    private func sendDraft() {
+        guard focus != nil, !isEditing else { return }
+        let v = parsed()
+        live.setDraft(setId: target.id, reps: v.reps, weightLb: v.weightLb, rpe: v.rpe)
     }
 
     private func submit() {
-        let r = Int(reps) ?? target.targetReps
-        let typed = Double(weight.replacingOccurrences(of: ",", with: "."))
-        let w = typed.map { isKg ? $0 / 0.45359237 : $0 } ?? target.targetWeight
-        // Half steps: 8.3 → 8.5, 8.7 → 8.5. Comma or point.
-        let p = Double(rpe.replacingOccurrences(of: ",", with: ".")).map { min(10, max(1, ($0 * 2).rounded() / 2)) }
+        // An AMRAP with no minimum needs the reps you did (nothing to fall back on).
+        if SetTarget.isAmrap(target), target.targetReps <= 0, Int(reps) == nil { focus = .reps; return }
+        // A back-off or RPE set with no weight typed has nothing to fall back on either.
+        if !SetTarget.isFixed(target), !SetTarget.isBodyweight(target),
+           Double(weight.replacingOccurrences(of: ",", with: ".")) == nil,
+           SetTarget.plannedWeight(target, in: exercise) == nil { focus = .weight; return }
+        let v = parsed()
         focus = nil
-        onLog(r, w, p)
+        onLog(v.reps, v.weightLb, v.rpe)
     }
 }
 
@@ -983,7 +1154,10 @@ enum LiveCardData {
     }
 
     static func weightFor(_ ex: Exercise, _ set: ExerciseSet) -> Double {
-        ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? set.targetWeight
+        if !SetTarget.isFixed(set) && !SetTarget.isBodyweight(set) {
+            return SetTarget.plannedWeight(set, in: ex) ?? ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? 0
+        }
+        return ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? set.targetWeight
     }
 
     static func setText(reps: Int, weightLb: Double) -> String {
@@ -1074,9 +1248,11 @@ struct LiveSetCard: View {
                 .onAppear { if !compact { SetVideoRecorder.shared.warm() } }   // camera ready for the set
             },
             title: next?.0.name ?? "", kicker: setOf(next), kickerColor: Brand.mute,
-            value: next.map { LiveCardData.setText(reps: $0.1.targetReps, weightLb: $0.1.targetWeight) } ?? "",
+            value: next.map { SetTarget.text($0.1, in: $0.0) } ?? "",
             valueColor: Brand.voltText) {
-            if live.watchConnected {
+            if let was = next.flatMap({ LiveLink.shared.changed[$0.1.id] }) {
+                coachChanged(was)
+            } else if live.watchConnected {
                 Text("or just lift — your Watch starts it").font(BrandFont.body(10, .semibold)).foregroundColor(Brand.mute)
             }
         }
@@ -1090,8 +1266,9 @@ struct LiveSetCard: View {
         let clock = String(format: "%d:%02d", remaining / 60, remaining % 60)
         return row(tile: { restTile(frac: frac, clock: clock) },
                    title: next?.0.name ?? "", kicker: "UP NEXT · " + setOf(next), kickerColor: Brand.mute,
-                   value: next.map { LiveCardData.setText(reps: $0.1.targetReps, weightLb: $0.1.targetWeight) } ?? "",
+                   value: next.map { SetTarget.text($0.1, in: $0.0) } ?? "",
                    valueColor: Brand.voltText) {
+            if let was = next.flatMap({ LiveLink.shared.changed[$0.1.id] }) { coachChanged(was) }
             pill("+30s", filled: false) { live.addRest(30) }
             pill("Skip", filled: true) { withAnimation(.spring(response: 0.4)) { live.endRest() } }
         }
@@ -1104,11 +1281,10 @@ struct LiveSetCard: View {
 
     private func lifting(_ next: (Exercise, ExerciseSet, Int)?) -> some View {
         let reps = watch.liveReps
-        let target = max(next?.1.targetReps ?? reps.count, 1)
         let loss = CoachNotes.speedLoss(reps)
         return row(tile: { liftTile(set: next?.2 ?? 1) },
                    title: next?.0.name ?? "", kicker: setOf(next) + " · LIFTING", kickerColor: Brand.danger,
-                   value: reps.isEmpty ? "Waiting for rep 1" : "Rep \(reps.count) of \(target)",
+                   value: reps.isEmpty ? "Waiting for rep 1" : SetTarget.repProgress(reps.count, next?.1),
                    valueColor: Brand.text) {
             if let loss, reps.count >= 2 {
                 Text("Speed −\(Int(loss))%").font(BrandFont.body(11, .heavy))
@@ -1121,21 +1297,23 @@ struct LiveSetCard: View {
     }
 
     private func logging(_ next: (Exercise, ExerciseSet, Int)?) -> some View {
-        let reps = watch.lastDetection?.reps ?? next?.1.targetReps ?? 0
-        let weight = next.map { LiveCardData.weightFor($0.0, $0.1) } ?? 0
+        // The set as the Lock Screen card shows it: Watch reps, carried weight, estimated RPE.
+        let p = next.flatMap { live.prefill(forSet: $0.1.id) }
+        let reps = p?.reps ?? watch.lastDetection?.reps ?? next?.1.targetReps ?? 0
+        let weight = p?.weightLb ?? next.map { LiveCardData.weightFor($0.0, $0.1) } ?? 0
         let v = watch.lastDetection?.meanVelocity ?? 0
+        let rpeText = p.map { " · RPE \($0.rpe.rpeText)~" } ?? ""
         return row(tile: {
                 Button {
-                    guard let nx = next else { return }
-                    withAnimation(.spring(response: 0.4)) {
-                        _ = live.log(workoutId: workout.id, exerciseId: nx.0.id, setId: nx.1.id, reps: reps, weight: weight, rpe: nil)
-                    }
+                    withAnimation(.spring(response: 0.4)) { live.logDone() }
                 } label: { filledTile(icon: "checkmark", label: compact ? nil : "Log set") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Log set")
             },
-            title: next?.0.name ?? "", kicker: "SET \(next?.2 ?? 0) DONE · FROM YOUR WATCH", kickerColor: Brand.mute,
-            value: LiveCardData.setText(reps: reps, weightLb: weight) + (v > 0 ? String(format: " · %.2f m/s", v) : ""),
+            title: next?.0.name ?? "",
+            kicker: "SET \(next?.2 ?? 0) DONE" + (p?.byWatch == false ? "" : " · FROM YOUR WATCH"), kickerColor: Brand.mute,
+            value: LiveCardData.setText(reps: reps, weightLb: weight) + (compact ? "" : rpeText)
+                + (v > 0 && compact ? String(format: " · %.2f m/s", v) : ""),
             valueColor: Brand.text) {
             pill("Edit", filled: false) { onEdit() }
         }
@@ -1223,6 +1401,15 @@ struct LiveSetCard: View {
                 }
             }
         }
+    }
+
+    /// The coach changed this set from the iPad (Live): "COACH CHANGED IT · WAS 5 × 225 LB".
+    private func coachChanged(_ was: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "pencil").font(.system(size: 9, weight: .heavy))
+            Text("COACH · " + was).font(BrandFont.body(9, .heavy)).tracking(0.8).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .foregroundColor(Brand.voltText)
     }
 
     private func pill(_ t: String, filled: Bool, _ action: @escaping () -> Void) -> some View {
@@ -2002,7 +2189,8 @@ private struct SetsMetric: View {
                     let v = m.map { $0.reps.map { $0.meanVelocity }.reduce(0, +) / Double(max($0.reps.count, 1)) }
                     HStack {
                         Text("\(i + 1)").frame(width: 30, alignment: .leading).foregroundColor(Brand.mute)
-                        Text(LiveCardData.setText(reps: s.loggedReps ?? s.targetReps, weightLb: s.loggedWeight ?? s.targetWeight))
+                        Text(logged ? LiveCardData.setText(reps: s.loggedReps ?? 0, weightLb: s.loggedWeight ?? s.targetWeight)
+                                    : SetTarget.text(s, in: ex))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundColor(logged ? Brand.text : Brand.mute)
                         Text(v.map { String(format: "%.2f", $0) } ?? "—").frame(width: 40, alignment: .trailing).foregroundColor(Brand.mute)
@@ -2421,5 +2609,37 @@ struct DockTab: View {
         default:
             Text(live.sessionStart(workout), style: .timer)
         }
+    }
+}
+
+// MARK: - Notes for next time (left by the coach in Live, Oct 10, 2026)
+
+/// The coach's Live notes are saved into the exercise's coach notes as their own lines:
+/// "From Nick · Oct 10 — Hold the pause a full second." Everything else is the program's own notes.
+enum CoachNoteLines {
+    struct FromCoach { let who: String; let when: String; let text: String }
+
+    static func line(who: String, when: Date, text: String) -> String {
+        "From \(who) · \(when.formatted(.dateTime.month(.abbreviated).day())) — \(text)"
+    }
+
+    static func split(_ notes: String) -> (plain: String, fromCoach: [FromCoach]) {
+        var plain: [String] = []
+        var from: [FromCoach] = []
+        for raw in notes.components(separatedBy: "\n") {
+            let l = raw.trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("From "), l.count > 5 {
+                let nameStart = l.index(l.startIndex, offsetBy: 5)
+                if let dot = l.range(of: " · ", range: nameStart..<l.endIndex),
+                   let dash = l.range(of: " — ", range: dot.upperBound..<l.endIndex) {
+                let who = String(l[nameStart..<dot.lowerBound])
+                let when = String(l[dot.upperBound..<dash.lowerBound])
+                let text = String(l[dash.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !who.isEmpty, !text.isEmpty { from.append(FromCoach(who: who, when: when, text: text)); continue }
+                }
+            }
+            plain.append(raw)
+        }
+        return (plain.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), from)
     }
 }

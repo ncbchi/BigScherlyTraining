@@ -97,10 +97,11 @@ final class WidgetBridge {
 
     // MARK: Taps on a widget → the right screen
     //   bigscherly://session?id=…   start / resume that workout
+    //   bigscherly://editset?id=…&set=…   the Lock Screen card's Edit: the workout card, that set, reps selected
     //   bigscherly://open?tab=macros|workouts|stats|supplements|checkins|chat|awards
 
     func handle(_ url: URL) {
-        guard let store, url.scheme == "bigscherly", store.isLoggedIn, !store.isTrainer else { return }
+        guard let store, url.scheme == "bigscherly", store.isLoggedIn else { return }
         let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let value = { (name: String) in q.first { $0.name == name }?.value }
         switch url.host {
@@ -108,6 +109,13 @@ final class WidgetBridge {
             if let id = value("id"), store.workouts.contains(where: { $0.id == id }) {
                 store.activeTab = .dashboard
                 store.openSessionId = id
+            }
+        case "editset":
+            // Straight to the floating workout card (it sits over any screen), no stop at Home first.
+            // The card scrolls to the set and selects its reps as soon as it's showing.
+            if let id = value("id"), store.workouts.contains(where: { $0.id == id }) {
+                LiveSessionController.shared.requestEdit(setId: value("set"))
+                store.openSession(id)
             }
         case "open":
             let tabs: [String: AppTab] = ["home": .dashboard, "workouts": .workouts, "stats": .history, "macros": .macros,
@@ -122,7 +130,7 @@ final class WidgetBridge {
 
     private func build(_ store: AppStore) -> WidgetSnapshot {
         guard store.isLoggedIn else { return .loggedOut }
-        if store.isTrainer { return WidgetSnapshot(generatedAt: Date(), state: .coach) }
+        // Coaches train too: their widgets show their own workouts and macros.
 
         let cal = WidgetSnapshot.calendar
         var snap = WidgetSnapshot(generatedAt: Date(), state: .client, unit: StatsUnits.weightLabel)

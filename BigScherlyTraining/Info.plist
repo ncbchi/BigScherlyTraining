@@ -15,5 +15,15 @@
 	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Big Scherly Training saves your set videos to your Camera Roll.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Big Scherly Training records voice notes for your coach.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Big Scherly Training sends live debug recordings to your Mac over Wi-Fi.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bstlive._tcp</string>
+	</array>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Big Scherly Training writes a transcript of your voice notes on your phone.</string>
 </dict>
 </plist>

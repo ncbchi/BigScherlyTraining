@@ -50,7 +50,7 @@ final class MotionRecorder: ObservableObject {
     /// Outside a set, a still wrist after lowering your arm isn't a "bottom pause": no HOLD/GO
     /// screen and no GO tap. (Setup and a set the Watch has already started still count.)
     var setActive = false {
-        didSet { if !setActive && liveRepCount == nil && !calibrating { applyPause(bottomAt: nil, reached: false) } }
+        didSet { if !setActive && (liveRepCount ?? 0) < 1 && !calibrating { applyPause(bottomAt: nil, reached: false) } }
     }
     /// From the phone (Settings ▸ Notifications ▸ Watch buzzes).
     var haptics = WatchHaptics(pauseStrength: 1, pauseTicks: false, slowRepOn: true, slowRepPct: 20, slowRepPattern: 0)
@@ -79,6 +79,13 @@ final class MotionRecorder: ObservableObject {
 
     /// Setup finished. If a set is still open, stay in setup mode until it closes, so its tail
     /// can't be mistaken for a real set.
+    /// Setup / debug recording starts: reps go to the setup flow. Clears a pending end from an
+    /// earlier setup that was closed mid-set (otherwise this one would silently end at its first set).
+    func beginCalibration() {
+        calibrating = true
+        calibEndPending = false
+    }
+
     func endCalibration() {
         ignoreSetsUntil = Date().addingTimeInterval(10)
         if liveRepCount == nil { calibrating = false } else { calibEndPending = true }
@@ -107,6 +114,8 @@ final class MotionRecorder: ObservableObject {
     // MARK: Motion capture (debug tool) — every raw sample from Go to hand-over
     func beginCapture() { processor.beginCapture() }
     func endCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) { processor.endCapture(done) }
+    /// Live debug session: everything captured since the last call, and keep capturing.
+    func drainCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) { processor.drainCapture(done) }
 
     private init() {
         // The recorder is a singleton, so the callbacks reach it through `shared`
@@ -197,7 +206,9 @@ final class MotionRecorder: ObservableObject {
     }
 
     private func applyPause(bottomAt: TimeInterval?, reached: Bool) {
-        guard let bottomAt, calibrating || setActive || liveRepCount != nil else {
+        // Only when a rep is expected: setup, a set you've started, or once the Watch has counted a rep.
+        // (liveRepCount is 0, not nil, as soon as any movement starts — a wave or a gesture — so 0 doesn't count.)
+        guard let bottomAt, calibrating || setActive || (liveRepCount ?? 0) >= 1 else {
             stopBuildUp(); pauseStart = nil; pauseReached = false; return
         }
         let start = Date(timeIntervalSince1970: bottomAt)
@@ -311,9 +322,16 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
 
     // Motion capture (debug tool): every sample from Go until hand-over (touched only on `queue`).
     private var capture: [MotionSample]? = nil
-    private let captureLimit = 6000                       // 60 s at 100 Hz
+    private let captureLimit = 12000                      // 2 min at 100 Hz (a live session drains it every 15 s)
 
     func beginCapture() { queue.addOperation { [self] in self.capture = [] } }
+    func drainCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) {
+        queue.addOperation { [self] in
+            let c = self.capture ?? []
+            if self.capture != nil { self.capture = [] }
+            done(c)
+        }
+    }
     func endCapture(_ done: @escaping @Sendable ([MotionSample]) -> Void) {
         queue.addOperation { [self] in
             let c = self.capture ?? []

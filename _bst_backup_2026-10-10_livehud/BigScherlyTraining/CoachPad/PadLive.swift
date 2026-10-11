@@ -1,0 +1,1185 @@
+import SwiftUI
+import Combine
+import CoreBluetooth
+import Charts
+
+// MARK: - Coach HQ on iPad: Live (Oct 10, 2026)
+//
+// A heads-up display for a session the coach runs in person. The client's phone is the hub (its Watch
+// streams to it); the phone relays over Bluetooth to this iPad — no Wi-Fi needed, range is the room.
+// Protocol and messages: LiveLink.swift (shared with the phone side).
+//
+// Flow: the coach opens Live → phones with a workout open show up as "Nearby" → Follow sends this
+// iPad's hello → the client taps Allow on their phone (once, if they keep "Always allow") → the
+// session streams here: the set, each rep's bar speed against their usual, speed loss, heart rate,
+// rest, PR / target watch. The coach pad sends cues (they buzz the phone), rest, start / end / log a
+// set, and plan edits (saved to the server, then the phone fetches that workout again).
+// Several clients at once: one chip each in the top bar.
+//
+// Needs (Nick adds in Xcode, not shipped): NSBluetoothAlwaysUsageDescription, and UIBackgroundModes
+// `bluetooth-central` (keeps the link through a short lock). Synchronized folder: no target step needed.
+
+// MARK: One phone
+
+struct PadLivePhone: Identifiable {
+    enum Link { case connecting, connected, lost }
+
+    let id: UUID
+    var hello: LiveHello?
+    var workout: LiveWorkoutSnap?
+    var state: LiveStateMsg?
+    var hr: [PadLiveHR] = []
+    var finished: [PadLiveSetDone] = []
+    var link: Link = .connecting
+    var lastHeard: Date?
+    var demo = false            // made up by PadLiveDemo (no phone, no Bluetooth)
+    var requestedAt: Date?      // when Follow / Ask again went out ("Asking…" until the phone answers)
+    var following = false
+    var ended = false
+    var lastSetKey = ""
+
+    var name: String { hello?.name ?? "Phone nearby" }
+    var allowed: Bool { hello?.allowed == true }
+    var asking: Bool { hello?.asking == true }
+    var clientId: String? { hello?.clientId }
+}
+
+struct PadLiveHR: Identifiable {
+    let at: Date
+    let bpm: Int
+    var id: Date { at }
+}
+
+/// A set that finished while the coach was following.
+struct PadLiveSetDone: Identifiable {
+    let id: String
+    let label: String          // "Back Squat · Set 2"
+    let at: Date
+    let speeds: [Double]
+    let loss: Int?
+    let effort: String?
+}
+
+// MARK: The iPad's side of the link
+
+@MainActor
+final class PadLiveLink: NSObject, ObservableObject {
+    static let shared = PadLiveLink()
+
+    @Published var hudOpen = false
+    @Published private(set) var phones: [PadLivePhone] = []
+    @Published var selected: UUID?
+    @Published private(set) var radio = "Starting Bluetooth…"
+    @Published private(set) var radioOK = false
+
+    private var central: CBCentralManager?
+    private var peripherals: [UUID: CBPeripheral] = [:]
+    private var controls: [UUID: CBCharacteristic] = [:]
+    private var deframers: [UUID: LiveLinkProto.Deframer] = [:]
+    private var scanning = false
+
+    private override init() { super.init() }
+
+    /// This iPad, as the client's phone remembers it.
+    static var deviceId: String {
+        if let id = UserDefaults.standard.string(forKey: "bst_pad_live_device") { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: "bst_pad_live_device")
+        return id
+    }
+
+    var coachName: String {
+        let n = AppStore.shared.trainerName.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? "Coach" : n
+    }
+
+    /// Clients followed before: followed again as soon as their phone shows up.
+    private var autoFollow: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "bst_pad_live_follow") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "bst_pad_live_follow") }
+    }
+
+    var following: [PadLivePhone] { phones.filter { $0.following } }
+    var nearby: [PadLivePhone] { phones.filter { !$0.following && $0.hello != nil } }
+    var current: PadLivePhone? {
+        let f = following
+        if let s = selected, let p = f.first(where: { $0.id == s }) { return p }
+        return f.first
+    }
+
+    // MARK: Start / stop
+
+    /// A client to follow as soon as their phone shows up (Today's "Follow live").
+    private var wantClient: String?
+
+    func open(follow clientId: String? = nil) {
+        hudOpen = true
+        if let cid = clientId {
+            if let p = phones.first(where: { $0.clientId == cid }) {
+                if !p.following { follow(p.id) }
+                selected = p.id
+            } else {
+                wantClient = cid
+            }
+        }
+        start()
+    }
+
+    func start() {
+        guard Bundle.main.object(forInfoDictionaryKey: "NSBluetoothAlwaysUsageDescription") != nil else {
+            radio = "Bluetooth isn't set up in this build yet (Info.plist: NSBluetoothAlwaysUsageDescription)."
+            radioOK = false
+            return
+        }
+        if central == nil {
+            central = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: true])
+        } else {
+            scan()
+        }
+    }
+
+    /// Closing Live: stop looking for new phones. Followed sessions stay linked, so reopening is instant.
+    func close() {
+        hudOpen = false
+        if demoRunning { PadLiveDemo.shared.stopAll() }
+        central?.stopScan()
+        scanning = false
+        for p in phones where !p.following { drop(p.id) }
+    }
+
+    private func scan() {
+        guard let c = central, c.state == .poweredOn, !scanning else { return }
+        // Duplicates on: a phone dropped from the list (not followed, out of range) is seen again when it's back.
+        c.scanForPeripherals(withServices: [LiveLinkProto.service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        scanning = true
+    }
+
+    private func index(_ id: UUID) -> Int? { phones.firstIndex { $0.id == id } }
+
+    // MARK: Following
+
+    func follow(_ id: UUID) {
+        guard let i = index(id) else { return }
+        phones[i].following = true
+        phones[i].ended = false
+        phones[i].requestedAt = Date()
+        if let cid = phones[i].clientId {
+            autoFollow.insert(cid)
+            Task { await PadData.shared.loadContext(cid, force: true) }    // their usual bar speed, PRs
+        }
+        selected = id
+        send(LiveCoachHello(deviceId: Self.deviceId, coachName: coachName), to: id)
+    }
+
+    /// Ask again (they tapped Not now, or missed it).
+    func askAgain(_ id: UUID) {
+        if let i = index(id) { phones[i].requestedAt = Date() }
+        send(LiveCoachHello(deviceId: Self.deviceId, coachName: coachName), to: id)
+    }
+
+    func unfollow(_ id: UUID) {
+        guard let i = index(id) else { return }
+        if phones[i].demo { PadLiveDemo.shared.remove(id) }
+        if let cid = phones[i].clientId { autoFollow.remove(cid) }
+        drop(id)
+        if selected == id { selected = following.first?.id }
+    }
+
+    private func drop(_ id: UUID) {
+        if let p = peripherals[id] { central?.cancelPeripheralConnection(p) }
+        peripherals[id] = nil
+        controls[id] = nil
+        deframers[id] = nil
+        phones.removeAll { $0.id == id }
+    }
+
+    // MARK: Sending
+
+    func command(_ cmd: LiveCommand, to id: UUID) {
+        if let i = index(id), phones[i].demo { PadLiveDemo.shared.run(cmd, id); return }
+        send(cmd, to: id)
+    }
+
+    // MARK: Demo (PadLiveDemo feeds these instead of a phone)
+
+    var demoRunning: Bool { phones.contains { $0.demo } }
+
+    func demoAdd(_ id: UUID, hello: LiveHello, workout: LiveWorkoutSnap, hr: [PadLiveHR], finished: [PadLiveSetDone]) {
+        if index(id) == nil { phones.append(PadLivePhone(id: id)) }
+        guard let i = index(id) else { return }
+        phones[i].demo = true
+        phones[i].link = .connected
+        phones[i].following = true
+        phones[i].hello = hello
+        phones[i].workout = workout
+        phones[i].hr = hr
+        phones[i].finished = finished
+        if let f = finished.last { phones[i].lastSetKey = "\(f.label)|\(f.speeds.count)|\(f.speeds.first ?? 0)" }   // take() knows it already
+        if selected == nil { selected = id }
+    }
+
+    func demoUpdate(_ id: UUID, workout: LiveWorkoutSnap?, state: LiveStateMsg) {
+        guard let i = index(id) else { return }
+        if let w = workout { phones[i].workout = w }
+        take(state, at: i)
+    }
+
+
+    private func send<T: Encodable>(_ msg: T, to id: UUID) {
+        guard let p = peripherals[id], let ch = controls[id], let body = try? LiveLinkProto.encoder.encode(msg) else { return }
+        let data = LiveLinkProto.frame(body)
+        let size = Swift.max(20, Swift.min(512, p.maximumWriteValueLength(for: .withResponse)))
+        var i = 0
+        while i < data.count {
+            let end = Swift.min(data.count, i + size)
+            p.writeValue(data.subdata(in: i..<end), for: ch, type: .withResponse)    // in order, acknowledged
+            i = end
+        }
+    }
+
+    // MARK: Receiving
+
+    private func receive(_ chunk: Data, from id: UUID) {
+        var d = deframers[id] ?? LiveLinkProto.Deframer()
+        let msgs = d.push(chunk)
+        deframers[id] = d
+        for m in msgs { handle(m, from: id) }
+    }
+
+    private func handle(_ data: Data, from id: UUID) {
+        guard let i = index(id),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = obj["t"] as? String else { return }
+        phones[i].lastHeard = Date()
+        let dec = LiveLinkProto.decoder
+        switch t {
+        case "hello":
+            guard let h = try? dec.decode(LiveHello.self, from: data) else { return }
+            // The same client under a new Bluetooth id (the phone's private address rotated): keep one entry.
+            var carried = false
+            if let old = phones.first(where: { $0.id != id && $0.clientId == h.clientId }) {
+                carried = old.following
+                if selected == old.id { selected = id }
+                drop(old.id)
+            }
+            guard let j = index(id) else { return }
+            let was = phones[j].hello
+            phones[j].hello = h
+            if h.asking == true || h.allowed { phones[j].requestedAt = nil }
+            if !phones[j].following, carried || autoFollow.contains(h.clientId) || wantClient == h.clientId {
+                if wantClient == h.clientId { wantClient = nil }
+                follow(id)
+            }
+            if h.allowed, was?.allowed != true { Task { await PadData.shared.loadContext(h.clientId) } }
+            if let k = index(id) { phones[k].ended = (h.workoutId == nil) }
+        case "workout":
+            guard let w = try? dec.decode(LiveWorkoutSnap.self, from: data) else { return }
+            if let old = phones[i].workout?.id, old != w.id {          // their next workout: start fresh
+                phones[i].finished = []
+                phones[i].hr = []
+                phones[i].lastSetKey = ""
+            }
+            phones[i].workout = w
+        case "state":
+            guard let s = try? dec.decode(LiveStateMsg.self, from: data) else { return }
+            take(s, at: i)
+        case "bye":
+            phones[i].ended = true
+        default:
+            break
+        }
+    }
+
+    private func take(_ s: LiveStateMsg, at i: Int) {
+        phones[i].state = s
+        phones[i].ended = false
+        if let b = s.hr, b > 0 {
+            let last = phones[i].hr.last
+            if last == nil || s.at.timeIntervalSince(last!.at) >= 4 || last!.bpm != b {
+                phones[i].hr.append(PadLiveHR(at: s.at, bpm: b))
+            }
+            let cutoff = Date().addingTimeInterval(-45 * 60)
+            if let first = phones[i].hr.first, first.at < cutoff { phones[i].hr.removeAll { $0.at < cutoff } }
+        }
+        // A set the Watch measured has finished: keep it for the session list.
+        let c = s.card
+        if let label = c.lastSet, !c.speeds.isEmpty {
+            let key = "\(label)|\(c.speeds.count)|\(c.speeds.first ?? 0)"
+            if key != phones[i].lastSetKey {
+                phones[i].lastSetKey = key
+                phones[i].finished.removeAll { $0.label == label }
+                phones[i].finished.append(PadLiveSetDone(id: key, label: label, at: s.at, speeds: c.speeds,
+                                                         loss: c.speedLoss, effort: c.effort))
+            }
+        }
+    }
+
+    // MARK: Delegate plumbing (main queue: the manager was made with queue nil)
+
+    fileprivate func found(_ p: CBPeripheral) {
+        guard peripherals[p.identifier] == nil, let c = central else { return }
+        peripherals[p.identifier] = p
+        p.delegate = self
+        if index(p.identifier) == nil { phones.append(PadLivePhone(id: p.identifier)) }
+        c.connect(p, options: nil)
+    }
+
+    fileprivate func lost(_ p: CBPeripheral) {
+        let id = p.identifier
+        controls[id] = nil
+        deframers[id] = nil
+        guard let i = index(id) else { return }
+        if phones[i].following {
+            phones[i].link = .lost
+            central?.connect(p, options: nil)          // waits as long as it takes; picks up when they're back in range
+        } else {
+            drop(id)                                    // seen again on the next scan
+        }
+    }
+
+    fileprivate func radioChanged(_ c: CBCentralManager) {
+        switch c.state {
+        case .poweredOn:
+            radioOK = true
+            radio = "Looking for phones nearby"
+            scanning = false
+            if hudOpen { scan() }
+            for (_, p) in peripherals where p.state == .disconnected { c.connect(p, options: nil) }
+        case .poweredOff:
+            radioOK = false; scanning = false
+            radio = "Bluetooth is off. Turn it on in Control Center."
+        case .unauthorized:
+            radioOK = false
+            radio = "Bluetooth isn't allowed for Big Scherly. Settings ▸ Privacy ▸ Bluetooth."
+        case .unsupported:
+            radioOK = false
+            radio = "This iPad doesn't support Bluetooth LE."
+        default:
+            radioOK = false
+            radio = "Starting Bluetooth…"
+        }
+    }
+
+    fileprivate func connected(_ p: CBPeripheral) {
+        if let i = index(p.identifier) { phones[i].link = .connecting }
+        p.discoverServices([LiveLinkProto.service])
+    }
+
+    fileprivate func characteristics(_ p: CBPeripheral, _ s: CBService) {
+        for ch in s.characteristics ?? [] {
+            if ch.uuid == LiveLinkProto.stateChar { p.setNotifyValue(true, for: ch) }
+            if ch.uuid == LiveLinkProto.controlChar { controls[p.identifier] = ch }
+        }
+    }
+
+    fileprivate func subscribed(_ p: CBPeripheral) {
+        guard let i = index(p.identifier) else { return }
+        phones[i].link = .connected
+        // Back in range after a drop: say hello again (a remembered iPad is let straight back in).
+        if phones[i].following { send(LiveCoachHello(deviceId: Self.deviceId, coachName: coachName), to: p.identifier) }
+    }
+
+    fileprivate func value(_ p: CBPeripheral, _ data: Data) { receive(data, from: p.identifier) }
+}
+
+extension PadLiveLink: CBCentralManagerDelegate, CBPeripheralDelegate {
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        MainActor.assumeIsolated { self.radioChanged(central) }
+    }
+    nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
+                                    advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        MainActor.assumeIsolated { self.found(peripheral) }
+    }
+    nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        MainActor.assumeIsolated { self.connected(peripheral) }
+    }
+    nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        MainActor.assumeIsolated { self.lost(peripheral) }
+    }
+    nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        MainActor.assumeIsolated { self.lost(peripheral) }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        MainActor.assumeIsolated {
+            for s in peripheral.services ?? [] where s.uuid == LiveLinkProto.service {
+                peripheral.discoverCharacteristics([LiveLinkProto.stateChar, LiveLinkProto.controlChar], for: s)
+            }
+        }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        MainActor.assumeIsolated { self.characteristics(peripheral, service) }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        let on = characteristic.isNotifying && error == nil
+        MainActor.assumeIsolated { if on { self.subscribed(peripheral) } }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard error == nil, let d = characteristic.value else { return }
+        MainActor.assumeIsolated { self.value(peripheral, d) }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        MainActor.assumeIsolated { self.connected(peripheral) }      // the phone rebuilt its service: find it again
+    }
+}
+
+// MARK: - Maths for the screen
+
+enum PadLiveMath {
+    /// Their usual bar speed for this lift near this weight (±7.5%), from earlier sessions' Watch data.
+    @MainActor
+    static func usualSpeed(clientId: String, exercise: String, weightLb: Double, excluding workoutId: String?) -> Double? {
+        if clientId.hasPrefix(PadLiveDemo.prefix) { return PadLiveDemo.usual(exercise) }
+        let data = PadData.shared
+        let ws = (data.workouts[clientId] ?? []).filter { $0.id != workoutId }
+        var weightBySet: [String: Double] = [:]
+        for w in ws {
+            for e in w.exercises where e.name.lowercased() == exercise.lowercased() {
+                for s in e.sets { if let lw = s.loggedWeight { weightBySet[s.id] = lw } }
+            }
+        }
+        let motions = (data.motion[clientId] ?? []).filter { $0.exerciseName.lowercased() == exercise.lowercased() && $0.workoutId != workoutId }
+        var near: [Double] = []
+        var any: [Double] = []
+        for m in motions {
+            guard let first = m.reps.first else { continue }
+            any.append(first.meanVelocity)
+            if weightLb > 0, let lw = weightBySet[m.setId], abs(lw - weightLb) <= weightLb * 0.075 { near.append(first.meanVelocity) }
+        }
+        let pick: [Double] = near.count >= 2 ? near : (weightLb <= 0 ? any : [])
+        guard !pick.isEmpty else { return nil }
+        let sorted = pick.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// Best estimated 1RM for the lift before today.
+    @MainActor
+    static func bestE1RM(clientId: String, exercise: String, excluding workoutId: String?) -> Double? {
+        if clientId.hasPrefix(PadLiveDemo.prefix) { return PadLiveDemo.best(exercise) }
+        let ws = (PadData.shared.workouts[clientId] ?? []).filter { $0.id != workoutId }
+        let best = ProgressEngine.history(for: exercise, workouts: ws).map { $0.estimatedOneRepMax }.max() ?? 0
+        return best > 0 ? best : nil
+    }
+
+    static func e1RM(_ lb: Double, _ reps: Int) -> Double { lb * (1 + Double(reps) / 30.0) }
+
+    /// The plan for a set, as written. (SetTarget would look up "you pick" weights in this iPad's own
+    /// store — the coach's, not the client's.)
+    static func planText(_ s: ExerciseSet) -> String {
+        let w: String = SetTarget.weightText(s.targetWeight)
+        if let r = s.targetRpe { return s.targetWeight > 0 ? "\(s.targetReps) × \(w) @ \(r.rpeText)" : "\(s.targetReps) @ RPE \(r.rpeText)" }
+        if let pct = s.percent { return "\(s.targetReps) × \(Int(pct.rounded()))%" }
+        if s.amrap == true { return s.targetWeight > 0 ? "\(s.targetReps)+ × \(w)" : "\(s.targetReps)+ reps" }
+        if s.targetWeight <= 0 { return "\(s.targetReps) × BW" }
+        return "\(s.targetReps) × \(w)"
+    }
+
+    static func clock(_ s: Int) -> String {
+        let t = max(0, s)
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    static func zoneColor(_ z: Int?) -> Color {
+        switch z ?? 0 {
+        case 5: return Pad.red
+        case 4: return Pad.orange
+        case 3: return Pad.volt
+        case 2: return Pad.green
+        default: return Pad.blue
+        }
+    }
+}
+
+// MARK: - The screen
+
+struct PadLiveView: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var link = PadLiveLink.shared
+    @ObservedObject private var data = PadData.shared
+    @ObservedObject private var targets = PadTargets.shared
+    @State private var cueText = ""
+    @State private var editing: PadLiveEdit?
+    @State private var recapFor: PadLiveRecap?
+
+    private let quickCues: [String] = ["Brace hard", "Drive through the floor", "Slow the lowering", "Chest up",
+                                       "Breathe, then go", "Last one — make it count", "Great set"]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            Rectangle().fill(Pad.line).frame(height: 1)
+            if let p = link.current {
+                session(p)
+            } else {
+                waiting
+            }
+        }
+        .background(Pad.page.ignoresSafeArea())
+        .overlay { PadToastHost() }                     // the shell's toasts sit under this cover
+        .onAppear { link.start() }
+        .sheet(item: $editing) { e in
+            WorkoutBuilderView(clientId: e.clientId, clientName: e.clientName, editing: e.workout) {
+                link.command(LiveCommand(t: "reload"), to: e.phoneId)
+                PadToasts.shared.show("Saved — \(e.clientName.firstName)'s phone has the new plan")
+                Task { await data.refresh(roster: store.roster) }
+            }
+        }
+        .sheet(item: $recapFor) { r in
+            CoachComposeSheet(title: "Recap for \(r.clientName.firstName)", subtitle: r.subtitle, clientId: r.clientId,
+                              starters: ["Great session today.", "Proud of that one.", "Strong work — rest up."], initial: r.text) {
+                PadToasts.shared.show("Sent to \(r.clientName.firstName)")
+            }
+        }
+    }
+
+    // MARK: Top bar
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            Button { link.close() } label: {
+                Image(systemName: "xmark").font(.system(size: 16, weight: .bold)).foregroundColor(Pad.text)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close Live")
+            HStack(spacing: 6) {
+                Circle().fill(Pad.red).frame(width: 9, height: 9)
+                Text("LIVE").font(PadFont.cond(16, .bold)).tracking(1.5).foregroundColor(Pad.text)
+                if link.demoRunning { PadTag(text: "DEMO", kind: .warn) }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(link.following) { p in chip(p) }
+                }
+            }
+            if !link.nearby.isEmpty, link.current != nil {
+                Menu {
+                    ForEach(link.nearby) { p in Button("Follow \(p.name)") { link.follow(p.id) } }
+                } label: {
+                    Label("\(link.nearby.count) nearby", systemImage: "plus")
+                        .font(PadFont.ui(14, .semibold)).foregroundColor(Pad.text)
+                        .padding(.horizontal, 12).frame(height: 36)
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Pad.line2, lineWidth: 1))
+                }
+            }
+            Spacer(minLength: 0)
+            if let p = link.current, let s = p.state {
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    let secs: Int = Int(ctx.date.timeIntervalSince(s.elapsedSince))
+                    VStack(alignment: .trailing, spacing: 0) {
+                        PadLab("SESSION", size: 11)
+                        PadNumber(value: PadLiveMath.clock(secs), size: 26)
+                    }
+                }
+                hrBadge(s)
+            }
+        }
+        .padding(.horizontal, 14).frame(height: 66)
+        .background(Pad.surface)
+    }
+
+    private func chip(_ p: PadLivePhone) -> some View {
+        let on: Bool = link.current?.id == p.id
+        let dot: Color = p.link == .connected ? (p.allowed ? Pad.green : Pad.orange) : Pad.red
+        return Button { link.selected = p.id } label: {
+            HStack(spacing: 8) {
+                PadAvatar(name: p.name, size: 26, volt: on, dot: dot)
+                Text(p.name.firstName).font(PadFont.ui(14, .semibold)).foregroundColor(on ? Pad.text : Pad.mute)
+            }
+            .padding(.horizontal, 10).frame(height: 40)
+            .background(RoundedRectangle(cornerRadius: 10).fill(on ? Pad.raised : Color.clear))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? Pad.line2 : Pad.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) { link.unfollow(p.id) } label: { Label("Stop following", systemImage: "xmark.circle") }
+        }
+    }
+
+    private func hrBadge(_ s: LiveStateMsg) -> some View {
+        let bpm: Int? = s.hr ?? s.card.hr
+        let zone: Int? = s.card.hrZone
+        let color: Color = PadLiveMath.zoneColor(zone)
+        return HStack(spacing: 8) {
+            Image(systemName: "heart.fill").font(.system(size: 18)).foregroundColor(bpm == nil ? Pad.faint : Pad.red)
+            VStack(alignment: .leading, spacing: 0) {
+                PadNumber(value: bpm.map { "\($0)" } ?? "—", unit: "bpm", size: 26)
+                if let z = zone { Text("ZONE \(z)").font(PadFont.cond(11, .bold)).foregroundColor(color) }
+            }
+        }
+        .padding(.leading, 6)
+    }
+
+    // MARK: Nobody followed yet
+
+    private var waiting: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Follow a session").font(PadFont.display(40)).foregroundColor(Pad.text)
+                    Text("Your client opens today's workout on their phone. It shows up here — tap Follow, they tap Allow, and their sets, bar speed and heart rate stream to this screen. Bluetooth, phone to iPad: no Wi-Fi needed.")
+                        .font(PadFont.ui(15)).foregroundColor(Pad.mute).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    if link.radioOK { ProgressView().controlSize(.small) } else { Image(systemName: "exclamationmark.triangle.fill").foregroundColor(Pad.orange) }
+                    Text(link.radio).font(PadFont.ui(14, .semibold)).foregroundColor(link.radioOK ? Pad.mute : Pad.orange)
+                }
+                if link.nearby.isEmpty {
+                    Text("No phones nearby yet. Check the client's workout is open and their phone's Bluetooth is on.")
+                        .font(PadFont.ui(14)).foregroundColor(Pad.faint)
+                    Button { PadLiveDemo.shared.start() } label: { Label("See it with demo data", systemImage: "play.rectangle") }
+                        .buttonStyle(PadButtonStyle(kind: .primary))
+                    Text("Two made-up clients mid-session. The coach pad works: start and end sets, rest, log. Nothing is saved or sent.")
+                        .font(PadFont.ui(13)).foregroundColor(Pad.faint)
+                } else {
+                    VStack(spacing: 10) { ForEach(link.nearby) { p in nearbyRow(p) } }
+                }
+            }
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(32)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func nearbyRow(_ p: PadLivePhone) -> some View {
+        HStack(spacing: 12) {
+            PadAvatar(name: p.name, size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.name).font(PadFont.ui(16, .semibold)).foregroundColor(Pad.text)
+                Text(p.hello?.workoutId == nil ? "No workout open" : "Workout open").font(PadFont.ui(13)).foregroundColor(Pad.mute)
+            }
+            Spacer(minLength: 0)
+            Button("Follow") { link.follow(p.id) }.buttonStyle(PadButtonStyle(kind: .primary, small: true))
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Pad.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Pad.line, lineWidth: 1))
+    }
+
+    // MARK: A followed session
+
+    @ViewBuilder
+    private func session(_ p: PadLivePhone) -> some View {
+        if !p.allowed {
+            asking(p)
+        } else {
+            HStack(alignment: .top, spacing: 0) {
+                planColumn(p).frame(width: 290)
+                Rectangle().fill(Pad.line).frame(width: 1)
+                ScrollView { centre(p).padding(20) }
+                    .frame(maxWidth: .infinity)
+                Rectangle().fill(Pad.line).frame(width: 1)
+                ScrollView { coachPad(p).padding(16) }
+                    .frame(width: 300)
+                    .background(Pad.surface)
+            }
+        }
+    }
+
+    private func asking(_ p: PadLivePhone) -> some View {
+        let first: String = p.name.firstName
+        let justAsked: Bool = p.requestedAt.map { Date().timeIntervalSince($0) < 8 } ?? false
+        let line: String
+        if p.link != .connected { line = "Reconnecting to \(first)'s phone…" }
+        else if p.asking { line = "Waiting for \(first) to tap Allow on their phone." }
+        else if justAsked { line = "Asking \(first)'s phone…" }
+        else { line = "\(first) didn't allow it this time." }
+        return VStack(spacing: 16) {
+            PadAvatar(name: p.name, size: 64)
+            Text(line).font(PadFont.ui(18, .semibold)).foregroundColor(Pad.text).multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                if p.link == .connected && !p.asking && !justAsked {
+                    Button("Ask again") { link.askAgain(p.id) }.buttonStyle(PadButtonStyle(kind: .primary))
+                }
+                Button("Stop following") { link.unfollow(p.id) }.buttonStyle(PadButtonStyle(kind: .outline))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
+    }
+
+    // MARK: Left: the plan
+
+    private func planColumn(_ p: PadLivePhone) -> some View {
+        let w: Workout? = p.workout?.toModel()
+        let current: String? = p.state?.card.exercise
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let w {
+                    Text(w.title).font(PadFont.display(26)).foregroundColor(Pad.text).lineLimit(2)
+                    ForEach(w.exercises) { e in planExercise(e, current: e.name == current) }
+                } else {
+                    PadLab("WAITING FOR THE PLAN…")
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func planExercise(_ e: Exercise, current: Bool) -> some View {
+        let done: Int = e.sets.filter { $0.loggedReps != nil }.count
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(e.name).font(PadFont.ui(15, .semibold)).foregroundColor(current ? Pad.text : Pad.mute).lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(done)/\(e.sets.count)").font(PadFont.cond(13)).foregroundColor(Pad.faint)
+            }
+            if current {
+                ForEach(Array(e.sets.enumerated()), id: \.element.id) { i, s in planSet(s, n: i + 1, in: e) }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(current ? Pad.liveFill : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(current ? (Pad.isLight ? Pad.text : Pad.volt) : Pad.line, lineWidth: current ? 1.5 : 1))
+    }
+
+    private func planSet(_ s: ExerciseSet, n: Int, in e: Exercise) -> some View {
+        let plan: String = PadLiveMath.planText(s)
+        let logged: String? = s.loggedReps.map { r in
+            let wt: String = s.loggedWeight.map { " × " + SetTarget.weightText($0) } ?? ""
+            let rpe: String = s.rpe.map { " @ " + $0.rpeText } ?? ""
+            return "\(r)" + wt + rpe
+        }
+        return HStack(spacing: 8) {
+            Text("\(n)").font(PadFont.cond(13, .bold)).foregroundColor(Pad.faint).frame(width: 16)
+            Text(logged ?? plan).font(PadFont.ui(14, logged == nil ? .regular : .semibold))
+                .foregroundColor(logged == nil ? Pad.mute : Pad.text).lineLimit(1)
+            Spacer(minLength: 0)
+            if logged != nil { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundColor(Pad.green) }
+        }
+    }
+
+    // MARK: Centre: the set
+
+    @ViewBuilder
+    private func centre(_ p: PadLivePhone) -> some View {
+        if let s = p.state {
+            let c = s.card
+            VStack(alignment: .leading, spacing: 16) {
+                if p.ended || c.stage == .done { doneBanner(p) }
+                stageHeader(c)
+                repsPanel(p, s)
+                watchPanel(p, c)
+                hrPanel(p, s)
+                if !p.finished.isEmpty { finishedPanel(p) }
+                if p.link != .connected {
+                    Label("Link dropped — reconnecting when they're back in range.", systemImage: "antenna.radiowaves.left.and.right.slash")
+                        .font(PadFont.ui(14, .semibold)).foregroundColor(Pad.orange)
+                }
+            }
+        } else {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Connected. Waiting for the first update from \(p.name.firstName)'s phone…").font(PadFont.ui(15)).foregroundColor(Pad.mute)
+            }
+            .frame(maxWidth: .infinity).padding(.top, 80)
+        }
+    }
+
+    private func stageHeader(_ c: WorkoutActivityAttributes.ContentState) -> some View {
+        let goal: String = c.goalText ?? "\(c.goalReps) × \(c.goalWeight.rpeText) \(c.unit)"
+        return VStack(alignment: .leading, spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                stageLine(c, now: ctx.date)
+            }
+            Text(c.exercise).font(PadFont.display(48)).foregroundColor(Pad.text).lineLimit(1).minimumScaleFactor(0.6)
+            HStack(spacing: 10) {
+                Text("Set \(c.setNumber) of \(c.setCount)").font(PadFont.ui(18, .semibold)).foregroundColor(Pad.text)
+                Text(goal).font(PadFont.ui(18)).foregroundColor(Pad.mute)
+                if c.logNeeded { PadTag(text: "WAITING TO LOG", kind: .warn) }
+            }
+            if let up = c.upNext, c.stage != .done {
+                Text("Up next: \(up)").font(PadFont.ui(13)).foregroundColor(Pad.faint)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stageLine(_ c: WorkoutActivityAttributes.ContentState, now: Date) -> some View {
+        switch c.stage {
+        case .resting:
+            let left: Int = Int((c.restEnd ?? now).timeIntervalSince(now).rounded(.up))
+            let total: Double = max(1, (c.restEnd ?? now).timeIntervalSince(c.restStart ?? now))
+            let frac: Double = min(1, max(0, Double(left) / total))
+            HStack(spacing: 12) {
+                PadTag(text: "RESTING", kind: .blue)
+                PadNumber(value: PadLiveMath.clock(left), size: 34, color: left <= 10 ? Pad.orange : Pad.text)
+                ProgressView(value: 1 - frac).tint(Pad.blue).frame(maxWidth: 220)
+            }
+        case .lifting:
+            let secs: Int = Int(now.timeIntervalSince(c.setStart ?? now))
+            HStack(spacing: 12) {
+                PadTag(text: "LIFTING", kind: .volt)
+                PadNumber(value: PadLiveMath.clock(secs), size: 34)
+            }
+        case .ready:
+            PadTag(text: "READY", kind: .line)
+        case .done:
+            PadTag(text: "ALL SETS DONE", kind: .volt)
+        }
+    }
+
+    /// The reps: this set as it happens, or the set that just finished. Each bar is a rep's average
+    /// speed on the way up; the dashed line is their usual at this weight.
+    private func repsPanel(_ p: PadLivePhone, _ s: LiveStateMsg) -> some View {
+        let c = s.card
+        let lifting: Bool = c.stage == .lifting
+        let liveSpeeds: [Double] = s.liveReps.filter { r in c.setStart.map { r.start >= $0.addingTimeInterval(-5) } ?? true }.map { $0.meanVelocity }
+        let speeds: [Double] = lifting ? liveSpeeds : c.speeds
+        let title: String = lifting ? "THIS SET · \(speeds.count) REP\(speeds.count == 1 ? "" : "S")" : (c.lastSet.map { "LAST SET · \($0.uppercased())" } ?? "BAR SPEED")
+        let lb: Double = c.unit == "kg" ? c.goalWeight / 0.45359237 : c.goalWeight
+        let usual: Double? = p.clientId.flatMap { PadLiveMath.usualSpeed(clientId: $0, exercise: c.exercise, weightLb: lb, excluding: p.workout?.id) }
+        let first: Double = speeds.first ?? 0
+        let lastV: Double = speeds.last ?? 0
+        let emptyMsg: String = lifting ? (s.watchLive ? "Waiting for the first rep…" : "No Watch on this session — reps show when they log the set.")
+            : "Bar speed shows here once a set's done with the Watch on."
+        let loss: Int? = lifting ? (speeds.count >= 2 && first > 0 ? Int(((first - lastV) / first * 100).rounded()) : nil) : c.speedLoss
+        return PadLivePanel(title: title) {
+            if speeds.isEmpty {
+                Text(emptyMsg)
+                    .font(PadFont.ui(14)).foregroundColor(Pad.mute).frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+            } else {
+                PadLiveRepBars(speeds: speeds, usual: usual)
+                    .frame(height: 190)
+                HStack(spacing: 24) {
+                    stat("SPEED LOSS", loss.map { "\($0)%" } ?? "—", warn: (loss ?? 0) >= 20)
+                    stat("FASTEST", String(format: "%.2f", speeds.max() ?? 0), unit: "m/s")
+                    stat("USUAL", usual.map { String(format: "%.2f", $0) } ?? "—", unit: usual == nil ? nil : "m/s")
+                    if !lifting, let e = c.effort { stat("EFFORT", e) }
+                    if !lifting, let t = c.tempo { stat("TEMPO", t) }
+                }
+                if let why = c.rpeWhy, !lifting {
+                    Text("Estimated RPE \(c.dRPE.rpeText) — \(why)").font(PadFont.ui(13)).foregroundColor(Pad.mute)
+                }
+            }
+        }
+    }
+
+    private func stat(_ label: String, _ value: String, unit: String? = nil, warn: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            PadLab(label, size: 11)
+            PadNumber(value: value, unit: unit, size: 24, color: warn ? Pad.orange : Pad.text)
+        }
+    }
+
+    /// PR and target watch: what the set on the bar would mean.
+    @ViewBuilder
+    private func watchPanel(_ p: PadLivePhone, _ c: WorkoutActivityAttributes.ContentState) -> some View {
+        let lb: Double = c.unit == "kg" ? c.goalWeight / 0.45359237 : c.goalWeight
+        let reps: Int = max(c.goalReps, 1)
+        let e1: Double = PadLiveMath.e1RM(lb, reps)
+        let best: Double? = p.clientId.flatMap { PadLiveMath.bestE1RM(clientId: $0, exercise: c.exercise, excluding: p.workout?.id) }
+        let lifts: [PadTarget] = p.clientId.map { cid in targets.open(cid).filter { $0.kind == .lift && $0.lift.lowercased() == c.exercise.lowercased() } } ?? []
+        let isPR: Bool = lb > 0 && c.stage != .done && (best.map { e1 > $0 } ?? false)
+        if isPR || !lifts.isEmpty {
+            PadLivePanel(title: "WATCH FOR") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if isPR, let b = best {
+                        Label("PR on the bar: \(reps) × \(SetTarget.weightText(lb)) is an e1RM of \(SetTarget.weightText(e1)) — best so far \(SetTarget.weightText(b)).",
+                              systemImage: "trophy.fill")
+                            .font(PadFont.ui(15, .semibold)).foregroundColor(Pad.text)
+                    }
+                    ForEach(lifts) { t in
+                        let hit: Bool = t.reps > 0 ? (lb >= t.weight && reps >= t.reps) : (lb > 0 && e1 >= t.weight)
+                        let what: String = t.reps > 0 ? "\(t.reps) × \(SetTarget.weightText(t.weight))" : "e1RM \(SetTarget.weightText(t.weight))"
+                        let msg: String = "Target “\(t.title)”: \(what)" + (hit ? " — this set gets it." : "")
+                        Label(msg, systemImage: hit ? "target" : "scope")
+                            .font(PadFont.ui(14, hit ? .semibold : .regular)).foregroundColor(hit ? Pad.text : Pad.mute)
+                    }
+                }
+            }
+        }
+    }
+
+    private func hrPanel(_ p: PadLivePhone, _ s: LiveStateMsg) -> some View {
+        let since: Date = Date().addingTimeInterval(-20 * 60)
+        let pts: [PadLiveHR] = p.hr.filter { $0.at >= since }
+        let peak: Int? = p.hr.map { $0.bpm }.max()
+        return PadLivePanel(title: "HEART RATE · LAST 20 MIN") {
+            if pts.count < 2 {
+                Text(s.watchLive ? "Collecting…" : "Heart rate comes from their Apple Watch.")
+                    .font(PadFont.ui(14)).foregroundColor(Pad.mute).frame(maxWidth: .infinity, minHeight: 80)
+            } else {
+                Chart(pts) { h in
+                    LineMark(x: .value("Time", h.at), y: .value("BPM", h.bpm))
+                        .foregroundStyle(Pad.red)
+                        .interpolationMethod(.monotone)
+                }
+                .chartYScale(domain: .automatic(includesZero: false))
+                .frame(height: 130)
+                HStack(spacing: 24) {
+                    stat("NOW", (s.hr ?? s.card.hr).map { "\($0)" } ?? "—", unit: "bpm")
+                    stat("PEAK", peak.map { "\($0)" } ?? "—", unit: "bpm")
+                    if let pct = s.card.hrPct { stat("OF MAX", "\(pct)%") }
+                }
+            }
+        }
+    }
+
+    private func finishedPanel(_ p: PadLivePhone) -> some View {
+        PadLivePanel(title: "SETS WITH THE WATCH ON") {
+            VStack(spacing: 8) {
+                ForEach(p.finished.reversed()) { f in
+                    let top: String = String(format: "%.2f", f.speeds.max() ?? 0)
+                    HStack(spacing: 10) {
+                        Text(f.label).font(PadFont.ui(14, .semibold)).foregroundColor(Pad.text).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text("\(f.speeds.count) reps").font(PadFont.ui(13)).foregroundColor(Pad.mute)
+                        Text("top \(top) m/s").font(PadFont.ui(13)).foregroundColor(Pad.mute)
+                        if let l = f.loss { PadTag(text: "−\(l)%", kind: l >= 20 ? .warn : .line) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func doneBanner(_ p: PadLivePhone) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "flag.checkered").font(.system(size: 20, weight: .bold)).foregroundColor(Pad.onVolt)
+                .frame(width: 40, height: 40).background(Circle().fill(Pad.volt))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.ended ? "Session closed on \(p.name.firstName)'s phone" : "Every set's logged")
+                    .font(PadFont.ui(16, .semibold)).foregroundColor(Pad.text)
+                Text("Send them a recap while it's fresh.").font(PadFont.ui(13)).foregroundColor(Pad.mute)
+            }
+            Spacer(minLength: 0)
+            Button("Send recap") { showRecap(p) }.buttonStyle(PadButtonStyle(kind: .primary, small: true))
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Pad.liveFill))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Pad.isLight ? Pad.text : Pad.volt, lineWidth: 1.5))
+    }
+
+    // MARK: Right: the coach pad
+
+    private func coachPad(_ p: PadLivePhone) -> some View {
+        let c: WorkoutActivityAttributes.ContentState? = p.state?.card
+        let stage: LiveStage = c?.stage ?? .ready
+        let logNeeded: Bool = c?.logNeeded ?? false
+        let restDefault: Int = max(c?.restSeconds ?? 90, 30)
+        let canSend: Bool = p.link == .connected
+        return VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                PadLab("CUE · BUZZES THEIR PHONE", size: 12)
+                HStack(spacing: 8) {
+                    TextField("Say something…", text: $cueText)
+                        .font(PadFont.ui(15)).padding(.horizontal, 10).frame(height: 40)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Pad.well))
+                        .onSubmit { sendCue(p, cueText) }
+                    Button { sendCue(p, cueText) } label: { Image(systemName: "paperplane.fill") }
+                        .buttonStyle(PadButtonStyle(kind: .primary, small: true))
+                        .disabled(cueText.trimmingCharacters(in: .whitespaces).isEmpty || !canSend)
+                }
+                PadLiveFlow(spacing: 6) {
+                    ForEach(quickCues, id: \.self) { q in
+                        Button(q) { sendCue(p, q) }.buttonStyle(PadButtonStyle(kind: .outline, small: true)).disabled(!canSend)
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                PadLab("SET", size: 12)
+                if logNeeded {
+                    Button { link.command(LiveCommand(t: "logSet"), to: p.id) } label: { Label("Log the set", systemImage: "checkmark") }
+                        .buttonStyle(PadButtonStyle(kind: .primary)).disabled(!canSend)
+                    Text("Logs it as their phone filled it in (the Watch's reps). They can still edit it.")
+                        .font(PadFont.ui(12)).foregroundColor(Pad.faint)
+                } else if stage == .lifting {
+                    Button { link.command(LiveCommand(t: "endSet"), to: p.id) } label: { Label("End set", systemImage: "stop.fill") }
+                        .buttonStyle(PadButtonStyle(kind: .primary)).disabled(!canSend)
+                } else if stage != .done {
+                    Button { link.command(LiveCommand(t: "startSet"), to: p.id) } label: { Label("Start set", systemImage: "play.fill") }
+                        .buttonStyle(PadButtonStyle(kind: .primary)).disabled(!canSend)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                PadLab("REST", size: 12)
+                PadLiveFlow(spacing: 6) {
+                    ForEach([60, 90, 120, 180, 240], id: \.self) { sec in
+                        Button(PadLiveMath.clock(sec)) { link.command(LiveCommand(t: "rest", seconds: sec), to: p.id) }
+                            .buttonStyle(PadButtonStyle(kind: sec == restDefault ? .primary : .outline, small: true))
+                            .disabled(!canSend || logNeeded || stage == .done)
+                    }
+                }
+                if stage == .resting {
+                    HStack(spacing: 6) {
+                        Button("+30 s") { link.command(LiveCommand(t: "addRest", seconds: 30), to: p.id) }
+                            .buttonStyle(PadButtonStyle(kind: .outline, small: true))
+                        Button("Skip rest") { link.command(LiveCommand(t: "skipRest"), to: p.id) }
+                            .buttonStyle(PadButtonStyle(kind: .outline, small: true))
+                    }
+                    .disabled(!canSend)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                PadLab("PLAN", size: 12)
+                Button { openEdit(p) } label: { Label("Edit the plan", systemImage: "pencil") }
+                    .buttonStyle(PadButtonStyle(kind: .outline, small: true))
+                    .disabled(p.workout == nil)
+                Text("Saved to their program, then their phone picks it up. Logged sets stay as they are.")
+                    .font(PadFont.ui(12)).foregroundColor(Pad.faint)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                PadLab(p.name.uppercased(), size: 12)
+                Button { showRecap(p) } label: { Label("Send a recap", systemImage: "text.bubble") }
+                    .buttonStyle(PadButtonStyle(kind: .outline, small: true))
+                Button { link.unfollow(p.id) } label: { Label("Stop following", systemImage: "xmark.circle") }
+                    .buttonStyle(PadButtonStyle(kind: .quiet, small: true))
+            }
+        }
+    }
+
+    private func sendCue(_ p: PadLivePhone, _ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        link.command(LiveCommand(t: "cue", text: t), to: p.id)
+        if t == cueText.trimmingCharacters(in: .whitespacesAndNewlines) { cueText = "" }
+        PadToasts.shared.show("Cue sent to \(p.name.firstName)")
+    }
+
+    private func openEdit(_ p: PadLivePhone) {
+        if p.demo { PadToasts.shared.show("Demo: the plan editor saves to the server, so it's off here"); return }
+        guard let snap = p.workout, let cid = p.clientId else { return }
+        let server: Workout? = data.workouts[cid]?.first { $0.id == snap.id }
+        editing = PadLiveEdit(phoneId: p.id, clientId: cid, clientName: p.name, workout: server ?? snap.toModel())
+    }
+
+    private func showRecap(_ p: PadLivePhone) {
+        if p.demo { PadToasts.shared.show("Demo: a real client gets this recap as a message"); return }
+        recapFor = recap(p)
+    }
+
+    private func recap(_ p: PadLivePhone) -> PadLiveRecap {
+        let w: Workout? = p.workout?.toModel()
+        let sets: [ExerciseSet] = (w?.exercises ?? []).flatMap { $0.sets }
+        let logged: Int = sets.filter { $0.loggedReps != nil }.count
+        let volumeLb: Double = sets.reduce(0) { $0 + $1.volume }
+        var lines: [String] = []
+        lines.append("Nice work today, \(p.name.firstName).")
+        lines.append("\(logged) of \(sets.count) sets · \(SetTarget.weightText(volumeLb)) moved.")
+        if let fastest = p.finished.max(by: { ($0.speeds.max() ?? 0) < ($1.speeds.max() ?? 0) }), let v = fastest.speeds.max() {
+            lines.append("Fastest rep: \(String(format: "%.2f", v)) m/s on \(fastest.label).")
+        }
+        if let peak = p.hr.map({ $0.bpm }).max() { lines.append("Heart rate peaked at \(peak).") }
+        return PadLiveRecap(clientId: p.clientId ?? "", clientName: p.name, subtitle: w?.title ?? "Today's session",
+                            text: lines.joined(separator: "\n"))
+    }
+}
+
+struct PadLiveEdit: Identifiable {
+    let id = UUID()
+    let phoneId: UUID
+    let clientId: String
+    let clientName: String
+    let workout: Workout
+}
+
+struct PadLiveRecap: Identifiable {
+    let id = UUID()
+    let clientId: String
+    let clientName: String
+    let subtitle: String
+    let text: String
+}
+
+// MARK: - Pieces
+
+struct PadLivePanel<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PadLab(title, size: 12)
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Pad.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Pad.line, lineWidth: 1))
+    }
+}
+
+/// One bar per rep, its average speed on the way up. Slow reps (grinds) in orange; the dashed line is their usual.
+struct PadLiveRepBars: View {
+    let speeds: [Double]
+    let usual: Double?
+
+    var body: some View {
+        GeometryReader { g in
+            let top: Double = max((speeds.max() ?? 0), (usual ?? 0) * 1.25, 0.3)
+            let n: Int = max(speeds.count, 1)
+            let gap: CGFloat = 8
+            let barW: CGFloat = max(2, min(64, (g.size.width - gap * CGFloat(n - 1)) / CGFloat(n)))
+            let chartH: CGFloat = g.size.height - 20
+            ZStack(alignment: .bottomLeading) {
+                HStack(alignment: .bottom, spacing: gap) {
+                    ForEach(Array(speeds.enumerated()), id: \.offset) { i, v in
+                        let h: CGFloat = max(4, CGFloat(v / top) * (chartH - 18))
+                        let slow: Bool = v < 0.2 || (usual.map { v < $0 * 0.8 } ?? false)
+                        VStack(spacing: 3) {
+                            Text(String(format: "%.2f", v)).font(PadFont.cond(12, .bold)).foregroundColor(Pad.text).monospacedDigit()
+                            RoundedRectangle(cornerRadius: 5).fill(slow ? Pad.orange : Pad.volt).frame(width: barW, height: h)
+                            Text("\(i + 1)").font(PadFont.cond(11)).foregroundColor(Pad.faint).frame(height: 14)
+                        }
+                    }
+                }
+                if let u = usual {
+                    let y: CGFloat = 14 + 3 + CGFloat(u / top) * (chartH - 18)
+                    Rectangle()
+                        .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .foregroundColor(Pad.mute)
+                        .frame(height: 1)
+                        .offset(y: -y)
+                    Text("usual \(String(format: "%.2f", u))").font(PadFont.cond(11)).foregroundColor(Pad.mute)
+                        .offset(x: 0, y: -y - 14)
+                }
+            }
+            .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
+        }
+        .accessibilityLabel(spoken)
+    }
+
+    private var spoken: String {
+        let list: String = speeds.map { String(format: "%.2f", $0) }.joined(separator: ", ")
+        return "Bar speed per rep: \(list) metres per second"
+    }
+}
+
+/// Wraps its children onto new lines (cue chips, rest buttons).
+struct PadLiveFlow: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW: CGFloat = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0, x + s.width > maxW { x = 0; y += rowH + spacing; rowH = 0 }
+            x += s.width + spacing
+            rowH = max(rowH, s.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + rowH)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX, y: CGFloat = bounds.minY, rowH: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + s.width > bounds.maxX { x = bounds.minX; y += rowH + spacing; rowH = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
+            x += s.width + spacing
+            rowH = max(rowH, s.height)
+        }
+    }
+}
+
+/// Hosts the Live cover for the shell. Its own view, so the shell doesn't redraw with every update
+/// from a followed phone (a couple a second) — only this does.
+struct PadLiveHost: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var link = PadLiveLink.shared
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .fullScreenCover(isPresented: $link.hudOpen) { PadLiveView().environmentObject(store) }
+    }
+}

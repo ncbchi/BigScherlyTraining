@@ -605,6 +605,26 @@ final class DepthCamera: ObservableObject {
     @Published private(set) var plateBox: CGRect?            // where it is now (Vision coordinates)
     @Published private(set) var plateLostSince: Date?
     @Published private(set) var snapshot: CGImage?
+    /// Live session (debug): every pose and plate frame since it started.
+    private(set) var livePoses: [LivePose] = []
+    private(set) var livePlates: [LivePlate] = []
+    private var liveLogging = false
+    /// Starts once per live session (a second call, e.g. the Watch's Go, keeps what's logged).
+    func startLiveLog() {
+        guard !liveLogging else { return }
+        livePoses = []; livePlates = []; liveLogging = true
+    }
+    /// One line for the live file: where the camera chain stands.
+    var liveCheck: String {
+        let auth: String
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: auth = "allowed"
+        case .notDetermined: auth = "not asked"
+        default: auth = "DENIED"
+        }
+        return "camera check: tracking=\(MotionCaptureStore.cameraTracking ? "on" : "OFF") access=\(auth) status=\(status) running=\(rig.running) logging=\(liveLogging) framesIn=\(rig.framesIn) bodiesFound=\(rig.bodiesFound) logged=\(livePoses.count)"
+    }
+    func stopLiveLog() { liveLogging = false }          // (the log stays for the final write)
     let rig = DepthRig()
     private var depthSince: Date?
 
@@ -669,6 +689,10 @@ final class DepthCamera: ObservableObject {
         }
         plateLostSince = nil
         plateBox = CGRect(x: f.x - f.h / 2, y: f.y - f.h / 2, width: f.h, height: f.h)
+        if liveLogging {
+            livePlates.append(LivePlate(t: f.t, y: Int((f.y * 1000).rounded()), h: Int((f.h * 1000).rounded()),
+                                        c: Int((f.c * 100).rounded())))
+        }
         guard let r = rec, r.joint == "plate" else { return }
         rec?.t.append(f.t); rec?.y.append(f.y); rec?.c.append(f.c); rec?.h.append(f.h)
     }
@@ -709,6 +733,11 @@ final class DepthCamera: ObservableObject {
 
     private func applyPose(_ f: PoseFrame) {
         poseSeen = true
+        if liveLogging {
+            func y(_ p: PosePoint?) -> Int { p.map { Int(($0.y * 1000).rounded()) } ?? -1 }
+            livePoses.append(LivePose(t: f.t, ys: [y(f.wristL), y(f.wristR), y(f.hipL), y(f.hipR), y(f.kneeL),
+                                                  y(f.kneeR), y(f.nose), y(f.ankleL), y(f.ankleR)]))
+        }
         if rec == nil, let nose = f.nose, let ankle = [f.ankleL, f.ankleR].compactMap({ $0 }).max(by: { $0.c < $1.c }),
            nose.c > 0.6, ankle.c > 0.6,                // a guessed ankle (feet out of frame) throws the scale off
            nose.y - ankle.y > 0.3 {
@@ -771,6 +800,12 @@ final class DepthCamera: ObservableObject {
 
 nonisolated struct PosePoint: Sendable { var x: Double; var y: Double; var c: Double }
 
+/// Live session log (debug): every joint height per pose frame, ×1000 (-1 = not seen).
+/// Order: wristL, wristR, hipL, hipR, kneeL, kneeR, nose, ankleL, ankleR.
+nonisolated struct LivePose: Sendable { var t: Double; var ys: [Int] }
+/// Live session log: the plate's centre height and box height ×1000, confidence ×100.
+nonisolated struct LivePlate: Sendable { var t: Double; var y: Int; var h: Int; var c: Int }
+
 /// The plate this frame: centre and box height in Vision units (0…1 of the frame), confidence.
 nonisolated struct PlateFrame: Sendable { var t: Double; var x: Double; var y: Double; var h: Double; var c: Double }
 
@@ -797,6 +832,10 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private let output = AVCaptureVideoDataOutput()
     private var configured = false
     private var frame = 0
+    /// Live-session check: camera frames in, and pose frames with a body found.
+    private(set) var framesIn = 0
+    private(set) var bodiesFound = 0
+    var running: Bool { session.isRunning }
     var onReading: (@Sendable (Bool?) -> Void)?
     /// Camera tracking test: every body-pose frame, with joints and a wall-clock time.
     var onPose: (@Sendable (PoseFrame) -> Void)?
@@ -841,6 +880,7 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         frame += 1
+        framesIn += 1
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         if wantsSnapshot, frame % 6 == 0 {                     // ~5 a second while you mark the plate
             let image = CIImage(cvPixelBuffer: pixels)
@@ -867,6 +907,7 @@ nonisolated final class DepthRig: NSObject, AVCaptureVideoDataOutputSampleBuffer
         try? VNImageRequestHandler(cvPixelBuffer: pixels, orientation: .up).perform([request])
         guard let body = request.results?.first,
               let pts = try? body.recognizedPoints(.all) else { onReading?(nil); return }
+        bodiesFound += 1
         if wantsPose, onPose != nil {
             // The frame's time on the wall clock (capture timestamps run on the host clock).
             let stamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
@@ -917,6 +958,31 @@ struct DepthPreview: UIViewRepresentable {
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        private var coordinator: AVCaptureDevice.RotationCoordinator?
+
+        /// Upright (portrait), like the frames Vision gets. The camera's input and the preview's
+        /// connection only exist once the camera's running, so keep trying for a few seconds.
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            for i in 0..<12 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak self] in self?.makeUpright() }
+            }
+        }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            makeUpright()
+        }
+        private func makeUpright() {
+            if coordinator == nil,
+               let cam = previewLayer.session?.inputs.compactMap({ ($0 as? AVCaptureDeviceInput)?.device }).first {
+                let rc = AVCaptureDevice.RotationCoordinator(device: cam, previewLayer: previewLayer)
+                coordinator = rc
+            }
+            let angle = coordinator?.videoRotationAngleForHorizonLevelPreview ?? 90
+            guard let c = previewLayer.connection, c.isVideoRotationAngleSupported(angle), c.videoRotationAngle != angle else { return }
+            c.videoRotationAngle = angle
+        }
     }
 }
 

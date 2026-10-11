@@ -1,17 +1,20 @@
 import SwiftUI
 
-// MARK: - Trainer: a client's workouts (read-only)
+// MARK: - Trainer: a client's workouts
 // Every workout assigned to the client — upcoming, missed and completed — with
-// prescribed vs. logged sets. Nothing on these screens edits anything.
+// prescribed vs. logged sets. Edit (Oct 8, 2026): the detail screen's Edit opens the
+// builder prefilled; program sessions show their program label.
 
 struct TrainerWorkoutsView: View {
     let clientId: String
     var clientName: String = ""
     @State private var workouts: [Workout] = []
+    @State private var labels: [String: String] = [:]
     @State private var loading = true
     @State private var failed = false
     @State private var filter: Filter = .upcoming
     @State private var pickedDefault = false
+    @State private var building = false
 
     enum Filter: String, CaseIterable, Identifiable {
         case upcoming  = "Upcoming"
@@ -35,6 +38,10 @@ struct TrainerWorkoutsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                // Programs: what they're on, the automatic changes, assign / switch / end.
+                ClientProgramCard(clientId: clientId, clientName: clientName) { Task { await load() } }
+                Button { building = true } label: { Label("New workout", systemImage: "plus") }
+                    .buttonStyle(DSButtonStyle(kind: .secondary))
                 HStack(spacing: 8) {
                     ForEach(Filter.allCases) { f in
                         let n = bucket(f).count
@@ -65,7 +72,8 @@ struct TrainerWorkoutsView: View {
                 } else {
                     ForEach(list) { w in
                         NavigationLink {
-                            TrainerWorkoutDetailView(workout: w)
+                            TrainerWorkoutDetailView(workout: w, clientId: clientId, clientName: clientName,
+                                                     programLabel: labels[w.id]) { Task { await load() } }
                         } label: {
                             row(w)
                         }
@@ -77,6 +85,11 @@ struct TrainerWorkoutsView: View {
         }
         .refreshable { await load() }
         .task { await load() }
+        .sheet(isPresented: $building) {
+            WorkoutBuilderView(clientId: clientId, clientName: clientName) {
+                Task { await load(); filter = .upcoming }
+            }
+        }
     }
 
     private var emptyText: String {
@@ -101,6 +114,9 @@ struct TrainerWorkoutsView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(w.completed ? Brand.volt : Brand.text.opacity(0.06)))
             VStack(alignment: .leading, spacing: 3) {
                 Text(w.title).font(BrandFont.body(15, .heavy)).foregroundColor(Brand.text)
+                if let label = labels[w.id] {
+                    Text(label).font(BrandFont.body(11, .bold)).foregroundColor(Brand.voltText).lineLimit(1)
+                }
                 Text("\(w.dayOfWeek) · \(w.date.formatted(date: .abbreviated, time: .omitted))")
                     .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                 if !w.exercises.isEmpty {
@@ -129,6 +145,7 @@ struct TrainerWorkoutsView: View {
         do {
             let api = try await APIClient.shared.trainerWorkouts(clientId: clientId)
             workouts = api.map { $0.toModel() }
+            labels = Dictionary(api.compactMap { a in a.programLabel.map { (a.id, $0) } }, uniquingKeysWith: { a, _ in a })
             failed = false
         } catch {
             failed = true
@@ -145,16 +162,33 @@ struct TrainerWorkoutsView: View {
     }
 }
 
-// MARK: - One workout, read-only
+// MARK: - One workout
 
 struct TrainerWorkoutDetailView: View {
-    let workout: Workout
+    @State var workout: Workout
+    var clientId: String = ""
+    var clientName: String = ""
+    var programLabel: String? = nil
+    var onChanged: () -> Void = {}
+    @State private var editing = false
+    @State private var commenting: SetToComment?
+    @State private var savingToLibrary = false
+    @State private var libraryName = ""
+    @State private var savedNote: String?
+
+    struct SetToComment: Identifiable { let id: String; let label: String }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(workout.title).font(BrandFont.display(30)).foregroundColor(Brand.text)
+                    if let programLabel {
+                        Text(programLabel).font(BrandFont.body(12, .bold)).foregroundColor(Brand.voltText)
+                    }
+                    if let savedNote {
+                        Text(savedNote).font(BrandFont.body(12, .semibold)).foregroundColor(Brand.voltText)
+                    }
                     HStack(spacing: 10) {
                         Text("\(workout.dayOfWeek) · \(workout.date.formatted(date: .abbreviated, time: .omitted))")
                             .font(BrandFont.body(13)).foregroundColor(Brand.mute)
@@ -176,6 +210,43 @@ struct TrainerWorkoutDetailView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !clientId.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { libraryName = workout.title; savingToLibrary = true } label: { Image(systemName: "books.vertical") }
+                        .foregroundColor(Brand.voltText).accessibilityLabel("Save to library")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { editing = true }.foregroundColor(Brand.voltText)
+                }
+            }
+        }
+        .alert("Save to library", isPresented: $savingToLibrary) {
+            TextField("Name", text: $libraryName)
+            Button("Save") {
+                let n = libraryName.trimmingCharacters(in: .whitespaces)
+                Task {
+                    do { try await APIClient.shared.saveWorkoutToLibrary(workoutId: workout.id, name: n); savedNote = "Saved to your library" }
+                    catch { savedNote = "Couldn't save to the library" }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Saves the exercises and set targets (not what they logged) so you can give it to anyone.") }
+        .sheet(item: $commenting) { c in
+            SetCommentSheet(setId: c.id, label: c.label, clientName: clientName)
+        }
+        .sheet(isPresented: $editing) {
+            WorkoutBuilderView(clientId: clientId, clientName: clientName, editing: workout, programLabel: programLabel) {
+                Task { await reload() }
+            }
+        }
+    }
+
+    private func reload() async {
+        if let fresh = try? await APIClient.shared.trainerWorkouts(clientId: clientId).first(where: { $0.id == workout.id }) {
+            workout = fresh.toModel()
+        }
+        onChanged()
     }
 
     // MARK: Status
@@ -216,7 +287,7 @@ struct TrainerWorkoutDetailView: View {
                     setHeader
                     ForEach(Array(ex.sets.enumerated()), id: \.element.id) { i, s in
                         Divider().overlay(Brand.line)
-                        setRow(i + 1, s)
+                        setRow(i + 1, s, in: ex)
                     }
                 }
             }
@@ -234,17 +305,18 @@ struct TrainerWorkoutDetailView: View {
             Text("TARGET").frame(maxWidth: .infinity, alignment: .leading)
             Text("LOGGED").frame(maxWidth: .infinity, alignment: .leading)
             Text("RPE").frame(width: 36, alignment: .trailing)
+            if !clientId.isEmpty { Color.clear.frame(width: 28, height: 1) }
         }
         .font(BrandFont.body(9, .bold)).tracking(1).foregroundColor(Brand.mute)
         .padding(.bottom, 6)
     }
 
-    private func setRow(_ n: Int, _ s: ExerciseSet) -> some View {
+    private func setRow(_ n: Int, _ s: ExerciseSet, in ex: Exercise) -> some View {
         let loggedText: String
         let loggedColor: Color
         if let r = s.loggedReps {
             loggedText = "\(r) × \(weight(s.loggedWeight ?? 0))"
-            let hit = r >= s.targetReps && (s.loggedWeight ?? 0) >= s.targetWeight
+            let hit = ProgressEngine.setHit(s, in: ex)
             loggedColor = hit ? Brand.volt : .orange
         } else {
             loggedText = "—"
@@ -252,13 +324,25 @@ struct TrainerWorkoutDetailView: View {
         }
         return HStack {
             Text("\(n)").frame(width: 34, alignment: .leading).foregroundColor(Brand.mute)
-            Text("\(s.targetReps) × \(weight(s.targetWeight))")
+            Text(SetTarget.text(s, in: ex))
                 .frame(maxWidth: .infinity, alignment: .leading).foregroundColor(Brand.text)
             Text(loggedText)
                 .frame(maxWidth: .infinity, alignment: .leading).foregroundColor(Brand.readable(loggedColor))
             Text(s.rpe.map { $0.rpeText } ?? "—")
                 .frame(width: 36, alignment: .trailing)
                 .foregroundColor(s.rpe == nil ? Brand.mute : Brand.text)
+            if !clientId.isEmpty {
+                // Comment on this set → their chat, set quoted (Oct 8, 2026)
+                Button {
+                    let what = s.loggedReps != nil ? loggedText : SetTarget.text(s, in: ex) + " (planned)"
+                    commenting = SetToComment(id: s.id, label: "\(ex.name) · Set \(n) — \(what)")
+                } label: {
+                    Image(systemName: "text.bubble").font(.system(size: 13, weight: .semibold)).foregroundColor(Brand.voltText)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Comment on set \(n)")
+            }
         }
         .font(BrandFont.body(13, .semibold))
         .padding(.vertical, 8)

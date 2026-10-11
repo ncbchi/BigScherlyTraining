@@ -46,7 +46,7 @@ struct ShareCameraView: View {
                 Spacer(minLength: 8)
 
                 ZStack {
-                    // Photo area = the card minus its 10pt outer padding, rounded like the card.
+                    // Photo area = the whole card, edge to edge (the Share editor's card is full-bleed).
                     Group {
                         if let img = captured {
                             Image(uiImage: img).resizable().scaledToFill()
@@ -54,8 +54,8 @@ struct ShareCameraView: View {
                             CameraPreview(session: camera.session)
                         }
                     }
-                    .frame(width: cw - 20 * s, height: ch - 20 * s)
-                    .clipShape(RoundedRectangle(cornerRadius: 28 * s))
+                    .frame(width: cw, height: ch)
+                    .clipShape(RoundedRectangle(cornerRadius: 18 * s))
 
                     // Stats, logo, scrim and border — the real card, composed at its
                     // canonical size and scaled, exactly like the Share screen preview.
@@ -66,8 +66,8 @@ struct ShareCameraView: View {
                         .allowsHitTesting(false)
 
                     if flash {
-                        RoundedRectangle(cornerRadius: 28 * s).fill(Color.white)
-                            .frame(width: cw - 20 * s, height: ch - 20 * s)
+                        RoundedRectangle(cornerRadius: 18 * s).fill(Color.white)
+                            .frame(width: cw, height: ch)
                     }
                 }
                 .frame(width: cw, height: ch)

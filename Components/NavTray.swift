@@ -36,14 +36,19 @@ struct FloatingMenuButton: View {
 // MARK: - Menu groups and your layout (Settings ▸ Menu order)
 
 enum MenuGroup: String, CaseIterable, Identifiable {
-    case train = "Train", fuel = "Fuel", progress = "Progress", connect = "Connect"
+    case coach = "Coach", train = "Train", fuel = "Fuel", progress = "Progress", connect = "Connect"
     var id: String { rawValue }
     var tabs: [AppTab] {
+        // A coach trains with the same screens as his clients, minus the ones that only
+        // make sense with a coach of your own: no Chat or Announcements in his Connect
+        // (Chat lives under COACH), no Check-ins in his Progress.
+        let coach = AppStore.shared.isTrainer
         switch self {
+        case .coach: return coach ? AppTab.coachTabs : []
         case .train: return [.dashboard, .workouts, .history]
         case .fuel: return [.macros, .supplements]
-        case .progress: return [.checkins, .photos, .awards]
-        case .connect: return [.chat, .announcements, .share]
+        case .progress: return coach ? [.photos, .awards] : [.checkins, .photos, .awards]
+        case .connect: return coach ? [.share] : [.chat, .announcements, .share]
         }
     }
 }
@@ -76,6 +81,8 @@ struct NavTray: View {
     @EnvironmentObject var store: AppStore
     @ObservedObject private var theme = ThemeStore.shared
     @State private var confirmLogout = false
+    /// The COACH group starts collapsed and remembers when it's opened.
+    @AppStorage("bst_coach_open") private var coachOpen = false
 
     var body: some View {
         GeometryReader { geo in
@@ -146,10 +153,12 @@ struct NavTray: View {
 
                 ForEach(MenuGroup.allCases) { g in
                     let tabs = MenuLayout.visible(g)
-                    if !tabs.isEmpty {
+                    if g == .coach, !tabs.isEmpty {
+                        coachSection(tabs)
+                    } else if !tabs.isEmpty {
                         section(g.rawValue.uppercased()) {
                             ForEach(tabs) { tab in
-                                row(icon: tab.icon, title: tab.rawValue, on: store.activeTab == tab, trailing: trailing(for: tab)) {
+                                row(icon: tab.icon, title: tab.title, on: store.activeTab == tab, trailing: trailing(for: tab)) {
                                     store.select(tab)
                                 }
                             }
@@ -157,7 +166,16 @@ struct NavTray: View {
                     }
                 }
 
-                section("SETTINGS") {
+                section("TOOLS") {
+                    row(icon: PlateMenuGlyph.symbol, title: "Plate calculator", on: false,
+                        trailing: platesSeen ? nil : AnyView(badge("NEW"))) {
+                        platesSeen = true
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { store.showTray = false }
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 300_000_000)    // let the menu slide away first
+                            PlateCalc.shared.open()
+                        }
+                    }
                     row(icon: AppTab.settings.icon, title: "Settings", on: store.activeTab == .settings, trailing: nil) {
                         store.select(.settings)
                     }
@@ -226,7 +244,53 @@ struct NavTray: View {
         .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
     }
 
+    // MARK: COACH — a dropdown of every coaching screen
+
+    private func coachSection(_ tabs: [AppTab]) -> some View {
+        let waiting = store.totalUnread + store.pendingCheckInCount
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                UISelectionFeedbackGenerator().selectionChanged()
+                withAnimation(.snappy(duration: 0.28)) { coachOpen.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("COACH").font(BrandFont.body(11, .heavy)).tracking(1.8).headerPill()
+                    if !coachOpen && waiting > 0 { badge("\(waiting)") }
+                    Spacer()
+                    Image(systemName: "chevron.down").font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Brand.mute)
+                        .rotationEffect(.degrees(coachOpen ? 0 : -90))
+                }
+                .padding(.leading, 2).padding(.trailing, 6)
+                .frame(minHeight: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Coach")
+            .accessibilityValue(coachOpen ? "Expanded" : "Collapsed")
+            .accessibilityHint(waiting > 0 ? "\(waiting) waiting on you" : "")
+
+            if coachOpen {
+                VStack(spacing: 0) {
+                    ForEach(tabs) { tab in
+                        row(icon: tab.icon, title: tab.title, on: store.activeTab == tab, trailing: trailing(for: tab)) {
+                            store.select(tab)
+                        }
+                    }
+                }
+                .padding(4)
+                .background(RoundedRectangle(cornerRadius: 18).fill(Brand.card))
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Brand.line, lineWidth: 1))
+                .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
     // MARK: Groups and rows
+
+    // Tools ▸ Plate calculator wears NEW until it has been opened once.
+    @AppStorage("bst_plates_seen") private var platesSeen = false
 
     private func section<C: View>(_ title: String, @ViewBuilder _ rows: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -243,9 +307,15 @@ struct NavTray: View {
                      action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: icon).font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(on ? Brand.onVolt : (muted ? Brand.mute : Brand.voltText))
-                    .frame(width: 22)
+                Group {
+                    if icon == PlateMenuGlyph.symbol {
+                        PlateMenuGlyph(bar: on ? Brand.onVolt : (muted ? Brand.mute : Brand.voltText))
+                    } else {
+                        Image(systemName: icon).font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(on ? Brand.onVolt : (muted ? Brand.mute : Brand.voltText))
+                    }
+                }
+                .frame(width: 22)
                 Text(title).font(BrandFont.body(15, .bold))
                     .foregroundColor(on ? Brand.onVolt : (muted ? Brand.mute : Brand.text))
                 Spacer(minLength: 6)
@@ -265,6 +335,12 @@ struct NavTray: View {
         switch tab {
         case .chat where store.unreadMessages > 0:
             return AnyView(badge("\(store.unreadMessages)"))
+        case .coachChat where store.totalUnread > 0:
+            return AnyView(badge("\(store.totalUnread)"))
+        case .coachCheckins where store.pendingCheckInCount > 0:
+            return AnyView(badge("\(store.pendingCheckInCount)"))
+        case .coachToday where store.attentionCount > 0:
+            return AnyView(hint("\(store.attentionCount) need you"))
         case .announcements where !store.liveAnnouncements.isEmpty:
             return AnyView(badge("\(store.liveAnnouncements.count)"))
         case .workouts:

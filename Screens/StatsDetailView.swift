@@ -1186,8 +1186,8 @@ private struct MetricChooser: View {
             }
             .padding(20)
         }
+        .sheetFitsScrollContent()            // the card is only as tall as what's in it
         .background(Brand.bg.ignoresSafeArea())
-        .presentationDetents([.fraction(0.75), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(Brand.bg)
     }
@@ -1262,9 +1262,9 @@ struct LiftChooser: View {
             }
             .padding(20)
         }
+        .sheetFitsScrollContent()            // the card is only as tall as what's in it
         .scrollDismissesKeyboard(.interactively)
         .background(Brand.bg.ignoresSafeArea())
-        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(Brand.bg)
     }

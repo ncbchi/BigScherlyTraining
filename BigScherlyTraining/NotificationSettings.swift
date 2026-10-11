@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import Combine
 import AVFoundation
-import AudioToolbox
 import UserNotifications
 
 // MARK: - Sounds (bundled in BigScherlyTraining/Sounds, made for the app)
@@ -68,11 +67,12 @@ enum NotifKind: String, CaseIterable {
     // From the coach (push)
     case messages, checkinReviewed, workouts, announcements
     // From clients (push, coaches)
-    case clientMessages, clientVideos, clientCheckins
+    case clientMessages, clientVideos, clientCheckins, clientAwards, clientQuiet
     // On the phone
     case rest, supplements, checkinReminder, workoutReminder, prs
 
-    var isPush: Bool { [.messages, .checkinReviewed, .workouts, .announcements, .clientMessages, .clientVideos, .clientCheckins].contains(self) }
+    var isPush: Bool { [.messages, .checkinReviewed, .workouts, .announcements, .clientMessages, .clientVideos, .clientCheckins,
+                        .clientAwards, .clientQuiet].contains(self) }
 
     var defaultSound: BSTSound {
         switch self {
@@ -80,7 +80,7 @@ enum NotifKind: String, CaseIterable {
         case .checkinReviewed, .clientCheckins: return .bell
         case .rest: return .bell
         case .supplements: return .rise
-        case .prs: return .whistle
+        case .prs, .clientAwards: return .whistle
         default: return .system
         }
     }
@@ -276,14 +276,11 @@ final class SoundPlayer {
 
     func play(_ snd: BSTSound, respectOutput: Bool = true) {
         if respectOutput && !AudioOutput.soundsAllowed { return }
-        if snd == .system {
-            // The same tone the background notification uses for "iPhone default".
-            AudioServicesPlaySystemSound(1007)
-            return
-        }
         let url: URL?
         if let f = snd.file, snd != .none {
             url = Bundle.main.url(forResource: (f as NSString).deletingPathExtension, withExtension: "wav")
+        } else if snd == .system {
+            url = Bundle.main.url(forResource: "bell", withExtension: "mp3")
         } else {
             url = nil
         }
@@ -363,15 +360,29 @@ enum LocalReminders {
     static let checkinId = "bst.checkin.reminder"
     static let workoutPrefix = "bst.workout.reminder."
 
+    /// Notification-centre calls are synchronous round trips to the system's notification service.
+    /// On the main thread a slow (or, in the Simulator, a stuck) service freezes the whole app: it
+    /// hung on the splash screen on iPad (Oct 9, 2026). So the remove/add calls run on this queue,
+    /// in order. The requests themselves are built on the main thread, which is quick.
+    nonisolated static let queue = DispatchQueue(label: "bst.local-reminders", qos: .utility)
+
     @MainActor static func refresh(_ store: AppStore) {
-        let center = UNUserNotificationCenter.current()
         let p = NotifPrefs.shared.s
         // Clear what we may have scheduled before (by id, in order — so the new ones below survive).
-        center.removePendingNotificationRequests(withIdentifiers: [checkinId] + store.workouts.map { workoutPrefix + $0.id })
-        guard store.isLoggedIn, !store.isTrainer else { return }
+        let remove = [checkinId] + store.workouts.map { workoutPrefix + $0.id }
+        var add: [UNNotificationRequest] = []
+        defer {
+            let requests = add
+            queue.async {
+                let center = UNUserNotificationCenter.current()
+                center.removePendingNotificationRequests(withIdentifiers: remove)
+                for r in requests { center.add(r) }
+            }
+        }
+        guard store.isLoggedIn else { return }
 
-        // Weekly check-in
-        if p.isOn(.checkinReminder) && !inQuiet(p.checkinMinutes, p) {
+        // Weekly check-in (not for coaches — they don't send one)
+        if !store.isTrainer && p.isOn(.checkinReminder) && !inQuiet(p.checkinMinutes, p) {
             let c = UNMutableNotificationContent()
             c.title = "Check-in day"
             c.body = "Two minutes: weight, photos, how the week went."
@@ -379,7 +390,7 @@ enum LocalReminders {
             c.userInfo = ["route": "checkins"]
             var comps = DateComponents()
             comps.weekday = p.checkinWeekday; comps.hour = p.checkinMinutes / 60; comps.minute = p.checkinMinutes % 60
-            center.add(UNNotificationRequest(identifier: checkinId, content: c,
+            add.append(UNNotificationRequest(identifier: checkinId, content: c,
                                              trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)))
         }
 
@@ -395,7 +406,7 @@ enum LocalReminders {
             c.body = "\(w.exercises.count) exercises — tap to start."
             c.sound = AudioOutput.notificationSound(.system)
             c.userInfo = ["route": "workouts"]
-            center.add(UNNotificationRequest(identifier: workoutPrefix + w.id, content: c,
+            add.append(UNNotificationRequest(identifier: workoutPrefix + w.id, content: c,
                                              trigger: UNCalendarNotificationTrigger(
                                                 dateMatching: cal.dateComponents([.year, .month, .day, .hour, .minute], from: when),
                                                 repeats: false)))
@@ -404,7 +415,8 @@ enum LocalReminders {
 
     /// The workout started: no nudge for it.
     static func cancelWorkout(_ id: String) {
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [workoutPrefix + id])
+        let ids = [workoutPrefix + id]
+        queue.async { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids) }
     }
 
     /// A PR earned while the app was in the background (logged on the Watch or Lock Screen).
@@ -600,7 +612,7 @@ struct NotificationSettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if store.isTrainer { coachKinds } else { clientKinds; reminders; workout }
+                    if store.isTrainer { coachKinds; reminders; workout } else { clientKinds; reminders; workout }
                     delivery
                     previewButton
                     HStack(alignment: .top, spacing: 8) {
@@ -668,18 +680,22 @@ struct NotificationSettingsView: View {
         NSection(title: "From your clients") {
             kindToggle("Messages", .clientMessages); NDivider()
             kindToggle("Videos", .clientVideos); NDivider()
-            kindToggle("Check-ins", .clientCheckins)
+            kindToggle("Check-ins", .clientCheckins); NDivider()
+            kindToggle("PRs & awards", .clientAwards); NDivider()
+            kindToggle("Going quiet (7 days, no workout)", .clientQuiet)
         }
     }
 
     private var reminders: some View {
         NSection(title: "Reminders") {
-            NLink(title: "Check-in reminder",
-                  value: prefs.s.isOn(.checkinReminder)
-                    ? "\(Calendar.current.shortWeekdaySymbols[(prefs.s.checkinWeekday - 1) % 7]) \(clock(prefs.s.checkinMinutes))" : "Off") {
-                CheckInReminderView()
+            if !store.isTrainer {   // coaches don't send check-ins
+                NLink(title: "Check-in reminder",
+                      value: prefs.s.isOn(.checkinReminder)
+                        ? "\(Calendar.current.shortWeekdaySymbols[(prefs.s.checkinWeekday - 1) % 7]) \(clock(prefs.s.checkinMinutes))" : "Off") {
+                    CheckInReminderView()
+                }
+                NDivider()
             }
-            NDivider()
             NLink(title: "Supplements", sub: "Each at its scheduled time",
                   value: prefs.s.isOn(.supplements) ? prefs.s.sound(.supplements).title : "Off") {
                 KindDetailView(title: "Supplements", kind: .supplements)

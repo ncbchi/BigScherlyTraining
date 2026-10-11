@@ -121,6 +121,8 @@ struct ChatThreadView: View {
     @State private var localVideos: [String: URL] = [:]   // messageID -> compressed file (this session)
     @State private var thumbs: [String: UIImage] = [:]     // messageID -> poster frame
     @State private var playing: IdentifiableURL?           // drives the player sheet
+    @State private var recordingVoice = false              // voice note sheet (Oct 8, 2026)
+    @State private var loadingVideo: String?
 
     var body: some View {
         NavigationStack {
@@ -165,6 +167,12 @@ struct ChatThreadView: View {
                 HStack(spacing: 12) {
                     PhotosPicker(selection: $pickedItem, matching: .videos, photoLibrary: .shared()) {
                         Image(systemName: "video.badge.plus").foregroundColor(Brand.voltText).font(.system(size: 22))
+                    }
+                    if store.isLive {
+                        Button { recordingVoice = true } label: {
+                            Image(systemName: "mic.fill").foregroundColor(Brand.voltText).font(.system(size: 20))
+                        }
+                        .accessibilityLabel("Record a voice note")
                     }
                     TextField("", text: $draft, prompt: Text("Message coach…").foregroundColor(Brand.mute))
                         .foregroundColor(Brand.text).padding(12).background(Brand.black)
@@ -212,6 +220,14 @@ struct ChatThreadView: View {
             }
             .sheet(item: $playing) { p in
                 VideoPlayer(player: AVPlayer(url: p.url)).ignoresSafeArea()
+            }
+            .sheet(isPresented: $recordingVoice) {
+                VoiceNoteSheet(title: "Voice note to coach") { url, secs, transcript in
+                    try await APIClient.shared.sendVoiceNote(threadId: thread.id, fileURL: url, seconds: secs, transcript: transcript, asCoach: false)
+                    if let msgs = try? await APIClient.shared.messages(thread.id) {
+                        await MainActor.run { thread.messages = msgs.map { $0.toModel() } }
+                    }
+                }
             }
         }
     }
@@ -294,7 +310,22 @@ struct ChatThreadView: View {
             if !m.fromTrainer { Spacer(minLength: 40) }
             VStack(alignment: m.fromTrainer ? .leading : .trailing, spacing: 4) {
                 if hasVideo(m) { videoThumb(m) }
-                if !m.text.isEmpty {
+                if m.kind == "voice" {
+                    VoiceNoteBubble(id: m.id, fromMe: !m.fromTrainer, seconds: m.voiceSeconds ?? 0, available: m.voiceAvailable ?? false,
+                                    expiresAt: m.voiceExpiresAt, transcript: m.transcript) {
+                        try await APIClient.shared.voiceNoteAudio(threadId: thread.id, messageId: m.id, asCoach: false)
+                    }
+                } else if m.kind == "setComment", let ref = m.setRef {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SetRefQuote(ref: ref, onVolt: !m.fromTrainer)
+                        Text(setCommentBody(m.text)).font(BrandFont.body(15))
+                            .foregroundColor(m.fromTrainer ? Brand.text : Brand.onVolt)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(m.fromTrainer ? Brand.black : Brand.volt)
+                    .clipShape(shape)
+                    .overlay(m.fromTrainer ? shape.stroke(Brand.line, lineWidth: 1) : nil)
+                } else if !m.text.isEmpty {
                     Text(m.text)
                         .font(BrandFont.body(15))
                         .foregroundColor(m.fromTrainer ? Brand.text : Brand.onVolt)
@@ -319,10 +350,12 @@ struct ChatThreadView: View {
             if let url = localVideos[m.id] {
                 playing = IdentifiableURL(url: url)                 // played this session — instant
             } else if let key = m.videoKey {
-                Task {                                              // older clip — fetch a signed URL
-                    if let url = try? await APIClient.shared.chatVideoURL(threadId: thread.id, key: key) {
+                Task {                                              // older clip, or one from coach: download with the token
+                    loadingVideo = m.id
+                    if let url = try? await APIClient.shared.chatVideoFile(threadId: thread.id, key: key, asCoach: false) {
                         await MainActor.run { playing = IdentifiableURL(url: url) }
                     }
+                    loadingVideo = nil
                 }
             }
         } label: {
@@ -333,8 +366,12 @@ struct ChatThreadView: View {
                     Rectangle().fill(Brand.black)
                     Image(systemName: "video.fill").foregroundColor(Brand.mute).font(.system(size: 26))
                 }
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 46)).foregroundColor(Brand.text.opacity(0.92)).shadow(radius: 6)
+                if loadingVideo == m.id {
+                    ProgressView().tint(Brand.text).scaleEffect(1.4)
+                } else {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 46)).foregroundColor(Brand.text.opacity(0.92)).shadow(radius: 6)
+                }
             }
             .frame(width: 210, height: 140)
             .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -374,6 +411,7 @@ struct NewChatSheet: View {
     @State private var category: ChatCategory = .general
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Start a new conversation. Give it a topic so it stays organized.")
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
@@ -408,6 +446,9 @@ struct NewChatSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) }
             }
+            }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
+            .background(Brand.bg.ignoresSafeArea())
         }
     }
 }

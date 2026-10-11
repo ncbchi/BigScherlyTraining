@@ -1,160 +1,7 @@
 import SwiftUI
 
-// MARK: - Trainer shell
-//
-// Read + respond. Same slide-in tray navigation as the client app (no bottom tab bar),
-// for a consistent experience across both. Authoring stays in the web console.
-
-struct TrainerShell: View {
-    @EnvironmentObject var store: AppStore
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            // Active section
-            Group {
-                switch store.trainerTab {
-                case .today:     TrainerTodayView()
-                case .clients:   RosterView()
-                case .chat:      NavigationStack { TrainerChatSection() }
-                case .checkins:  CheckInQueueView()
-                case .wins:      WinsFeedView()
-                case .share:     TrainerShareView()
-                case .insights:  TrainerInsightsView()
-                case .announce:  AnnouncementsComposerView()
-                case .me:        TrainerMeView()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Same hamburger (upper right) + right-edge swipe as the client app.
-            TrainerEdgeSwipeCatcher {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { store.showTray = true }
-            }
-            FloatingMenuButton()
-                .padding(.trailing, 16).padding(.top, 8)
-
-            TrainerTray()
-        }
-        .background(Brand.bg.ignoresSafeArea())
-        .onAppear { if store.roster.isEmpty { store.loadRoster() } }
-        // One place opens a client's profile, from any section.
-        .sheet(item: $store.selectedClient) { c in TrainerClientView(client: c) }
-    }
-}
-
-// Right-edge swipe to open the tray — mirror of the client app's catcher.
-private struct TrainerEdgeSwipeCatcher: View {
-    let onOpen: () -> Void
-    var body: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            Color.clear.contentShape(Rectangle()).frame(width: 20)
-                .gesture(
-                    DragGesture(minimumDistance: 12).onEnded { v in
-                        if v.translation.width < -25 && abs(v.translation.width) > abs(v.translation.height) {
-                            onOpen()
-                        }
-                    })
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Trainer tray (same look as client NavTray, trainer sections)
-
-struct TrainerTray: View {
-    @EnvironmentObject var store: AppStore
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            if store.showTray {
-                Color.black.opacity(0.55).ignoresSafeArea()
-                    .onTapGesture { withAnimation { store.showTray = false } }
-                    .transition(.opacity)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(store.trainerName.isEmpty ? "Coach" : store.trainerName)
-                                .font(BrandFont.display(28)).foregroundColor(Brand.text)
-                            Text("Coach dashboard").font(BrandFont.body(12, .semibold)).foregroundColor(Brand.voltText)
-                        }
-                        Spacer()
-                        Button { withAnimation { store.showTray = false } } label: {
-                            Image(systemName: "xmark").foregroundColor(Brand.text).font(.system(size: 18, weight: .bold))
-                        }
-                    }
-                    .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20)
-
-                    Rectangle().fill(Brand.line).frame(height: 1)
-
-                    ScrollView {
-                        VStack(spacing: 2) {
-                            ForEach(TrainerTab.allCases) { tab in
-                                Button {
-                                    store.trainerTab = tab
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                        store.showTray = false
-                                    }
-                                } label: {
-                                    HStack(spacing: 14) {
-                                        Image(systemName: tab.icon)
-                                            .font(.system(size: 16))
-                                            .foregroundColor(store.trainerTab == tab ? Brand.voltText : Brand.mute)
-                                            .frame(width: 24)
-                                        Text(tab.rawValue)
-                                            .font(BrandFont.body(15, store.trainerTab == tab ? .bold : .semibold))
-                                            .foregroundColor(store.trainerTab == tab ? Brand.text : Brand.mute)
-                                        Spacer()
-                                        // Attention badges next to the relevant sections.
-                                        if tab == .clients && store.attentionCount > 0 {
-                                            badge(store.attentionCount)
-                                        }
-                                        if tab == .chat && store.totalUnread > 0 {
-                                            badge(store.totalUnread)
-                                        }
-                                        if tab == .checkins && store.pendingCheckInCount > 0 {
-                                            badge(store.pendingCheckInCount)
-                                        }
-                                    }
-                                    .padding(.horizontal, 24).padding(.vertical, 15)
-                                    .background(store.trainerTab == tab ? Brand.black : Color.clear)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 12)
-                    }
-
-                    Rectangle().fill(Brand.line).frame(height: 1)
-                    Button { store.logout() } label: {
-                        HStack {
-                            Image(systemName: "arrow.right.square").foregroundColor(Brand.mute)
-                            Text("Log Out").font(BrandFont.body(14, .semibold)).foregroundColor(Brand.mute)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 24).padding(.vertical, 20)
-                    }
-                }
-                .frame(width: 300).frame(maxHeight: .infinity)
-                .background(Brand.bg)
-                .overlay(Rectangle().fill(Brand.volt).frame(width: 3), alignment: .leading)
-                .transition(.move(edge: .trailing))
-                .gesture(
-                    DragGesture(minimumDistance: 12).onEnded { v in
-                        if v.translation.width > 50 && abs(v.translation.width) > abs(v.translation.height) {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { store.showTray = false }
-                        }
-                    })
-            }
-        }
-    }
-
-    private func badge(_ n: Int) -> some View {
-        Text("\(n)").font(BrandFont.body(10, .bold)).foregroundColor(Brand.onVolt)
-            .frame(minWidth: 18, minHeight: 18)
-            .background(Circle().fill(Brand.volt))
-    }
-}
+// The coach screens. They live inside the app's own shell (MainShell) — the COACH
+// group at the top of the menu — so a coach trains with the same app as his clients.
 
 // MARK: - Today (the coach's home)
 
@@ -168,6 +15,9 @@ struct TrainerTodayView: View {
     private var needsYou: [RosterItem] { store.roster.filter { $0.needsAttention } }
     private var quiet: [RosterItem] { store.roster.filter { $0.isDrifting } }
     private var weekWins: [CoachWin] { CoachWins.build(awards: store.recentAwards, days: 7) }
+    /// The progression engine's changes from the last 3 days (Programs).
+    @State private var autoChanges: [APIProgressionChange] = []
+    @State private var movesReload = 0
 
     var body: some View {
         ScrollView {
@@ -221,13 +71,36 @@ struct TrainerTodayView: View {
                 if !weekWins.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         DSSectionHeader(title: "WINS THIS WEEK", subtitle: weekWins.count > 1 ? "swipe" : nil)
+                        // Same paged-card mechanism as the client's Insights row:
+                        // one card ~82% wide, neighbours peeking, snaps card-by-card.
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(weekWins) { w in winCard(w) }
+                            HStack(spacing: 12) {
+                                ForEach(weekWins) { w in
+                                    winCard(w)
+                                        .containerRelativeFrame(.horizontal) { width, _ in width * 0.82 }
+                                }
+                            }
+                            .scrollTargetLayout()
+                        }
+                        .scrollTargetBehavior(.viewAligned)
+                        .scrollClipDisabled()
+                    }
+                    .staggeredAppear(5)
+                }
+
+                MovedSessionsSection(reloadKey: movesReload)   // calendar moves (Oct 8, 2026)
+
+                if !autoChanges.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: "AUTOMATIC CHANGES", subtitle: "last 3 days")
+                        ForEach(autoChanges.prefix(3)) { c in ProgressionChangeRow(change: c) }
+                        if autoChanges.count > 3 {
+                            Button { store.select(.coachPrograms) } label: {
+                                Text("All \(autoChanges.count) in Programs").font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText)
                             }
                         }
                     }
-                    .staggeredAppear(5)
+                    .staggeredAppear(6)
                 }
 
                 if !store.rosterLoading && needsYou.isEmpty && quiet.isEmpty && !store.roster.isEmpty {
@@ -242,7 +115,12 @@ struct TrainerTodayView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
-        .refreshable { store.loadRoster() }
+        .task { autoChanges = (try? await APIClient.shared.progressionChanges(days: 3))?.filter { $0.undoneAt == nil } ?? [] }
+        .refreshable {
+            store.loadRoster()
+            movesReload += 1
+            autoChanges = (try? await APIClient.shared.progressionChanges(days: 3))?.filter { $0.undoneAt == nil } ?? []
+        }
         .sheet(item: $compose) { c in
             CoachComposeSheet(title: c.title, subtitle: c.subtitle, clientId: c.clientId, starters: c.starters,
                               initial: c.initial) { if let w = c.winId { congrats.mark(w) } }
@@ -305,7 +183,7 @@ struct TrainerTodayView: View {
             }
         }
         .padding(14)
-        .frame(width: 240, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(done ? Brand.line : Brand.voltLine.opacity(0.45), lineWidth: 1))
     }
@@ -548,76 +426,3 @@ struct WinsFeedView: View {
     }
 }
 
-// MARK: - Me (coach settings)
-
-struct TrainerMeView: View {
-    @EnvironmentObject var store: AppStore
-    @AppStorage("bst_units") private var units = "lb"
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    CoachAvatar(name: store.trainerName.isEmpty ? "Coach" : store.trainerName, size: 64, highlighted: true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("COACH").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
-                        Text(store.trainerName.isEmpty ? "Coach" : store.trainerName)
-                            .font(BrandFont.display(38)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.6)
-                    }
-                }
-                .padding(.top, 52)
-
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "rectangle.and.pencil.and.ellipsis").font(.system(size: 18)).foregroundColor(Brand.voltText)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Build programs on the web").font(BrandFont.body(14, .heavy)).foregroundColor(Brand.text)
-                        Text("Programs, macros and supplement protocols live in the web console — there's room there for the calendar and set editor.")
-                            .font(BrandFont.body(12)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
-                        Text("bigscherlytraining.com/admin").font(BrandFont.body(12, .heavy)).foregroundColor(Brand.voltText)
-                    }
-                }
-                .card(padding: 16)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    DSSectionHeader(title: "NOTIFICATIONS")
-                    Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    } label: {
-                        DSListRow(title: "Notification settings",
-                                  subtitle: "You're notified about new messages, check-ins and more. Choose how in iOS Settings.",
-                                  icon: "bell.badge.fill")
-                    }
-                    .buttonStyle(PressableStyle())
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    DSSectionHeader(title: "PREFERENCES")
-                    VStack(spacing: 14) {
-                        HStack {
-                            Text("Units").font(BrandFont.body(15)).foregroundColor(Brand.text)
-                            Spacer()
-                            Picker("Units", selection: $units) { Text("lb").tag("lb"); Text("kg").tag("kg") }
-                                .pickerStyle(.segmented).fixedSize()
-                        }
-                        HStack {
-                            Text("Week starts").font(BrandFont.body(15)).foregroundColor(Brand.text)
-                            Spacer()
-                            Text("Monday").font(BrandFont.body(14, .semibold)).foregroundColor(Brand.mute)
-                        }
-                    }
-                    .card(padding: 16)
-                }
-
-                Button { store.logout() } label: { Text("Log out") }
-                    .buttonStyle(DSButtonStyle(kind: .secondary))
-
-                Text("Big Scherly Training  ·  v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
-                    .font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-            .padding(.horizontal, 20).padding(.bottom, 30)
-        }
-        .background(Brand.bg.ignoresSafeArea())
-        .dsTopFade()
-    }
-}

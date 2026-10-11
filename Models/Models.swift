@@ -43,6 +43,8 @@ struct Exercise: Identifiable, Codable {
     // Trainer-written form cueing (optional). Decodes as "" when the server omits it,
     // so older payloads still work.
     var formInstructions: String = ""
+    // Demo video link from the coach's exercise library (Oct 8, 2026). Optional so stored data decodes.
+    var videoUrl: String? = nil
 }
 
 struct ExerciseSet: Identifiable, Codable {
@@ -53,6 +55,10 @@ struct ExerciseSet: Identifiable, Codable {
     var loggedWeight: Double? = nil
     var rpe: Double? = nil            // 1–10 in half steps (rate of perceived exertion)
     var loggedAt: Date? = nil         // when this set was recorded (for per-exercise HR slicing)
+    // Set types (all optional: older workouts and servers read exactly as before). See SetTarget.
+    var targetRpe: Double? = nil      // "1 @ RPE 8.5": no weight → you pick it; with a weight → "5 × 275 @ 8"
+    var percent: Double? = nil        // back-off: −17 = 17% lighter than the heaviest set logged in this exercise
+    var amrap: Bool? = nil            // as many reps as possible; targetReps is the minimum (0 = none)
 
     var volume: Double {              // for total-weight stats
         Double(loggedReps ?? 0) * (loggedWeight ?? 0)
@@ -185,6 +191,13 @@ struct ChatMessage: Identifiable, Codable {
     var imageName: String? = nil
     var videoKey: String? = nil      // server key for an attached video (≤120s, 540p)
     var isRead: Bool = true
+    // Inbox extras (Oct 8, 2026) — all optional so stored chats still decode.
+    var kind: String? = nil          // "voice", "video", "setComment"
+    var voiceSeconds: Double? = nil
+    var voiceAvailable: Bool? = nil  // audio still on the server (14 days), else transcript only
+    var voiceExpiresAt: Date? = nil
+    var transcript: String? = nil
+    var setRef: APISetRef? = nil
 }
 
 // MARK: Announcements

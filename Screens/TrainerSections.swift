@@ -26,21 +26,22 @@ struct TrainerChatSection: View {
         let all = items
         let unread = all.filter { $0.thread.unread > 0 }
         let shown = all.filter { i in
-            let f: Bool = filter.hasPrefix("Unread") ? i.thread.unread > 0
-                : (filter == "Form checks" ? i.thread.category == ChatCategory.form.rawValue : true)
+            let f = filter == "All" || i.thread.category == filter
             let q = query.isEmpty || i.client.name.localizedCaseInsensitiveContains(query)
                 || i.thread.topic.localizedCaseInsensitiveContains(query) || i.thread.preview.localizedCaseInsensitiveContains(query)
             return f && q
         }
-        let options: [(label: String, color: Color)] = [("All", Brand.volt), ("Unread · \(unread.count)", Brand.volt), ("Form checks", Brand.volt)]
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 DSScreenHeader(eyebrow: "Messages", title: "Chat",
                                subtitle: unread.isEmpty ? "All caught up · newest first" : "\(unread.count) unread · newest first")
                 CoachSearchField(prompt: "Search clients or messages", text: $query)
-                CoachFilterChips(options: options, selected: Binding(
-                    get: { options.first { $0.label.hasPrefix(filter) }?.label ?? "All" },
-                    set: { filter = $0.hasPrefix("Unread") ? "Unread" : $0 }))
+                // Same category carousel as the client's Chat: All in the middle,
+                // the client app's categories around it. Unread threads sort first.
+                DSCarousel(options: [DSCarousel<String>.Option(id: "All", label: "All")]
+                                    + ChatCategory.allCases.map { DSCarousel<String>.Option(id: $0.rawValue, label: $0.rawValue) },
+                           selection: $filter, likely: "All", itemWidth: 116,
+                           accessibilityName: "Show conversations")
 
                 if !loaded && all.isEmpty {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
@@ -148,6 +149,7 @@ struct ClientPickerSheet: View {
                 }
                 .padding(20)
             }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("New conversation")
             .navigationBarTitleDisplayMode(.inline)
@@ -170,6 +172,7 @@ struct NewTrainerThreadSheet: View {
 
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Start a new thread with \(client.name). Give it a topic so it stays organized.")
                     .font(BrandFont.body(14)).foregroundColor(Brand.mute)
@@ -216,6 +219,9 @@ struct NewTrainerThreadSheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) }
             }
             .keyboardDoneButton()
+            }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
+            .background(Brand.bg.ignoresSafeArea())
         }
     }
 
@@ -331,18 +337,29 @@ struct CoachCheckInReview: View {
 
     private struct Delta: Identifiable {
         let id: String; let label: String; let now: Double; let prev: Double?; let unit: String; let better: Bool?
+        let history: [Double]           // this metric across every submitted check-in, oldest first, ending here
     }
 
     private func deltas() -> [Delta] {
-        checkIn.fields.compactMap { f in
+        // The full story per metric, not just now-vs-last-week: every submitted
+        // check-in up to this one, in the order the form asks the questions.
+        var past = (data.checkIns[clientId] ?? []).filter { $0.status != "draft" && $0.date <= checkIn.date }
+        if !past.contains(where: { $0.id == checkIn.id }) { past.append(checkIn) }
+        let ordered = past.sorted { $0.date < $1.date }
+        return checkIn.fields.sorted { $0.fieldOrder < $1.fieldOrder }.compactMap { f in
             guard let v = Double(f.value) else { return nil }
             let q = CheckInSchema.questions.first { $0.label == f.cleanLabel }
             let prev = previous?.fields.first { $0.cleanLabel == f.cleanLabel }.flatMap { Double($0.value) }
             let isWeight = q?.id == "weight" || f.cleanLabel.lowercased().contains("weight")
-            return Delta(id: f.id, label: shortLabel(f.cleanLabel), now: isWeight ? StatsUnits.weight(v) : v,
-                         prev: prev.map { isWeight ? StatsUnits.weight($0) : $0 },
+            let conv: (Double) -> Double = { isWeight ? StatsUnits.weight($0) : $0 }
+            let hist = ordered.compactMap { ci in
+                ci.fields.first { $0.cleanLabel == f.cleanLabel }.flatMap { Double($0.value) }.map(conv)
+            }
+            return Delta(id: f.id, label: shortLabel(f.cleanLabel), now: conv(v),
+                         prev: prev.map(conv),
                          unit: isWeight ? " \(StatsUnits.weightLabel)" : "",
-                         better: isWeight ? nil : (q?.higherIsBetter ?? true))
+                         better: isWeight ? nil : (q?.higherIsBetter ?? true),
+                         history: hist)
         }
     }
 
@@ -380,6 +397,10 @@ struct CoachCheckInReview: View {
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                                 ForEach(ds) { d in tile(d) }
                             }
+                            if ds.contains(where: { $0.history.count >= 2 }) {
+                                Text("Each line runs from their first check-in to this one.")
+                                    .font(BrandFont.body(10)).foregroundColor(Brand.mute)
+                            }
                         }
                         .card(padding: 16)
                     }
@@ -411,8 +432,7 @@ struct CoachCheckInReview: View {
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("YOUR RESPONSE").font(BrandFont.body(11, .bold)).tracking(1.5).headerPill()
-                            QuickReplies(options: ["Great week!", "Proud of the consistency.", "Let's bump protein a little.",
-                                                   "Sleep is the next lever.", "Let's talk this week."]) { s in
+                            QuickReplies { s in   // his saved replies
                                 response = response.isEmpty ? s : response + " " + s
                             }
                             TextEditor(text: $response)
@@ -477,6 +497,10 @@ struct CoachCheckInReview: View {
             Text(fmt(d.now) + d.unit).font(BrandFont.body(17, .heavy)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.7)
             Text(diff.map { $0 == 0 ? "· same" : "\($0 > 0 ? "▲" : "▼") \(fmt(abs($0))) vs last" } ?? "first one")
                 .font(BrandFont.body(10, .bold)).foregroundColor(Brand.readable(color)).lineLimit(1).minimumScaleFactor(0.7)
+            if d.history.count >= 2 {
+                CheckInSpark(values: d.history, color: color == Brand.mute ? Brand.text.opacity(0.35) : color)
+                    .frame(height: 14).padding(.top, 3)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -558,6 +582,28 @@ extension APIClient {
     }
 }
 
+/// Tiny trend line inside a week-over-week tile — the metric across every check-in.
+private struct CheckInSpark: View {
+    let values: [Double]
+    var color: Color = Brand.volt
+    var body: some View {
+        GeometryReader { g in
+            let mn = values.min() ?? 0
+            let mx = values.max() ?? 1
+            let rng = max(mx - mn, 0.0001)
+            Path { p in
+                for (i, v) in values.enumerated() {
+                    let x = g.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                    let y = (g.size.height - 2) * (1 - CGFloat((v - mn) / rng)) + 1
+                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                }
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Insights (roster totals)
 
 struct TrainerInsightsView: View {
@@ -617,11 +663,18 @@ struct AnnouncementsComposerView: View {
     @State private var title = ""
     @State private var messageBody = ""
     @State private var posting = false
-    @State private var posted = false
+    @State private var didPost = false
     @State private var failed = false
     @State private var existing: [APIAnnouncement] = []
     @State private var loading = true
     @State private var confirmDelete: APIAnnouncement? = nil
+    @State private var when: When = .now
+    @State private var publishAt = Calendar.current.date(byAdding: .hour, value: 24, to: Date()) ?? Date()
+
+    enum When: String, CaseIterable, Hashable { case now = "Post now", later = "Schedule" }
+
+    private var scheduled: [APIAnnouncement] { existing.filter { $0.publishAt != nil }.sorted { ($0.publishAt ?? .distantFuture) < ($1.publishAt ?? .distantFuture) } }
+    private var posted: [APIAnnouncement] { existing.filter { $0.publishAt == nil } }
 
     var body: some View {
         ScrollView {
@@ -642,12 +695,27 @@ struct AnnouncementsComposerView: View {
                         .padding(10).frame(minHeight: 120)
                         .background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
-                    if posted { Text("Posted to all clients. 👑").font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("WHEN").font(BrandFont.body(10, .bold)).tracking(1.4).headerPill()
+                        DSCarousel(options: When.allCases.map { DSCarousel<When>.Option(id: $0, label: $0.rawValue) },
+                                   selection: $when, itemWidth: 124, accessibilityName: "When to post")
+                        if when == .later {
+                            DatePicker("Goes out", selection: $publishAt, in: Date().addingTimeInterval(120)...,
+                                       displayedComponents: [.date, .hourAndMinute])
+                                .font(BrandFont.body(14, .semibold)).foregroundColor(Brand.text).tint(Brand.voltText)
+                                .padding(10).background(RoundedRectangle(cornerRadius: 12).fill(Brand.black))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
+                            Text("Clients won't see it, and nobody's notified, until then.")
+                                .font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                        }
+                    }
+                    if didPost { Text(lastWasScheduled ? "Scheduled. 👑" : "Posted to all clients. 👑").font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText) }
                     if failed { Text("Couldn't post. Check your connection and try again.").font(BrandFont.body(12)).foregroundColor(.orange) }
                     Button { post() } label: {
                         HStack(spacing: 8) {
                             if posting { ProgressView().tint(Brand.black) }
-                            Label("Post to all clients", systemImage: "megaphone.fill")
+                            Label(when == .later ? "Schedule for \(publishAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))" : "Post to all clients",
+                                  systemImage: when == .later ? "clock.fill" : "megaphone.fill")
                         }
                     }
                     .buttonStyle(DSButtonStyle(kind: .primary))
@@ -676,28 +744,18 @@ struct AnnouncementsComposerView: View {
                     }
                 }
 
+                if !scheduled.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        DSSectionHeader(title: "SCHEDULED", subtitle: "\(scheduled.count) waiting")
+                        ForEach(scheduled, id: \.id) { a in announcementCard(a) }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 10) {
                     DSSectionHeader(title: "POSTED")
                     if loading { ProgressView().tint(Brand.volt).frame(maxWidth: .infinity) }
-                    else if existing.isEmpty { Text("Nothing posted yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute) }
-                    ForEach(existing, id: \.id) { a in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(a.createdAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased())
-                                    .font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
-                                Spacer()
-                                Button { confirmDelete = a } label: {
-                                    Image(systemName: "trash").font(.system(size: 13)).foregroundColor(Brand.mute)
-                                        .frame(width: 36, height: 36)
-                                }
-                                .accessibilityLabel("Delete \(a.title)")
-                            }
-                            Text(a.title).font(BrandFont.body(16, .bold)).foregroundColor(Brand.text)
-                            Text(a.body).font(BrandFont.body(13)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .card(padding: 16)
-                    }
+                    else if posted.isEmpty { Text("Nothing posted yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute) }
+                    ForEach(posted, id: \.id) { a in announcementCard(a) }
                 }
             }
             .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
@@ -711,7 +769,35 @@ struct AnnouncementsComposerView: View {
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) { if let a = confirmDelete { remove(a) } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("It disappears from every client's app.") }
+        } message: { Text(confirmDelete?.publishAt != nil ? "It won't go out." : "It disappears from every client's app.") }
+    }
+
+    @State private var lastWasScheduled = false
+
+    private func announcementCard(_ a: APIAnnouncement) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let at = a.publishAt {
+                    Image(systemName: "clock.fill").font(.system(size: 11)).foregroundColor(Brand.voltText)
+                    Text(at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()).uppercased())
+                        .font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
+                } else {
+                    Text(a.createdAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased())
+                        .font(BrandFont.body(10, .bold)).tracking(1.2).headerPill()
+                }
+                Spacer()
+                Button { confirmDelete = a } label: {
+                    Image(systemName: "trash").font(.system(size: 13)).foregroundColor(Brand.mute)
+                        .frame(width: 36, height: 36)
+                }
+                .accessibilityLabel(a.publishAt != nil ? "Cancel \(a.title)" : "Delete \(a.title)")
+            }
+            Text(a.title).font(BrandFont.body(16, .bold)).foregroundColor(Brand.text)
+            Text(a.body).font(BrandFont.body(13)).foregroundColor(Brand.mute).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(a.publishAt != nil ? Brand.voltLine.opacity(0.45) : Color.clear, lineWidth: 1))
     }
 
     private func loadExisting() async {
@@ -721,13 +807,17 @@ struct AnnouncementsComposerView: View {
     }
 
     private func post() {
-        posting = true; posted = false; failed = false
+        posting = true; didPost = false; failed = false
         let t = title, b = messageBody
+        let at: Date? = when == .later ? publishAt : nil
         Task {
             do {
-                try await APIClient.shared.createAnnouncement(title: t, body: b)
+                try await APIClient.shared.createAnnouncement(title: t, body: b, publishAt: at)
                 await loadExisting()
-                await MainActor.run { posting = false; posted = true; title = ""; messageBody = "" }
+                await MainActor.run {
+                    posting = false; didPost = true; lastWasScheduled = at != nil
+                    title = ""; messageBody = ""; when = .now
+                }
             } catch {
                 await MainActor.run { posting = false; failed = true }
             }

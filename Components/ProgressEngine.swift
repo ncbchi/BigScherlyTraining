@@ -146,22 +146,26 @@ enum ProgressEngine {
 
     /// A set "hits" when the client did at least the target reps at at least the
     /// target weight. Going heavier or doing more reps still counts as a hit.
-    static func setHit(_ s: ExerciseSet) -> Bool {
+    /// Back-off sets are measured against their worked-out weight (needs the exercise);
+    /// RPE sets have no target weight; an AMRAP's reps target is its minimum.
+    static func setHit(_ s: ExerciseSet, in ex: Exercise? = nil) -> Bool {
         guard let r = s.loggedReps, let w = s.loggedWeight else { return false }
-        return r >= s.targetReps && w >= s.targetWeight
+        let goal = ex.flatMap { SetTarget.plannedWeight(s, in: $0) } ?? (s.percent == nil ? s.targetWeight : 0)
+        return r >= s.targetReps && w >= goal
     }
 
     static func compliance(for workout: Workout) -> Compliance {
         let all = workout.exercises.flatMap { $0.sets }
+        let hits = workout.exercises.reduce(0) { n, ex in n + ex.sets.filter { setHit($0, in: ex) }.count }
         return Compliance(
-            setsHit: all.filter { setHit($0) }.count,
+            setsHit: hits,
             setsTotal: all.count,
             setsLogged: all.filter { $0.loggedReps != nil && $0.loggedWeight != nil }.count)
     }
 
     static func compliance(for exercise: Exercise) -> Compliance {
         Compliance(
-            setsHit: exercise.sets.filter { setHit($0) }.count,
+            setsHit: exercise.sets.filter { setHit($0, in: exercise) }.count,
             setsTotal: exercise.sets.count,
             setsLogged: exercise.sets.filter { $0.loggedReps != nil && $0.loggedWeight != nil }.count)
     }

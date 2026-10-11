@@ -5,6 +5,7 @@ import SwiftUI
 struct SupplementsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("bst_supp_disclaimer_ack") private var disclaimerAck = false
+    @State private var editing: SupplementDraft?   // custom supplements (Oct 8, 2026)
 
     private var stacks: [SupplementStack] { store.supplementStacks }
     private var grouped: [(stack: SupplementStack?, items: [Supplement])] {
@@ -23,8 +24,13 @@ struct SupplementsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 DSScreenHeader(eyebrow: "Protocol", title: "Supplements",
-                               subtitle: "Your stack, prescribed by your coach. Confirm each dose so your coach can track it.")
+                               subtitle: store.isTrainer ? "Your stack. Confirm each dose to keep your streak." : "Your stack from your coach, plus anything you add. Confirm each dose so your coach can track it.")
                     .padding(.bottom, 4)
+
+                if store.isLive {
+                    Button { editing = SupplementDraft() } label: { Label("Add your own", systemImage: "plus") }
+                        .buttonStyle(DSButtonStyle(kind: .secondary))
+                }
 
                 if !store.supplements.filter({ $0.isActive }).isEmpty {
                     adherenceCard
@@ -37,10 +43,10 @@ struct SupplementsView: View {
                 if store.supplements.filter({ $0.isActive }).isEmpty {
                     EmptyState(icon: "pills.fill",
                                title: "No supplements yet",
-                               message: "Your coach hasn't prescribed any supplements yet. They'll appear here.")
+                               message: store.isTrainer ? "No supplements yet. Add your own stack above." : "Nothing from your coach yet. Add your own above — your coach will see it.")
                 }
 
-                Text("Supplements are prescribed by your coach for general wellness and are not medical advice. Consult your physician before starting any supplement.")
+                Text("Supplements here are for general wellness and are not medical advice. Consult your physician before starting any supplement.")
                     .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                     .padding(.top, 8)
             }
@@ -49,6 +55,9 @@ struct SupplementsView: View {
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
         .overlay { if !disclaimerAck { disclaimerGate } }
+        .sheet(item: $editing) { d in
+            SupplementEditorSheet(clientId: "", draft: d, stacks: store.supplementStacks, own: true) { store.loadAllFromAPI() }
+        }
         .onAppear { SupplementEngine.shared.requestPermissionIfNeeded() }
     }
 
@@ -121,6 +130,18 @@ struct SupplementsView: View {
                             Text("Rx").font(BrandFont.body(9, .bold)).foregroundColor(Brand.card)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Brand.mute).clipShape(Capsule())
+                        }
+                        if s.isOwn && !store.isTrainer {
+                            Text("YOURS").font(BrandFont.body(8, .heavy)).tracking(0.6).foregroundColor(Brand.mute)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .overlay(Capsule().stroke(Brand.line, lineWidth: 1))
+                        }
+                        if s.isOwn && store.isLive {
+                            Button { editing = SupplementDraft(s) } label: {
+                                Image(systemName: "pencil").font(.system(size: 12, weight: .semibold)).foregroundColor(Brand.mute)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit \(s.name)")
                         }
                     }
                     Text(s.dose.display).font(BrandFont.body(14, .semibold)).foregroundColor(Brand.voltText)
@@ -232,7 +253,7 @@ struct PreWorkoutSupplementPrompt: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Brand.bg.ignoresSafeArea())
-        .presentationDetents([.medium, .large])
+        .sheetFitsContent()
         .presentationDragIndicator(.hidden)
         .onAppear {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) { appear = true }

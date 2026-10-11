@@ -38,12 +38,12 @@ struct DashboardView: View {
         .onAppear { openFromWidget(store.openSessionId) }
         .onChange(of: store.openSessionId) { _, id in openFromWidget(id) }
         .sheet(item: Binding(get: { (store.sessionWorkoutId == nil || store.sessionMinimized) ? store.prToCelebrate : nil },
-                             set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr) }
+                             set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr).sheetFitsContent() }
         .sheet(isPresented: $showMonth) {
             HomeCalendarTray(selected: selectedDay,
                              pick: { d in selectDay(d); showMonth = false },
                              close: { showMonth = false })
-                .presentationDetents([.medium, .large])
+                .sheetFitsContent()
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showActivity) { ActivityLogSheet(day: renderDay) }
@@ -97,11 +97,15 @@ struct DashboardView: View {
                         HStack(spacing: 8) {
                             Text(ex.name).font(BrandFont.body(13, .bold)).foregroundColor(Brand.onVolt).lineLimit(1)
                             Spacer()
-                            Text("\(ex.sets.count) × \(ex.sets.first?.targetReps ?? 0)")
+                            let plan = SetTarget.summaryParts(ex)
+                            Text(plan.sets)
                                 .font(BrandFont.body(12, .bold)).foregroundColor(Brand.onVolt.opacity(0.65))
-                            Text(ex.sets.first.map { $0.targetWeight > 0 ? StatsUnits.weightText($0.targetWeight) : "BW" } ?? "")
-                                .font(BrandFont.body(12, .heavy)).foregroundColor(Brand.onVolt)
-                                .frame(width: 64, alignment: .trailing)
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                            if !plan.weight.isEmpty {
+                                Text(plan.weight)
+                                    .font(BrandFont.body(12, .heavy)).foregroundColor(Brand.onVolt)
+                                    .frame(width: 64, alignment: .trailing)
+                            }
                         }
                     }
                 }
@@ -146,7 +150,12 @@ struct DashboardView: View {
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Nothing scheduled").font(BrandFont.display(28)).foregroundColor(Brand.text)
-                Text("Your coach hasn't posted your next workout yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                if store.isTrainer {
+                    Text("Your next session is yours to write.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                    Button("Plan a workout") { store.select(.workouts) }.buttonStyle(DSButtonStyle(kind: .secondary))
+                } else {
+                    Text("Your coach hasn't posted your next workout yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                }
             }
             .card(padding: 18)
         }
@@ -332,17 +341,20 @@ struct DashboardView: View {
         let shown = Array(w.exercises.prefix(4))
         return VStack(spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, ex in
-                let top = logged
-                    ? (ex.sets.compactMap { $0.loggedWeight }.max() ?? ex.sets.first?.targetWeight ?? 0)
-                    : (ex.sets.first?.targetWeight ?? 0)
+                let plan = SetTarget.summaryParts(ex)
+                let top = logged ? ex.sets.compactMap { $0.loggedWeight }.max() : nil
+                let weightText = top.map { $0 > 0 ? StatsUnits.weightText($0) : "BW" } ?? plan.weight
                 HStack(spacing: 8) {
                     Text(ex.name).font(BrandFont.body(14, .bold)).foregroundColor(Brand.text).lineLimit(1)
                     Spacer()
-                    Text("\(ex.sets.count) × \(ex.sets.first?.targetReps ?? 0)")
+                    Text(plan.sets)
                         .font(BrandFont.body(13)).foregroundColor(Brand.mute)
-                    Text(top > 0 ? StatsUnits.weightText(top) : "BW")
-                        .font(BrandFont.body(13, .bold)).foregroundColor(Brand.text)
-                        .frame(minWidth: 56, alignment: .trailing)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                    if !weightText.isEmpty {
+                        Text(weightText)
+                            .font(BrandFont.body(13, .bold)).foregroundColor(Brand.text)
+                            .frame(minWidth: 56, alignment: .trailing)
+                    }
                 }
                 .padding(.vertical, 9)
                 if i < shown.count - 1 { Rectangle().fill(Brand.line).frame(height: 1) }
@@ -509,12 +521,12 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var coachCard: some View {
-        let unread = store.unreadMessages
+        let unread = store.isTrainer ? 0 : store.unreadMessages
         let thread = store.chats
             .filter { $0.messages.contains { $0.fromTrainer } }
             .sorted { ($0.unread > 0 ? 1 : 0, $0.lastActivity) > ($1.unread > 0 ? 1 : 0, $1.lastActivity) }
             .first
-        if let t = thread, let m = t.messages.last(where: { $0.fromTrainer }) {
+        if !store.isTrainer, let t = thread, let m = t.messages.last(where: { $0.fromTrainer }) {
             VStack(alignment: .leading, spacing: 12) {
                 DSSectionHeader(title: "FROM YOUR COACH")
                 VStack(alignment: .leading, spacing: 12) {

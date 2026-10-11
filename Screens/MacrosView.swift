@@ -16,6 +16,7 @@ struct MacrosView: View {
     @State private var copied = false
     @State private var trackerDay: MacroDay? = nil
     @State private var showCalendar = false
+    @State private var editingTargets = false      // coach: his own targets
     @State private var activitySheet: ActivityTarget? = nil
     @State private var moveSheet: MoveRequest? = nil
     @State private var sessionBurn: Workout? = nil
@@ -36,7 +37,11 @@ struct MacrosView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 DSScreenHeader(eyebrow: "Fuel", title: "Macros",
-                               subtitle: "Your targets, set by your coach. Swipe to change day.")
+                               subtitle: store.isTrainer ? "Your targets. Swipe to change day." : "Your targets, set by your coach. Swipe to change day.")
+                if store.isTrainer, store.selfClientId != nil {
+                    Button { editingTargets = true } label: { Label("Set my targets", systemImage: "slider.horizontal.3") }
+                        .buttonStyle(DSButtonStyle(kind: .secondary))
+                }
                 weekStrip
 
                 Group {
@@ -71,6 +76,9 @@ struct MacrosView: View {
                 guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
                 step(dx < 0 ? 1 : -1)
             })
+        .sheet(isPresented: $editingTargets) {
+            if let me = store.selfClientId { MacroTargetsEditor(clientId: me) }
+        }
         .sheet(item: $trackerDay) { d in TrackerPickerSheet(day: d) }
         .sheet(isPresented: $showCalendar) {
             MacroCalendarTray(selected: selectedDate) { d in
@@ -78,13 +86,12 @@ struct MacrosView: View {
                 withAnimation(.easeInOut(duration: 0.25)) { selectedDate = cal.startOfDay(for: d) }
                 showCalendar = false
             }
-            .presentationDetents([.medium, .large])
+            .sheetFitsContent()
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $activitySheet) { a in ActivityLogSheet(day: a.day, existing: a.existing) }
         .sheet(item: $moveSheet) { r in
             MoveTrainingDaySheet(day: r.day, makingTraining: r.makingTraining)
-                .presentationDetents([.medium])
         }
         .sheet(item: $sessionBurn) { w in
             SessionBurnSheet(workout: w, reportedKcal: sessionKcal(w) ?? 0, minutes: sessionMinutes(w))
@@ -377,7 +384,8 @@ struct MacrosView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(selectedDate.formatted(.dateTime.weekday(.wide).month(.wide).day()))
                 .font(BrandFont.body(15, .bold)).foregroundColor(Brand.text)
-            Text(planDays.isEmpty ? "Your coach hasn't set your daily targets yet. They'll appear here."
+            Text(planDays.isEmpty ? (store.isTrainer ? "No targets yet — tap Set my targets above."
+                                                     : "Your coach hasn't set your daily targets yet. They'll appear here.")
                                   : "No targets set for this day yet.")
                 .font(BrandFont.body(13)).foregroundColor(Brand.mute)
             if cal.startOfDay(for: selectedDate) <= cal.startOfDay(for: Date()) {
@@ -461,6 +469,7 @@ struct MoveTrainingDaySheet: View {
 
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(makingTraining
                      ? "Pick the training day to swap with. Its workout and macros move to \(day.formatted(.dateTime.weekday(.wide)))."
@@ -492,6 +501,9 @@ struct MoveTrainingDaySheet: View {
             .navigationTitle(makingTraining ? "Make it a training day" : "Move training day")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() }.foregroundColor(Brand.voltText) } }
+            }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
+            .background(Brand.bg.ignoresSafeArea())
         }
     }
 }
@@ -675,6 +687,7 @@ struct TrackerPickerSheet: View {
                 }
                 .padding(20)
             }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("Macro Goals")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() }.foregroundColor(Brand.voltText) } }

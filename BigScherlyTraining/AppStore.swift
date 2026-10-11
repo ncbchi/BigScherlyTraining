@@ -34,7 +34,10 @@ final class AppStore: ObservableObject {
                 trainerName = savedName
                 isLoggedIn = true
                 if isTrainer {
-                    loadRoster()
+                    client = Client(id: selfClientId ?? client.id, name: savedName,
+                                    email: UserDefaults.standard.string(forKey: "bst_userEmail") ?? "",
+                                    startDate: client.startDate, goal: client.goal)
+                    startCoachSession()
                 } else {
                     // Seed the client's name from the last session so the greeting is
                     // right immediately, before /me refreshes the full profile.
@@ -46,6 +49,9 @@ final class AppStore: ObservableObject {
                 }
             }
         }
+        // Coach screens are for coaches: a launch setting left on this phone by a coach
+        // must never open one for a client.
+        if !isTrainer && activeTab.isCoach { activeTab = .dashboard }
         // If any API call reports the session expired, return to the login screen.
         NotificationCenter.default.addObserver(forName: .bstUnauthorized, object: nil, queue: .main) { [weak self] _ in
             self?.logout()
@@ -295,13 +301,24 @@ final class AppStore: ObservableObject {
             exercises: w.exercises.map { ex in
                 WatchExercise(id: ex.id, name: ex.name, restSeconds: ex.restSeconds,
                     sets: ex.sets.map { s in
-                        WatchSet(id: s.id, targetReps: s.targetReps, targetWeight: s.targetWeight,
+                        // Set types are worked out here (SetTarget): the Watch gets the weight to start
+                        // from, and never needs to know what kind of set it is.
+                        WatchSet(id: s.id, targetReps: s.targetReps,
+                                 targetWeight: watchStartWeight(s, in: ex, workoutId: w.id),
                                  loggedReps: s.loggedReps, loggedWeight: s.loggedWeight, rpe: s.rpe)
                     },
                     pauseTarget: PauseTarget.forWatch(ex))     // Settings ▸ Apple Watch ▸ Pause buzz
             },
             haptics: NotifPrefs.shared.watchHaptics)           // Settings ▸ Notifications ▸ Watch buzzes
         WatchBridge.shared.sendActiveWorkout(payload)
+    }
+
+    /// The weight a set starts from on the Watch (its slider is centred on it): the planned weight,
+    /// else where the set starts (SetTarget), else the heaviest logged in this exercise, else 0.
+    private func watchStartWeight(_ s: ExerciseSet, in ex: Exercise, workoutId: String) -> Double {
+        if let w = SetTarget.plannedWeight(s, in: ex) { return w }
+        if let w = SetTarget.startWeight(s, in: ex, workoutId: workoutId, workouts: workouts), w > 0 { return w }
+        return ex.sets.compactMap { $0.loggedWeight }.max() ?? 0
     }
 
     // Apply a set edit that arrived from the Watch, through the same save path a
@@ -406,6 +423,8 @@ final class AppStore: ObservableObject {
             async let sp = (try? await APIClient.shared.supplements()) ?? []
             async let ss = (try? await APIClient.shared.supplementStacks()) ?? []
             async let sl = (try? await APIClient.shared.supplementLogs()) ?? []
+            // The coach's check-in questions (nil = he uses the standard form).
+            async let form = try? await APIClient.shared.checkInForm()
 
             // Workouts come as summaries; fetch full detail for each so exercises/sets load
             let summaries = await w
@@ -428,12 +447,18 @@ final class AppStore: ObservableObject {
             let suppLogs = await sl
             let profile = await prof
             let shareStatsResult = await stats
+            let customForm = (await form)?.json.flatMap { CheckInSchema.parse($0) }
 
             await MainActor.run {
+                // A coach's own profile: keep his login name/email on screen (the hidden
+                // profile's address is internal), skip announcements (he writes them) and
+                // check-ins (he has nobody to send one to).
+                let coach = self.isTrainer
                 // Replace the placeholder identity with the real signed-in user, so
                 // greetings and profile screens show the actual account (not mock).
                 if let p = profile {
-                    self.client = Client(id: p.id, name: p.name, email: p.email,
+                    self.client = Client(id: p.id, name: coach ? self.client.name : p.name,
+                                         email: coach ? self.client.email : p.email,
                                          startDate: p.startDate, goal: p.goal)
                     // If the account still owes a password change (e.g. force-quit
                     // before finishing), the server is the source of truth — re-enforce.
@@ -445,10 +470,13 @@ final class AppStore: ObservableObject {
                 }
                 self.workouts = MacroPlanStore.shared.applyMoves(to: Self.keepLocalLogs(server: fullWorkouts, local: self.workouts))
                 self.macroDays = macros.map { $0.toModel() }
-                self.checkIns = checkins.map { $0.toModel() }
+                self.checkIns = coach ? [] : checkins.map { $0.toModel() }
+                // For a coach this is his own form (his profile's coach is himself) — the
+                // check-in review uses it to know which way each answer counts as better.
+                CheckInSchema.custom = customForm
                 self.photos = photos.map { $0.toModel() }
-                self.chats = chatThreads.map { $0.toModel() }
-                self.announcements = anns.map { $0.toModel() }
+                self.chats = coach ? [] : chatThreads.map { $0.toModel() }   // a coach's chats live under COACH
+                self.announcements = coach ? [] : anns.map { $0.toModel() }
                 // APISupplement/Stack/Log are typealiases of the models, so no mapping.
                 self.supplements = supps
                 self.supplementStacks = stacks
@@ -647,9 +675,81 @@ final class AppStore: ObservableObject {
     /// How many people need the trainer to actually do something. Drives the badge.
     var attentionCount: Int { roster.filter { $0.needsAttention }.count }
 
-    // Which trainer section is showing. Mirrors the client app's tray-driven nav
-    // instead of a bottom tab bar, for consistency across both experiences.
-    @Published var trainerTab: TrainerTab = .today
+    // Which coach screen is showing. Coaches now use the client app's own shell and
+    // menu (COACH group on top), so this just maps onto activeTab.
+    var trainerTab: TrainerTab {
+        get {
+            switch activeTab {
+            case .coachClients: return .clients
+            case .coachChat: return .chat
+            case .coachCheckins: return .checkins
+            case .coachWins: return .wins
+            case .coachShare: return .share
+            case .coachInsights: return .insights
+            case .coachAnnounce: return .announce
+            case .settings: return .me
+            default: return .today
+            }
+        }
+        set {
+            switch newValue {
+            case .today: select(.coachToday)
+            case .clients: select(.coachClients)
+            case .chat: select(.coachChat)
+            case .checkins: select(.coachCheckins)
+            case .wins: select(.coachWins)
+            case .share: select(.coachShare)
+            case .insights: select(.coachInsights)
+            case .announce: select(.coachAnnounce)
+            case .me: select(.settings)
+            }
+        }
+    }
+
+    // MARK: Coach's own training (Oct 8, 2026)
+    // Every coach has a hidden personal profile on the server. Its client token routes
+    // the app's normal client calls (workouts, macros, photos, awards…) to his own data,
+    // so he trains with exactly the same screens his clients use.
+    @Published var selfClientId: String? = UserDefaults.standard.string(forKey: "bst_selfClientId")
+    /// Saved replies (Settings ▸ Coach) — the one-tap phrases in chat and check-in review.
+    @Published var savedReplies: [String] = UserDefaults.standard.stringArray(forKey: "bst_savedReplies") ?? CoachDefaults.savedReplies
+
+    /// Called on login and on relaunch for a trainer.
+    func startCoachSession() {
+        guard isLive, isTrainer else { return }
+        // Coaches open on Coach Today unless they've picked something else (saved, so
+        // Settings ▸ Open on launch shows what actually happens).
+        if UserDefaults.standard.string(forKey: "bst_launch_tab") == nil {
+            UserDefaults.standard.set(AppTab.coachToday.rawValue, forKey: "bst_launch_tab")
+            activeTab = .coachToday
+        }
+        loadRoster()
+        Task {
+            if let me = try? await APIClient.shared.selfProfile() {
+                APIClient.shared.setSelfToken(me.token)
+                await MainActor.run {
+                    self.selfClientId = me.clientId
+                    UserDefaults.standard.set(me.clientId, forKey: "bst_selfClientId")
+                    self.client = Client(id: me.clientId, name: self.trainerName.isEmpty ? me.name : self.trainerName,
+                                         email: self.client.email, startDate: self.client.startDate, goal: self.client.goal)
+                    self.loadAllFromAPI()
+                }
+            }
+            if let replies = try? await APIClient.shared.trainerSetting("savedReplies"), let json = replies.json,
+               let list = try? JSONDecoder().decode([String].self, from: Data(json.utf8)), !list.isEmpty {
+                await MainActor.run { self.setSavedReplies(list, upload: false) }
+            }
+        }
+    }
+
+    func setSavedReplies(_ list: [String], upload: Bool = true) {
+        let clean = list.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        savedReplies = clean.isEmpty ? CoachDefaults.savedReplies : clean
+        UserDefaults.standard.set(savedReplies, forKey: "bst_savedReplies")
+        guard upload, isLive, isTrainer,
+              let data = try? JSONEncoder().encode(savedReplies), let json = String(data: data, encoding: .utf8) else { return }
+        Task { _ = try? await APIClient.shared.saveTrainerSetting("savedReplies", json: json) }
+    }
 
     /// Roll-up stats for the Insights screen — derived from the roster we already have,
     /// so no extra network round-trip.
@@ -695,6 +795,12 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "bst_demoMode")
         isTrainer = false
         roster = []; recentAwards = []; selectedClient = nil
+        selfClientId = nil
+        UserDefaults.standard.removeObject(forKey: "bst_selfClientId")
+        UserDefaults.standard.removeObject(forKey: "bst_userEmail")
+        UserDefaults.standard.removeObject(forKey: "bst_savedReplies")
+        savedReplies = CoachDefaults.savedReplies
+        CheckInSchema.custom = nil
         client = MockData.client   // reset identity so no stale name lingers
         UserDefaults.standard.removeObject(forKey: "bst_isTrainer")
         UserDefaults.standard.removeObject(forKey: "bst_userName")
@@ -715,6 +821,7 @@ final class AppStore: ObservableObject {
         }
     }
     func select(_ tab: AppTab) {
+        guard isTrainer || !tab.isCoach else { return }
         // Slide forward when moving down the tab order, back when moving up —
         // gives the app a sense of place instead of an instant swap.
         if tab != activeTab,
@@ -813,8 +920,24 @@ enum AppTab: String, CaseIterable, Identifiable {
     case announcements = "Announcements"
     case share       = "Share"
     case settings    = "Settings"
+    // Coach screens (trainer accounts only) — live in the menu's COACH group.
+    case coachToday     = "Coach Today"
+    case coachClients   = "Coach Clients"
+    case coachPrograms  = "Coach Programs"
+    case coachNotebook  = "Coach Notebook"
+    case coachChat      = "Coach Chat"
+    case coachCheckins  = "Coach Check-In Queue"
+    case coachWins      = "Coach Wins"
+    case coachInsights  = "Coach Insights"
+    case coachAnnounce  = "Coach Announcements"
+    case coachShare     = "Coach Share"
 
     var id: String { rawValue }
+    /// Coach screens appear inside the COACH group, so the "Coach " prefix is dropped there.
+    var title: String { isCoach ? String(rawValue.dropFirst(6)) : rawValue }
+    var isCoach: Bool { rawValue.hasPrefix("Coach ") }
+    static let coachTabs: [AppTab] = [.coachToday, .coachClients, .coachPrograms, .coachNotebook, .coachChat, .coachCheckins,
+                                      .coachWins, .coachInsights, .coachAnnounce, .coachShare]
     var icon: String {
         switch self {
         case .dashboard: return "house.fill"
@@ -829,6 +952,22 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .announcements: return "megaphone.fill"
         case .share: return "square.and.arrow.up.fill"
         case .settings: return "gearshape.fill"
+        case .coachToday: return "sun.max.fill"
+        case .coachClients: return "person.2.fill"
+        case .coachPrograms: return "square.stack.3d.up.fill"
+        case .coachNotebook: return "book.closed.fill"
+        case .coachChat: return "bubble.left.and.bubble.right.fill"
+        case .coachCheckins: return "checkmark.square.fill"
+        case .coachWins: return "trophy.fill"
+        case .coachInsights: return "chart.bar.fill"
+        case .coachAnnounce: return "megaphone.fill"
+        case .coachShare: return "square.and.arrow.up.on.square.fill"
         }
     }
+}
+
+/// Built-in saved replies until the coach edits his own (Settings ▸ Coach ▸ Saved replies).
+enum CoachDefaults {
+    static let savedReplies = ["Great week!", "Proud of the consistency.", "Let's bump protein a little.",
+                               "Sleep is the next lever.", "Let's talk this week."]
 }

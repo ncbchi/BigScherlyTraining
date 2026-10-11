@@ -88,9 +88,13 @@ final class PushCenter: NSObject, ObservableObject {
         guard store.isLoggedIn, let route else { return }
         if store.isTrainer {
             switch route {
-            case "chat": store.trainerTab = .chat
-            case "checkins": store.trainerTab = .checkins
-            case "today": store.trainerTab = .today
+            case "chat": store.select(.coachChat)
+            case "checkins": store.select(.coachCheckins)
+            case "today": store.select(.coachToday)
+            case "wins": store.select(.coachWins)
+            case "clients": store.select(.coachClients)
+            case "workouts": store.select(.workouts)      // his own reminders
+            case "supplements": store.select(.supplements)
             default: break
             }
         } else {

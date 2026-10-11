@@ -136,7 +136,12 @@ final class ServerSync: ObservableObject {
 
     func attach(_ store: AppStore) { self.store = store }
 
-    private var live: Bool { store?.isLive == true && store?.isTrainer == false && store?.isLoggedIn == true }
+    // A coach syncs his own training too — once his self profile is connected (client
+    // routes go out under its token, so nothing lands on the coach login itself).
+    private var live: Bool {
+        guard store?.isLive == true, store?.isLoggedIn == true else { return false }
+        return store?.isTrainer == false || APIClient.shared.hasSelfToken
+    }
 
     // MARK: Marking (called by the stores when the user changes something)
 

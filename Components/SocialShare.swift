@@ -62,4 +62,30 @@ enum SocialShare {
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
         return true
     }
+
+    /// Same hand-off with an .mp4 as the background (an animated share card). Oct 9, 2026.
+    @discardableResult
+    static func shareVideoToStory(_ video: Data, target: SocialTarget) -> Bool {
+        let scheme: String
+        let pasteboardItems: [String: Any]
+        switch target {
+        case .instagram:
+            scheme = "instagram-stories://share?source_application=bigscherlytraining"
+            pasteboardItems = ["com.instagram.sharedSticker.backgroundVideo": video]
+        case .facebook:
+            scheme = "facebook-stories://share"
+            var items: [String: Any] = ["com.facebook.sharedSticker.backgroundVideo": video]
+            if !facebookAppID.isEmpty { items["com.facebook.sharedSticker.appID"] = facebookAppID }
+            pasteboardItems = items
+        case .systemSheet:
+            return false
+        }
+        guard let url = URL(string: scheme), UIApplication.shared.canOpenURL(url) else { return false }
+        UIPasteboard.general.setItems(
+            [pasteboardItems],
+            options: [.expirationDate: Date().addingTimeInterval(60 * 5)]
+        )
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        return true
+    }
 }

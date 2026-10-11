@@ -48,16 +48,32 @@ final class LiveSessionController: ObservableObject {
     private var lastSensorView: LiveView = .speed
     private var afterSet = false                // showing the set you just did, until the next set starts
 
-    // Log-set editor (weight in lb)
-    private var editing = false
-    private var editorAuto = false              // opened by the Watch; closes itself after 10 s idle
-    private var editorUntil: Date? = nil
-    private var dReps = 0
-    private var dWeightLb = 0.0
-    private var dRPE = 8.0
-    private var editStep = 0                    // 0 reps · 1 weight · 2 RPE
-    private var repsPage = 0                    // 0 = 1–10 · 1 = 11–20
-    private var editorTask: Task<Void, Never>?
+    // The finished set waiting for Log set (logNeeded): filled in, nothing to enter on the card.
+    private var doneReps: Int? = nil            // the Watch's count for it (nil: the reps you lifted live, or the plan)
+    private var doneByWatch = true              // the Watch saw it end (false: you tapped End set)
+    private var doneMotion: [RepMotion] = []    // its reps from the Watch, for the RPE estimate
+    /// What you've typed for it in the app (after Edit) — wins over the filled-in values everywhere,
+    /// so if the next set starts before you tap Log set, it's your numbers that get logged.
+    private var draft: (setId: String, reps: Int, weightLb: Double, rpe: Double?)? = nil
+    /// Edit (Lock Screen card, or the in-app card): the set to open in the app, reps selected.
+    @Published var editRequest: String? = nil
+    /// Settings ▸ After a set ▸ Log by itself: when the waiting set logs itself (nil: not counting down).
+    private var autoLogAt: Date? = nil
+    private var autoLogTask: Task<Void, Never>?
+    private var autoLogBG: UIBackgroundTaskIdentifier = .invalid
+    private var autoLogCommitting = false       // logging by itself right now: keep the background time until the card's sent
+    /// Settings ▸ Auto-end if idle: the last time anything happened in the workout.
+    private var lastActivity = Date()
+    private var idleTask: Task<Void, Never>?
+    /// The card was ended for being idle: it comes back when something happens (or the app opens).
+    private var idleEnded = false
+    /// What the card settings were last time (a change mid-workout redraws or ends the card).
+    private var lastPrefs = ""
+    /// The sample card from Settings (ended after 15 s).
+    private var sample: Activity<WorkoutActivityAttributes>?
+    static let sampleId = "sample"
+    /// Settings ▸ When you close the app ▸ Close it, but keep the workout: the workout that's waiting.
+    private let closedKeepKey = "bst_card_closed_keep"
     private var stageTask: Task<Void, Never>?
     private var demoTask: Task<Void, Never>?
     private var lastDetectionSeen: Date? = nil
@@ -79,9 +95,8 @@ final class LiveSessionController: ObservableObject {
         var restStart: Date?, restEnd: Date?, restTotal: Int
         var setStart: Date?, logNeeded: Bool
         var userView: LiveView, lastSensorView: LiveView, afterSet: Bool
-        var editing: Bool, editorAuto: Bool, editorUntil: Date?
-        var dReps: Int, dWeightLb: Double, dRPE: Double
         var lastDetectionSeen: Date?
+        var doneReps: Int? = nil, doneByWatch: Bool? = nil, doneMotion: [RepMotion]? = nil   // optional: older saves decode
     }
     private let savedKey = "bst_live_session"
     /// The workout whose live session you closed (by closing the app) — never revived from a card.
@@ -152,11 +167,15 @@ final class LiveSessionController: ObservableObject {
         let cards = Activity<WorkoutActivityAttributes>.activities
         let closed = UserDefaults.standard.string(forKey: closedKey)
         let saved = savedWorkoutId()
-        for old in cards where !Self.isLive(old) || old.attributes.workoutId == closed {
+        for old in cards where !Self.isLive(old) || old.attributes.workoutId == closed
+                                || old.attributes.workoutId == Self.sampleId {
             print("[Live] clearing card \(old.id.prefix(8)) (\(old.activityState))")
             Task { await old.end(nil, dismissalPolicy: .immediate) }
         }
-        if let a = cards.first(where: { Self.isLive($0) && $0.attributes.workoutId != closed }) {
+        let keptWorkout = UserDefaults.standard.string(forKey: closedKeepKey)
+        UserDefaults.standard.removeObject(forKey: closedKeepKey)
+        if let a = cards.first(where: { Self.isLive($0) && $0.attributes.workoutId != closed
+                                         && $0.attributes.workoutId != Self.sampleId }) {
             activity = a
             workoutId = a.attributes.workoutId
             restore()
@@ -166,6 +185,12 @@ final class LiveSessionController: ObservableObject {
             // carry on, and a fresh card starts on open. A finished workout has no saved session, so it
             // isn't revived — that was bringing finished workouts back onto the Watch.
             workoutId = ended.attributes.workoutId
+            restore()
+        } else if let kept = keptWorkout, kept == saved {
+            // Settings ▸ Close it, but keep the workout: the card went when the app closed; the workout
+            // waits. Pick it up here — a fresh card starts when the app's in front.
+            print("[Live] picking up the workout kept when the app closed")
+            workoutId = kept
             restore()
         } else if saved != nil, cards.isEmpty,
                   UserDefaults.standard.object(forKey: "bst_live_activity") as? Bool ?? true,
@@ -187,6 +212,12 @@ final class LiveSessionController: ObservableObject {
                 }
             }
         }
+        // Settings ▸ Lock Screen & Dynamic Island changed: apply it to the card that's up.
+        lastPrefs = Self.prefsSignature()
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.cardPrefsChanged() }
+            .store(in: &bag)
         // Headphones in or out mid-rest: the alerts' sound changes with it.
         NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in if self?.resting == true { self?.rescheduleRestAlerts() } }
@@ -210,13 +241,17 @@ final class LiveSessionController: ObservableObject {
             mark("watch app launch requested")
         }
         guard let w = store?.workouts.first(where: { $0.id == id }), !w.completed else { return }
+        touch()
         if workoutId != id {
             workoutId = id
             openedAt = Date()
             hrSamples = []
             setStart = nil; logNeeded = false; afterSet = false
-            editing = false; editorAuto = false; editorUntil = nil
+            clearDone()
             restEnd = nil; restStart = nil; restTotal = 0
+            userView = CardPrefs.startView          // Settings ▸ Starts on
+            idleEnded = false
+            touch()
             Task { maxHR = await HealthActivityReader.observedMaxHR(demo: isDemo) ?? 190 }
         }
         if let a = activity, a.attributes.workoutId != id || !Self.isLive(a) {
@@ -226,14 +261,20 @@ final class LiveSessionController: ObservableObject {
         }
         // Settings ▸ Lock Screen card (on unless turned off). Off: no card, but the session
         // itself (rest timer, saving across restarts) carries on as normal.
-        let cardOn = UserDefaults.standard.object(forKey: "bst_live_activity") as? Bool ?? true
+        let cardOn = CardPrefs.showCard
         if !cardOn, let a = activity { activity = nil; activityToken = nil; Task { await a.end(nil, dismissalPolicy: .immediate) } }
-        if cardOn, activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled, let state = makeState() {
+        // Settings ▸ Start the card ▸ First set: no card until you start lifting (or a set's logged).
+        let earned = CardPrefs.startAt == .open || setStart != nil || logNeeded || restEnd != nil
+            || w.exercises.contains { $0.sets.contains { $0.loggedReps != nil } }
+        // No card yet by choice (First set): if the app's closed before then, the workout is kept, not ended.
+        if cardOn, !earned, activity == nil { UserDefaults.standard.set(id, forKey: closedKeepKey) }
+        if cardOn, earned, activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled, let state = makeState() {
             do {
                 activity = try Activity.request(attributes: WorkoutActivityAttributes(workoutId: id, title: w.title),
                                                 content: ActivityContent(state: state, staleDate: staleDate()),
                                                 pushType: .token)          // so the server can send rest alerts into it
                 print("[Live] card started \(activity.map { String($0.id.prefix(8)) } ?? "?")")
+                UserDefaults.standard.removeObject(forKey: closedKeepKey)
             } catch {
                 print("[Live] couldn't start the card: \(error)")
             }
@@ -242,14 +283,15 @@ final class LiveSessionController: ObservableObject {
         }
         push(now: true)
         mark("first card push")
+        LiveLink.shared.start()                          // the coach's iPad can find this session (Bluetooth, in the room)
     }
 
     private func persist() {
         guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }) else { return }
         let sv = Saved(workout: w, openedAt: openedAt, restStart: restStart, restEnd: restEnd, restTotal: restTotal,
                        setStart: setStart, logNeeded: logNeeded, userView: userView, lastSensorView: lastSensorView,
-                       afterSet: afterSet, editing: editing, editorAuto: editorAuto, editorUntil: editorUntil,
-                       dReps: dReps, dWeightLb: dWeightLb, dRPE: dRPE, lastDetectionSeen: lastDetectionSeen)
+                       afterSet: afterSet, lastDetectionSeen: lastDetectionSeen,
+                       doneReps: doneReps, doneByWatch: doneByWatch, doneMotion: doneMotion)
         if let data = try? JSONEncoder().encode(sv) { UserDefaults.standard.set(data, forKey: savedKey) }
     }
 
@@ -264,22 +306,24 @@ final class LiveSessionController: ObservableObject {
         if (restEnd ?? .distantPast) <= Date() { restStart = nil; restEnd = nil }
         setStart = sv.setStart; logNeeded = sv.logNeeded
         userView = sv.userView; lastSensorView = sv.lastSensorView; afterSet = sv.afterSet
-        editing = sv.editing; editorAuto = sv.editorAuto; editorUntil = sv.editorUntil
-        if editing, editorAuto, (editorUntil ?? .distantPast) <= Date() { editing = false; editorAuto = false; editorUntil = nil }
-        dReps = sv.dReps; dWeightLb = sv.dWeightLb; dRPE = sv.dRPE
+        doneReps = sv.doneReps; doneByWatch = sv.doneByWatch ?? true; doneMotion = sv.doneMotion ?? []
         lastDetectionSeen = sv.lastDetectionSeen
         scheduleStageRefresh()
     }
 
     /// Workout finished (or abandoned): close the card.
-    func end(dismissal: ActivityUIDismissalPolicy = .default) {
+    /// `dismissal` nil: Settings ▸ End with the workout (on: gone at once · off: iOS shows the last state a while).
+    func end(dismissal: ActivityUIDismissalPolicy? = nil) {
+        let dismissal: ActivityUIDismissalPolicy = dismissal ?? (CardPrefs.endWithWorkout ? .immediate : .default)
+        UserDefaults.standard.removeObject(forKey: closedKeepKey)
         SetVideoRecorder.shared.stopAll()
         endRest()
         let a = activity
         activity = nil
         activityToken = nil
         workoutId = nil
-        editing = false
+        LiveLink.shared.stop()                           // the coach's iPad: session over
+        clearDone()
         watchLaunchedFor = nil
         WatchBridge.shared.sendCardEnd(endSession: true)       // the Watch ends its session too
         UserDefaults.standard.removeObject(forKey: savedKey)
@@ -290,9 +334,82 @@ final class LiveSessionController: ObservableObject {
     /// card and session. (iOS only tells the app when it's running; closed while asleep, the Lock
     /// Screen card stays — and swiping that away closes everything.)
     func closeForTermination() {
-        guard let wid = workoutId else { return }
-        UserDefaults.standard.set(wid, forKey: closedKey)
-        end(dismissal: .immediate)
+        endCloseWatch()
+        switch CardPrefs.close {
+        case .keep:
+            // Settings ▸ Keep it while a workout is going: closing the app is just closing the app.
+            print("[Live] app closing — the card stays (Settings: keep it while a workout is going)")
+            persist()
+            return
+        case .closeKeep:
+            // Settings ▸ Close it, but keep the workout: the card goes; the workout waits in the app.
+            print("[Live] app closing — the card goes, the workout's kept")
+            if let wid = workoutId { UserDefaults.standard.set(wid, forKey: closedKeepKey); persist() }
+            cancelRestAlerts()
+            activity = nil; activityToken = nil                    // so the card's end isn't read as a swipe-away
+            pushTask?.cancel(); pushTask = nil
+            WatchBridge.shared.sendCardEnd(endSession: false)      // the Watch's card goes; its session stays
+            Self.endAllCardsAndWait(timeout: 3)
+            return
+        case .close:
+            print("[Live] app closing — taking the card down")
+            UserDefaults.standard.removeObject(forKey: closedKeepKey)
+        }
+        if let wid = workoutId {
+            UserDefaults.standard.set(wid, forKey: closedKey)
+            SetVideoRecorder.shared.stopAll()
+            restEnd = nil; restStart = nil
+            cancelRestAlerts()
+            pushTask?.cancel(); pushTask = nil
+            activity = nil; activityToken = nil
+            workoutId = nil
+            clearDone()
+            watchLaunchedFor = nil
+            WatchBridge.shared.sendCardEnd(endSession: true)       // the Watch ends its session too
+            UserDefaults.standard.removeObject(forKey: savedKey)
+        }
+        // iOS stops the app the moment it returns from here — a card ended in a Task never
+        // actually goes. So wait (up to 3 s) until iOS has taken the card and the Dynamic Island down.
+        Self.endAllCardsAndWait(timeout: 3)
+    }
+
+    /// Ends every card right now and returns once iOS has done it (or the timeout passes). Spins the
+    /// main run loop while it waits, so nothing the end needs on the main thread is blocked.
+    private static func endAllCardsAndWait(timeout: TimeInterval) {
+        let done = DoneFlag()
+        Task.detached {
+            for a in Activity<WorkoutActivityAttributes>.activities {
+                await a.end(nil, dismissalPolicy: .immediate)
+            }
+            done.set()
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done.isSet, Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        print("[Live] card \(done.isSet ? "ended" : "end timed out") before close")
+    }
+
+    // MARK: Closing the app shortly after leaving it
+    // iOS only tells the app it's being closed while the app is still running. Left alone, a
+    // backgrounded app is put to sleep within seconds — swipe it away after that and iOS says
+    // nothing, so the card would stay. During a workout, the app asks to keep running for the
+    // time iOS allows (about 30 s) after you leave it, so a close in that window is caught.
+    // After that it's asleep, and no app can see the close.
+
+    private var closeWatch: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginCloseWatch() {
+        guard workoutId != nil, CardPrefs.close != .keep, closeWatch == .invalid else { return }
+        closeWatch = UIApplication.shared.beginBackgroundTask(withName: "workout-close-watch") { [weak self] in
+            MainActor.assumeIsolated { self?.endCloseWatch() }   // iOS's time is up: let the app sleep (runs on main)
+        }
+    }
+
+    private func endCloseWatch() {
+        guard closeWatch != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(closeWatch)
+        closeWatch = .invalid
     }
 
     /// Logout: close any card immediately.
@@ -311,6 +428,7 @@ final class LiveSessionController: ObservableObject {
 
     func startRest(_ seconds: Int) {
         guard seconds > 0 else { return }
+        touch()
         restTotal = seconds
         restStart = Date()
         restEnd = Date().addingTimeInterval(TimeInterval(seconds))
@@ -331,11 +449,12 @@ final class LiveSessionController: ObservableObject {
     private func restAlertBody() -> String {
         guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
               let nx = Self.nextSet(w) else { return "Time for your next set" }
-        return "\(nx.0.name) · \(nx.1.targetReps) × \(nx.1.targetWeight > 0 ? StatsUnits.weightText(nx.1.targetWeight) : "BW")"
+        return "\(nx.0.name) · \(SetTarget.text(nx.1, in: nx.0))"
     }
 
     func addRest(_ s: Int) {
         guard let end = restEnd else { return }
+        touch()
         let newEnd = max(Date(), end).addingTimeInterval(TimeInterval(s))
         restTotal += s
         restEnd = newEnd
@@ -347,6 +466,7 @@ final class LiveSessionController: ObservableObject {
     }
 
     func endRest() {
+        if restEnd != nil { touch() }
         restEnd = nil; restStart = nil
         cancelRestAlerts()
         push(now: true)
@@ -356,9 +476,10 @@ final class LiveSessionController: ObservableObject {
 
     /// Log or edit a set. Returns true when the current exercise changed (the screen
     /// opens the next one). A first-time log starts the exercise's rest.
+    /// `thenRest: false` — logged because the next set already started (no rest in between).
     @discardableResult
     func log(workoutId wid: String, exerciseId: String, setId: String,
-             reps: Int, weight: Double, rpe: Double?) -> Bool {
+             reps: Int, weight: Double, rpe: Double?, thenRest: Bool = true) -> Bool {
         guard let store,
               let wi = store.workouts.firstIndex(where: { $0.id == wid }),
               let ei = store.workouts[wi].exercises.firstIndex(where: { $0.id == exerciseId }),
@@ -373,6 +494,8 @@ final class LiveSessionController: ObservableObject {
         }
         let ex = store.workouts[wi].exercises[ei]
         if !wasLogged { lastLoggedAt = Date() }
+        touch()
+        cancelAutoLog()
         store.saveLoggedSets(workoutId: wid, exercise: ex)
         store.checkForPRs(in: store.workouts[wi])
         store.sendActiveWorkoutToWatch()        // the Watch attaches its detected motion to this set
@@ -389,7 +512,8 @@ final class LiveSessionController: ObservableObject {
             SetVideoRecorder.shared.setEnded()      // stop filming; it saves to the Camera Roll
             setStart = nil
             logNeeded = false
-            closeEditor()
+            clearDone()
+            if editRequest == setId { editRequest = nil }
             // During the rest, the right pane shows the set you just did (if the Watch has it).
             // The Watch sends a set's data a moment after it's logged, so with a live Watch
             // session, show the after-set view and let the data fill in.
@@ -399,7 +523,9 @@ final class LiveSessionController: ObservableObject {
             let autoRest = UserDefaults.standard.object(forKey: "bst_auto_rest") as? Bool ?? true
             // Settings ▸ Notifications ▸ Rest timer ▸ Default rest, when the programme doesn't say.
             let rest = ex.restSeconds > 0 ? ex.restSeconds : NotifPrefs.shared.s.defaultRest
-            if Self.current(store.workouts[wi]) != nil && autoRest { startRest(rest) } else { endRest() }
+            if !thenRest {
+                // The next set is already under way: no rest.
+            } else if Self.current(store.workouts[wi]) != nil && autoRest { startRest(rest) } else { endRest() }
         }
         push(now: true)
         return Self.current(store.workouts[wi])?.id != before
@@ -410,6 +536,11 @@ final class LiveSessionController: ObservableObject {
     /// Start set (button on the card, or the Watch's first rep).
     func startSet() {
         guard workoutId != nil, stage != .done, setStart == nil || logNeeded else { return }
+        // The last set was never logged: log it as it was filled in, then start this one.
+        if logNeeded {
+            commitDone(thenRest: false)
+            guard stage != .done else { return }
+        }
         if restEnd != nil {
             restEnd = nil; restStart = nil
             cancelRestAlerts()
@@ -417,58 +548,227 @@ final class LiveSessionController: ObservableObject {
         setStart = Date()
         logNeeded = false
         afterSet = false                            // back to the view you were on
+        touch()
+        if activity == nil { startCardMidWorkout() } // Start the card ▸ First set, or it was ended for being idle
         SetVideoRecorder.shared.setStarted()        // set videos on: film this set
         scheduleStageRefresh()
         push(now: true)
         if isDemo { simulateDemoSet() }
     }
 
-    /// The Watch saw the set end: open the editor for 10 s, pre-filled with its rep count.
+    /// The Watch saw the set end: the card shows the set filled in, with Log set and Edit.
     private func setEnded(reps: Int, workoutId wid: String, at: Date) {
         guard wid == workoutId, lastDetectionSeen != at, Date().timeIntervalSince(at) < 120 else { return }
         lastDetectionSeen = at
         // The Watch reports a set's end after ~7 s of stillness. If you've already logged that set
         // (rest is running and no new set has started, or you saved moments ago), this is its tail —
-        // don't reopen the editor for the next set.
+        // don't show the next set as done.
         if resting && setStart == nil { return }
         if let l = lastLoggedAt, at.timeIntervalSince(l) < 15 { return }
+        if logNeeded { return }                     // already showing this set
+        doneMotion = thisSetReps(endedAt: at)       // before setStart is filled in below
         if setStart == nil { setStart = at }
         logNeeded = true
+        doneReps = reps
+        doneByWatch = true
         SetVideoRecorder.shared.setEnded()          // the Watch saw you rack it: stop filming
-        openEditor(auto: true, reps: reps)
-    }
-
-    private func openEditor(auto: Bool, reps: Int? = nil) {
-        guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
-              let nx = Self.nextSet(w) else { return }
-        let ex = nx.0, set = nx.1
-        dReps = reps ?? set.targetReps
-        dWeightLb = ex.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? set.targetWeight
-        dRPE = ex.sets.last(where: { $0.rpe != nil })?.rpe ?? 8
-        editing = true
-        editStep = 0
-        repsPage = dReps > 10 ? 1 : 0
-        editorAuto = auto
-        if auto { extendEditor() } else { editorUntil = nil; editorTask?.cancel() }
+        touch()
+        scheduleAutoLog()
         push(now: true)
     }
 
-    /// Auto editor: close 10 s after the last touch. (If the app is asleep, iOS closes it
-    /// on its own at the card's stale date.)
-    private func extendEditor() {
-        editorUntil = Date().addingTimeInterval(10)
-        editorTask?.cancel()
-        editorTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 10_200_000_000)
-            guard !Task.isCancelled, let self, self.editing, self.editorAuto else { return }
-            self.closeEditor()
-            self.push(now: true)
+    /// End set (the card's button while lifting, without a Watch to see it end).
+    func endSet() {
+        guard stage == .lifting, !logNeeded else { return }
+        doneMotion = thisSetReps(endedAt: Date())
+        logNeeded = true
+        doneReps = doneMotion.isEmpty ? nil : doneMotion.count
+        doneByWatch = false
+        SetVideoRecorder.shared.setEnded()
+        touch()
+        scheduleAutoLog()
+        push(now: true)
+    }
+
+    /// The Watch's reps for the set you just did (only this set's: the previous set's may still be there).
+    private func thisSetReps(endedAt: Date) -> [RepMotion] {
+        let live = WatchBridge.shared.liveRepMotions
+        if let started = setStart { return live.filter { $0.start >= started.addingTimeInterval(-5) } }
+        return live.filter { $0.end >= endedAt.addingTimeInterval(-180) }
+    }
+
+    private func clearDone() {
+        doneReps = nil; doneByWatch = true; doneMotion = []; draft = nil
+        cancelAutoLog()
+    }
+
+    // MARK: Settings ▸ After a set ▸ Log by itself
+
+    /// Counts down (10–30 s, your pick), then logs the set as it's filled in. Edit stops it. The app
+    /// asks iOS to keep running for the wait, so it logs even with the phone locked.
+    private func scheduleAutoLog() {
+        cancelAutoLog()
+        guard logNeeded, CardPrefs.afterSet == .auto else { return }
+        let at = Date().addingTimeInterval(TimeInterval(CardPrefs.autoLogSeconds))
+        autoLogAt = at
+        autoLogBG = UIApplication.shared.beginBackgroundTask(withName: "auto-log") { [weak self] in
+            MainActor.assumeIsolated { self?.endAutoLogBG() }
+        }
+        autoLogTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, at.timeIntervalSinceNow) * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            guard self.autoLogAt == at, self.logNeeded else { self.cancelAutoLog(); return }
+            print("[Live] logging the set by itself (Settings ▸ After a set)")
+            self.autoLogCommitting = true
+            self.commitDone(thenRest: true)
+            await self.sendNow()
+            self.autoLogCommitting = false
+            self.cancelAutoLog()
+            self.endAutoLogBG()
         }
     }
 
-    private func closeEditor() {
-        editing = false; editorAuto = false; editorUntil = nil
-        editorTask?.cancel()
+    private func cancelAutoLog() {
+        guard !autoLogCommitting else { autoLogAt = nil; return }   // mid-log: the task finishes and tidies up
+        autoLogAt = nil
+        autoLogTask?.cancel(); autoLogTask = nil
+        endAutoLogBG()
+    }
+
+    private func endAutoLogBG() {
+        guard autoLogBG != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(autoLogBG)
+        autoLogBG = .invalid
+    }
+
+    // MARK: Settings ▸ Auto-end if idle
+
+    /// Something happened in the workout: the idle clock restarts (and a card ended for being idle can come back).
+    private func touch() {
+        lastActivity = Date()
+        idleTask?.cancel()
+        let minutes = CardPrefs.idleMinutes
+        guard minutes > 0 else { return }
+        let wait = TimeInterval(minutes * 60) + 1
+        idleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.checkIdle()
+        }
+    }
+
+    /// No set logged and no rest running for the time you picked: the card ends. The workout is kept —
+    /// open the app (or start a set) and the card comes back. Checked on a timer while the app's awake,
+    /// and on every update (the Watch's heart rate wakes the app often during a workout).
+    private func checkIdle() {
+        let minutes = CardPrefs.idleMinutes
+        guard minutes > 0, activity != nil, !resting, autoLogAt == nil,
+              Date().timeIntervalSince(lastActivity) >= TimeInterval(minutes * 60) else { return }
+        print("[Live] idle \(minutes) min — ending the card (the workout's kept)")
+        idleEnded = true
+        endCardKeepingWorkout()
+    }
+
+    /// The card goes (now, not iOS's default linger); the workout and its saved session stay.
+    private func endCardKeepingWorkout() {
+        guard let a = activity else { return }
+        if let wid = workoutId { UserDefaults.standard.set(wid, forKey: closedKeepKey) }   // relaunch: kept, not swiped away
+        activity = nil; activityToken = nil
+        pushTask?.cancel(); pushTask = nil
+        Task { await a.end(nil, dismissalPolicy: .immediate) }
+    }
+
+    /// A set started with no card up (Start the card ▸ First set, or it was ended for being idle).
+    /// In the app: start it. Asleep (the Watch saw the set start): iOS won't let the app start a card
+    /// from the background, so the server starts it (iOS 17.2+), the same way it brings back a closed card.
+    private func startCardMidWorkout() {
+        guard CardPrefs.showCard, let wid = workoutId else { return }
+        idleEnded = false
+        if UIApplication.shared.applicationState == .active { begin(workoutId: wid); return }
+        guard let token = startToken, let store, let w = store.workouts.first(where: { $0.id == wid }),
+              let state = makeState() else { return }
+        let set = Self.nextSet(w)
+        let start = CardAlert(at: Date(), token: token, event: "start", state: state, staleDate: nil,
+                              title: set.map { "\($0.0.name) · Set \($0.2)" } ?? w.title, body: "Lifting",
+                              sound: "bst_silent.wav", attributes: WorkoutActivityAttributes(workoutId: wid, title: w.title))
+        guard start.fits else { return }
+        Task { try? await APIClient.shared.scheduleCardAlerts([start]) }
+    }
+
+    // MARK: Settings changed mid-workout
+
+    private static func prefsSignature() -> String {
+        [CardPrefs.showCard ? "1" : "0", CardPrefs.look.rawValue, String(CardPrefs.accent ?? 0), CardPrefs.island,
+         CardPrefs.afterSet.rawValue, String(CardPrefs.autoLogSeconds), String(CardPrefs.idleMinutes),
+         CardPrefs.startAt.rawValue, UserDefaults.standard.string(forKey: "bst_weight_step") ?? ""].joined(separator: "|")
+    }
+
+    private func cardPrefsChanged() {
+        let sig = Self.prefsSignature()
+        guard sig != lastPrefs else { return }
+        lastPrefs = sig
+        guard let wid = workoutId else { return }
+        if !CardPrefs.showCard {
+            endCardKeepingWorkout()                 // turned off: the card goes; the workout carries on
+            return
+        }
+        if CardPrefs.afterSet != .auto { cancelAutoLog() }
+        touch()
+        if activity == nil, UIApplication.shared.applicationState == .active { begin(workoutId: wid) }
+        push(now: true)                             // the new look, Island pill, after-set mode
+    }
+
+    // MARK: Settings ▸ Show a sample card
+
+    /// A 15-second demo card (a rest, with the last set's bar speed). Only when no workout card is up.
+    func showSample() -> Bool {
+        guard activity == nil, workoutId == nil, Activity<WorkoutActivityAttributes>.activities.isEmpty,
+              ActivityAuthorizationInfo().areActivitiesEnabled else { return false }
+        var s = WorkoutActivityAttributes.ContentState(startedAt: Date().addingTimeInterval(-24 * 60 - 31))
+        Self.applyLook(&s)
+        s.exercise = "Back Squat"; s.setNumber = 5; s.setCount = 5; s.goalReps = 5; s.goalWeight = 275
+        s.unit = StatsUnits.weightLabel
+        s.stage = .resting; s.restStart = Date(); s.restEnd = Date().addingTimeInterval(118)
+        s.hr = 142; s.hrPeak = 156; s.hrPct = 74; s.hrZone = 3; s.hrMax = 190
+        s.hrSpark = [118, 121, 125, 131, 138, 142, 139, 134, 129, 127, 133, 141, 148, 151, 146, 142]
+        s.lastSet = "Back Squat · Set 4"
+        s.speeds = [0.58, 0.56, 0.53, 0.49, 0.45]; s.peakSpeed = 0.78; s.speedLoss = 22
+        s.effort = Self.effortRead(22, repCount: 5)
+        s.travel = [24.5, 24.4, 24.6, 23.1, 24.3]; s.travelUnit = "in"
+        s.ecc = [1.8, 1.7, 1.9, 1.7, 1.8]; s.pause = [0.4, 0.4, 0.3, 0.3, 0.2]
+        s.con = [1.1, 1.1, 1.2, 1.3, 1.4]; s.top = [0.6, 0.6, 0.6, 0.6, 0.6]; s.tempo = "2-0-1-1"
+        s.available = [.heartRate, .speed, .travel, .tempo, .pause, .sets, .session]
+        s.view = .speed; s.afterSet = true
+        s.rows = (1...5).map { LiveSetRow(n: $0, tReps: 5, tWeight: 275, reps: $0 < 5 ? 5 : nil, weight: $0 < 5 ? 275 : nil,
+                                          rpe: $0 < 5 ? [7, 7.5, 8, 8.5][$0 - 1] : nil, current: $0 == 5) }
+        s.exTotal = 4; s.exDone = 0; s.setsTotal = 18; s.setsDone = 4; s.volume = 5500; s.upNext = "Romanian Deadlift"
+        do {
+            let a = try Activity.request(attributes: WorkoutActivityAttributes(workoutId: Self.sampleId, title: "Sample"),
+                                         content: ActivityContent(state: s, staleDate: nil), pushType: nil)
+            sample = a
+            let bg = UIApplication.shared.beginBackgroundTask(withName: "sample-card")
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                await a.end(nil, dismissalPolicy: .immediate)
+                self?.sample = nil
+                UIApplication.shared.endBackgroundTask(bg)
+            }
+            return true
+        } catch {
+            print("[Live] couldn't show the sample card: \(error)")
+            return false
+        }
+    }
+
+    /// Log the finished set exactly as it's filled in.
+    private func commitDone(thenRest: Bool) {
+        guard logNeeded, let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
+              let nx = Self.nextSet(w), let p = prefill(w) else { return }
+        // Round to the nearest plate step so kg ↔ lb conversion never leaves 184.99.
+        let step = displayStep
+        let shown = (StatsUnits.weight(p.weightLb) / step).rounded() * step
+        let lb = StatsUnits.isKg ? shown / 0.45359237 : shown
+        log(workoutId: wid, exerciseId: nx.0.id, setId: nx.1.id, reps: p.reps, weight: lb, rpe: p.rpe, thenRest: thenRest)
     }
 
     /// Redraw when rest ends (Start set) while the app is awake. Asleep, iOS redraws at the stale date.
@@ -483,8 +783,8 @@ final class LiveSessionController: ObservableObject {
         }
     }
 
-    /// Demo Mode only: pretend the Watch saw the set end ~20 s after Start, so App Review
-    /// (and you) can see the 10-second log window without a Watch.
+    /// Demo Mode only: pretend the Watch saw the set end after the last rep, so App Review
+    /// (and you) can see the finished set, filled in, without a Watch.
     private func simulateDemoSet() {
         demoTask?.cancel()
         WatchBridge.shared.demoLive(reps: [])
@@ -493,7 +793,7 @@ final class LiveSessionController: ObservableObject {
                   let nx = Self.nextSet(w) else { return }
             // Whole reps, the way the Watch sends them: each a little slower than the last,
             // the pause shortening as you tire, and one rep a touch shallow.
-            let target = max(1, nx.1.targetReps)
+            let target = SetTarget.isAmrap(nx.1) ? max(nx.1.targetReps, 6) + 2 : max(1, nx.1.targetReps)
             let base = Self.demoBaseSpeed(nx.0.name)
             let pauseGoal = PauseTarget.target(nx.0)
             var reps: [RepMotion] = []
@@ -519,7 +819,7 @@ final class LiveSessionController: ObservableObject {
                 self.scheduleCardToWatch(now: true)                       // the Watch shows each rep as it lands
                 try? await Task.sleep(nanoseconds: 2_600_000_000)
             }
-            guard !Task.isCancelled, self.isDemo, self.stage == .lifting, !self.editing, !reps.isEmpty else { return }
+            guard !Task.isCancelled, self.isDemo, self.stage == .lifting, !self.logNeeded, !reps.isEmpty else { return }
             // Same path a real Watch takes: the detection arrives, the set ends, Log ✓ appears.
             WatchBridge.shared.demoDetection(workoutId: wid, reps: target,
                                              velocity: reps.map { $0.meanVelocity }.reduce(0, +) / Double(reps.count))
@@ -548,6 +848,7 @@ final class LiveSessionController: ObservableObject {
     // MARK: Card buttons
 
     func handle(_ action: LiveAction) async {
+        touch()
         switch action {
         case .prevView, .nextView:
             let avail = available()
@@ -584,47 +885,152 @@ final class LiveSessionController: ObservableObject {
     private var weightStepLb: Double { StatsUnits.isKg ? displayStep / 0.45359237 : displayStep }
 
     private func logAction(_ a: String) {
-        let kg = StatsUnits.isKg
         switch a {
-        case "open":
-            openEditor(auto: false)
-            return
-        case "cancel":
-            closeEditor()
-            return
-        case "repsPage":
-            guard editing, editStep == 0 else { return }
-            repsPage = repsPage == 0 ? 1 : 0
-        case _ where a.hasPrefix("reps="):
-            guard editing, editStep == 0 else { return }       // only the screen that's live
-            dReps = max(0, min(50, Int(a.dropFirst(5)) ?? dReps))
-            editStep = 1
-        case _ where a.hasPrefix("weight="):
-            guard editing, editStep == 1 else { return }
-            let shown = Double(a.dropFirst(7)) ?? StatsUnits.weight(dWeightLb)
-            dWeightLb = max(0, kg ? shown / 0.45359237 : shown)
-            editStep = 2
-        case _ where a.hasPrefix("rpe="):
-            guard editing, editStep == 2 else { return }
-            dRPE = max(1, min(10, Double(a.dropFirst(4)) ?? dRPE))
-            logAction("commit")                 // the RPE tap saves
-            return
-        case "commit":
-            guard editing else { return }
-            guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
-                  let nx = Self.nextSet(w) else { closeEditor(); return }
-            let ex = nx.0, set = nx.1
-            // Round to the nearest plate step so kg ↔ lb conversion never leaves 184.99.
-            let step = displayStep
-            let shown = (StatsUnits.weight(dWeightLb) / step).rounded() * step
-            let lb = kg ? shown / 0.45359237 : shown
-            log(workoutId: wid, exerciseId: ex.id, setId: set.id, reps: dReps, weight: lb, rpe: dRPE)
-            return
-        default:
-            return
+        case "end": endSet()
+        case "commit": commitDone(thenRest: true)
+        default: return
         }
-        if editorAuto { extendEditor() }            // any adjustment restarts the 10 s
     }
+
+    // MARK: The finished set, filled in
+
+    struct Prefill {
+        var reps: Int
+        var weightLb: Double
+        var rpe: Double
+        var why: String
+        var byWatch: Bool
+    }
+
+    /// The set waiting for Log set, filled in — nil when no set is waiting.
+    func prefill(forSet id: String) -> Prefill? {
+        guard logNeeded, let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
+              Self.nextSet(w)?.1.id == id else { return nil }
+        return prefill(w)
+    }
+
+    /// Reps: the Watch's count (or the reps it saw, or the plan). Weight, by the kind of set (SetTarget):
+    ///  • fixed: last set's, plus the plan's step between that set and this one (when that one was fixed too);
+    ///  • back-off: the heaviest set logged in this exercise less its % (empty until one's logged);
+    ///  • RPE (you pick): the last weight you used on this lift today, else last session's top set;
+    ///  • bodyweight: 0.
+    /// RPE: estimated from how the set went (an RPE set's target goes beside it, not in place of it).
+    private func prefill(_ w: Workout) -> Prefill? {
+        guard let nx = Self.nextSet(w) else { return nil }
+        let ex = nx.0, set = nx.1, i = nx.2 - 1
+        let prev = ex.sets[..<i].last(where: { $0.loggedReps != nil })
+        let prevN = prev.flatMap { p in ex.sets.firstIndex { $0.id == p.id } }.map { $0 + 1 }
+        // AMRAP with no count from the Watch: its minimum, else what you did last set (never 0).
+        let planReps = SetTarget.isAmrap(set) && set.targetReps <= 0 ? max(prev?.loggedReps ?? 1, 1) : set.targetReps
+        let reps = doneReps ?? (doneMotion.isEmpty ? planReps : doneMotion.count)
+        var weight: Double
+        if SetTarget.isFixed(set) || SetTarget.isBodyweight(set) {
+            weight = set.targetWeight
+            if let p = prev, let lw = p.loggedWeight, SetTarget.isFixed(p) || SetTarget.isBodyweight(p) {
+                weight = max(0, lw + (set.targetWeight - p.targetWeight))
+            }
+        } else {
+            weight = SetTarget.startWeight(set, in: ex, workoutId: w.id, workouts: store?.workouts ?? [])
+                ?? prev?.loggedWeight ?? 0
+        }
+        // On the plate step (Settings ▸ Weight steps), so the card, the app and the log all say the same.
+        weight = SetTarget.roundToStep(weight)
+        // "Short of target" only counts against a real target: an AMRAP's minimum, if it has one.
+        let guess = Self.estimateRPE(reps: doneMotion, done: reps, target: set.targetReps,
+                                     pauseGoal: PauseTarget.target(ex),
+                                     prevRPE: prev?.rpe, prevWeightLb: prev?.loggedWeight, prevNumber: prevN,
+                                     weightLb: weight)
+        if let d = draft, d.setId == set.id {
+            return Prefill(reps: d.reps, weightLb: d.weightLb, rpe: d.rpe ?? guess.rpe,
+                           why: d.rpe == nil ? guess.why : "you set it", byWatch: doneByWatch)
+        }
+        return Prefill(reps: reps, weightLb: weight, rpe: guess.rpe, why: guess.why, byWatch: doneByWatch)
+    }
+
+    /// The set row in the app, as you type (only for the set waiting to be logged).
+    func setDraft(setId: String, reps: Int, weightLb: Double, rpe: Double?) {
+        guard logNeeded, let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }),
+              Self.nextSet(w)?.1.id == setId else { return }
+        draft = (setId, reps, weightLb, rpe)
+        if autoLogAt != nil { cancelAutoLog() }     // you're typing: no logging by itself
+        push(now: false)
+    }
+
+    /// An RPE guess from the set: how much the bar slowed (the base — the same reading as the card's
+    /// "about 2 left" line: 15% ≈ 8, 25% ≈ 9, 35%+ ≈ 10), a grinding last rep, stalling at the bottom,
+    /// missed reps, and last set's RPE adjusted for any weight change. Rounded to the half, 5–10.
+    static func estimateRPE(reps: [RepMotion], done: Int, target: Int, pauseGoal: Double?,
+                            prevRPE: Double?, prevWeightLb: Double?, prevNumber: Int?,
+                            weightLb: Double) -> (rpe: Double, why: String) {
+        var why: [String] = []
+        // From the bar speed (3+ reps from the Watch)
+        var speed: Double? = nil
+        if reps.count >= 3 {
+            let v = reps.map { $0.meanVelocity }
+            let best = max(v[0], v[1])
+            if best > 0, let last = v.last {
+                let loss = max(0, (best - last) / best * 100)
+                var r = 6.5 + loss / 10
+                why.append("speed dropped \(Int(loss.rounded()))%")
+                let firstCon = reps.prefix(2).map { $0.concentricSec }.max() ?? 0
+                if let lr = reps.last, lr.isGrind || (firstCon > 0 && lr.concentricSec >= firstCon * 1.6) {
+                    r += 0.5; why.append("last rep a grind")
+                }
+                let early = reps.prefix(2).compactMap { $0.bottomPauseSec }
+                if pauseGoal == nil, !early.isEmpty, let lp = reps.last?.bottomPauseSec,
+                   lp - early.reduce(0, +) / Double(early.count) >= 0.4 {
+                    r += 0.5; why.append("stalled at the bottom")
+                }
+                speed = r
+            }
+        }
+        // From last set: its RPE, +0.5 for fatigue, ±0.5 for every 2.5% heavier or lighter
+        var prior: Double? = nil
+        var weightNote: String? = nil
+        if let pr = prevRPE {
+            var r = pr + 0.5
+            if let pw = prevWeightLb, pw > 0 {
+                let pct = (weightLb - pw) / pw * 100
+                r += (pct / 2.5) * 0.5
+                let d = StatsUnits.weight(weightLb) - StatsUnits.weight(pw)
+                if abs(d) >= 0.5 {
+                    let step = d == d.rounded() ? String(Int(abs(d))) : String(format: "%.1f", abs(d))
+                    weightNote = "\(d > 0 ? "+" : "−")\(step) \(StatsUnits.weightLabel) from set \(prevNumber ?? 0)"
+                }
+            }
+            prior = r
+        }
+        var rpe: Double
+        switch (speed, prior) {
+        case let (s?, p?):
+            rpe = 0.6 * s + 0.4 * p
+            if let n = weightNote { why.append(n) }
+        case let (s?, nil):
+            rpe = s
+        case let (nil, p?):
+            rpe = p
+            why.append("set \(prevNumber ?? 0) was RPE \(prevRPE.map { $0.rpeText } ?? "")"
+                       + (weightNote.map { " · \($0)" } ?? ", same weight · +0.5"))
+        case (nil, nil):
+            rpe = 8
+            why.append("no speed data yet")
+        }
+        if done < target {
+            rpe = max(rpe, target - done >= 2 ? 9.5 : 9)
+            why.insert("\(target - done) short of \(target)", at: 0)
+        }
+        rpe = min(10, max(5, (rpe * 2).rounded() / 2))
+        return (rpe, why.joined(separator: " · "))
+    }
+
+    /// Edit (the Lock Screen card's link, or the in-app card): the app's set row, reps selected.
+    func requestEdit(setId: String?) {
+        editRequest = setId
+        if autoLogAt != nil { cancelAutoLog(); push(now: true) }   // Edit stops "Log by itself"
+    }
+
+    /// Log set on the in-app card: the same as the Lock Screen card's (the set as it's filled in).
+    func logDone() { commitDone(thenRest: true) }
 
     // MARK: Live inputs
 
@@ -636,7 +1042,7 @@ final class LiveSessionController: ObservableObject {
         }
         // Redraw for heart rate every few seconds only when it's on screen; otherwise every
         // 15 s (the Dynamic Island shows it). Fewer background redraws = snappier taps.
-        if shownView() == .heartRate && !editing {
+        if shownView() == .heartRate && !logNeeded {
             push(now: false)
         } else if Date().timeIntervalSince(lastBackgroundHRPush) >= 15 {
             lastBackgroundHRPush = Date()
@@ -678,6 +1084,7 @@ final class LiveSessionController: ObservableObject {
     /// Coalesced: at most one update every ~2 s unless `now`.
     private func push(now: Bool) {
         revision &+= 1                                  // the in-app card redraws now
+        checkIdle()
         scheduleCardToWatch(now: now)                   // the Watch mirrors the same card
         guard activity != nil else { return }
         // One card update at a time, at most about once a second. Every update makes iOS redraw the
@@ -801,6 +1208,7 @@ final class LiveSessionController: ObservableObject {
         guard activity?.id != a.id, a.attributes.workoutId == workoutId else { return }
         if let old = activity { Task { await old.end(nil, dismissalPolicy: .immediate) } }
         activity = a
+        UserDefaults.standard.removeObject(forKey: closedKeepKey)
         watch(a)
         push(now: true)
     }
@@ -808,12 +1216,16 @@ final class LiveSessionController: ObservableObject {
     /// The app opened mid-workout: bring the card back if it was closed, and take over the rest
     /// alerts here (the in-app bell), so nothing rings twice.
     func appBecameActive() {
+        endCloseWatch()
+        idleEnded = false
+        touch()                                         // opening the app is activity: no idle end in your face
         if let id = workoutId, activity == nil { begin(workoutId: id) }
         if resting { rescheduleRestAlerts() }
     }
 
     /// The app went to the background: hand the rest of this rest's alerts to the card (via the server).
     func appWentToBackground() {
+        beginCloseWatch()
         if resting { rescheduleRestAlerts() }
     }
 
@@ -917,9 +1329,8 @@ final class LiveSessionController: ObservableObject {
     }
 
     /// When iOS should redraw the card by itself (the app may be asleep by then):
-    /// the auto editor closes, or the rest ends and the border becomes Start set.
+    /// the rest ends and the border becomes Start set.
     private func staleDate() -> Date? {
-        if editing, editorAuto, let u = editorUntil { return u }
         if resting { return restEnd }
         return nil
     }
@@ -989,25 +1400,24 @@ final class LiveSessionController: ObservableObject {
         return avail.first ?? .sets
     }
 
+    // MARK: Live link (the coach's iPad)
+
+    /// The same picture the Lock Screen card shows, for the coach's iPad.
+    func cardStateForLink() -> WorkoutActivityAttributes.ContentState? { makeState() }
+    /// When the workout was opened (the iPad's session clock).
+    func elapsedSinceForLink() -> Date { openedAt }
+    /// The coach did something: counts as activity (the card isn't ended for being idle).
+    func touchFromLink() { touch() }
+    /// The coach changed the plan from the iPad (the workout's been fetched again): redraw the card.
+    func planChangedFromLink() { touch(); push(now: true) }
+
     private func makeState() -> WorkoutActivityAttributes.ContentState? {
         guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }) else { return nil }
         let unit = StatsUnits.weightLabel
         let disp: (Double) -> Double = { (StatsUnits.weight($0) * 2).rounded() / 2 }
         let first = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min()
         var s = WorkoutActivityAttributes.ContentState(startedAt: min(first ?? openedAt, openedAt))
-        // Your theme accent, made readable on the card's black (Settings ▸ Appearance).
-        let accent = RGBColor(hex: ThemeStore.shared.accent).readableOnDark(RGBColor(hex: 0x010101))
-        s.accent = accent.hex
-        s.accentInkWhite = accent.textOn == .white
-        // Light / Dark / System (nil: the card follows the Lock Screen), and the accent's shades
-        // on the white card — the app's Light rules; pale accents draw their lines in grey.
-        let theme = ThemeStore.shared
-        let raw = RGBColor(hex: theme.accent)
-        s.light = theme.forcedScheme.map { $0 == .light }
-        s.fill = raw.hex
-        s.fillInkWhite = raw.textOn == .white
-        s.lineLight = raw.contrast(.white) < 1.6 ? 0x8E8E93 : raw.hex
-        s.headLight = raw.readableOnDark(RGBColor(hex: 0x39393B)).hex
+        Self.applyLook(&s)
 
         // Left quarter: the set you're on (or the last one, when everything's logged).
         let next = Self.nextSet(w)
@@ -1015,10 +1425,25 @@ final class LiveSessionController: ObservableObject {
         if let ex {
             s.exercise = ex.name
             s.setCount = ex.sets.count
-            if let nx = next {
-                s.setNumber = nx.2; s.goalReps = nx.1.targetReps; s.goalWeight = disp(nx.1.targetWeight)
-            } else if let last = ex.sets.last {
-                s.setNumber = ex.sets.count; s.goalReps = last.targetReps; s.goalWeight = disp(last.targetWeight)
+            // The goal line: reps × weight as always, with the weight worked out here (SetTarget) — a
+            // back-off's, an RPE set's starting weight, or "—". goalWeight is the same weight as a number
+            // (the Watch shows and edits it; 0 = bodyweight, or a back-off with nothing logged yet).
+            let goalSet = next?.1 ?? ex.sets.last
+            if let g = goalSet {
+                s.setNumber = next?.2 ?? ex.sets.count
+                s.goalReps = g.targetReps
+                s.goalWeight = disp(SetTarget.shownWeight(g, in: ex) ?? 0)
+                s.goalText = SetTarget.text(g, in: ex)
+            }
+            if let nx = next, nx.2 < ex.sets.count {
+                // Log set's instant preview: the next set as it'll read once this one is logged (a back-off
+                // gets its weight from the set you're about to log, not "—").
+                var after = ex
+                if logNeeded, let p = prefill(w) {
+                    after.sets[nx.2 - 1].loggedReps = p.reps
+                    after.sets[nx.2 - 1].loggedWeight = p.weightLb
+                }
+                s.nextGoalText = SetTarget.text(after.sets[nx.2], in: after)
             }
         }
         s.unit = unit
@@ -1084,8 +1509,9 @@ final class LiveSessionController: ObservableObject {
         if let ex {
             let cur = next?.1.id
             var rows = ex.sets.enumerated().map { i, st in
-                LiveSetRow(n: i + 1, tReps: st.targetReps, tWeight: disp(st.targetWeight),
-                           reps: st.loggedReps, weight: st.loggedWeight.map(disp), rpe: st.rpe, current: st.id == cur)
+                LiveSetRow(n: i + 1, tReps: st.targetReps, tWeight: disp(SetTarget.shownWeight(st, in: ex) ?? 0),
+                           reps: st.loggedReps, weight: st.loggedWeight.map(disp), rpe: st.rpe, current: st.id == cur,
+                           tText: SetTarget.short(st, in: ex))
             }
             if rows.count > 5 {
                 let ci = rows.firstIndex { $0.current } ?? rows.count - 1
@@ -1111,11 +1537,13 @@ final class LiveSessionController: ObservableObject {
         s.view = shownView(s.available, stage: s.stage)
         s.afterSet = afterSet && s.view.isSensor
 
-        // Predictions for instant previews: what the editor will open with, the rest that
-        // Save starts, and the view that comes back after Save.
+        // Predictions for instant previews: the rest that Log set starts, and the view that
+        // comes back after it.
         if let nx = next {
             s.nextReps = nx.1.targetReps
-            s.nextWeight = disp(nx.0.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? nx.1.targetWeight)
+            s.nextWeight = disp(SetTarget.isFixed(nx.1) || SetTarget.isBodyweight(nx.1)
+                ? (nx.0.sets.last(where: { $0.loggedWeight != nil })?.loggedWeight ?? nx.1.targetWeight)
+                : (SetTarget.startWeight(nx.1, in: nx.0, workoutId: wid, workouts: store.workouts) ?? 0))
             s.nextRPE = nx.0.sets.last(where: { $0.rpe != nil })?.rpe ?? 8
             s.restSeconds = nx.0.restSeconds
         }
@@ -1123,17 +1551,51 @@ final class LiveSessionController: ObservableObject {
         s.afterSaveView = willShowAfterSet && s.available.contains(lastSensorView) ? lastSensorView
             : (s.available.contains(userView) ? userView : (s.available.first ?? .sets))
 
-        // Editor
-        s.editing = editing
-        s.editorAuto = editing && editorAuto
-        s.editorUntil = editing && editorAuto ? editorUntil : nil
+        // The finished set, filled in (the Watch's log tile reads the same fields)
+        s.editing = false
         s.editSet = next?.2 ?? s.setNumber
-        s.dReps = dReps
-        s.dWeight = disp(dWeightLb)
-        s.dRPE = dRPE
-        s.editStep = editStep
-        s.repsPage = repsPage
+        if logNeeded, let p = prefill(w) {
+            s.dReps = p.reps
+            s.dWeight = disp(p.weightLb)
+            s.dRPE = p.rpe
+            s.rpeWhy = p.why
+            s.doneByWatch = p.byWatch
+            s.autoLogAt = autoLogAt
+            if let nx = next {
+                var c = URLComponents(); c.scheme = "bigscherly"; c.host = "editset"
+                c.queryItems = [URLQueryItem(name: "id", value: wid), URLQueryItem(name: "set", value: nx.1.id)]
+                s.editLink = c.url?.absoluteString
+            }
+        } else {
+            s.dReps = s.nextReps
+            s.dWeight = s.nextWeight
+            s.dRPE = s.nextRPE
+        }
         return s
+    }
+
+    /// The card's look (Settings ▸ Lock Screen & Dynamic Island): Light / Dark / Auto (nil: the card
+    /// follows the Lock Screen) or the app's theme; the accent (the app's, or the card's own pick)
+    /// made readable on the black card, and its shades on the white one — the app's Light rules;
+    /// pale accents draw their lines in grey. Plus the Island pill and what happens after a set.
+    static func applyLook(_ s: inout WorkoutActivityAttributes.ContentState) {
+        let theme = ThemeStore.shared
+        let raw = RGBColor(hex: CardPrefs.accent ?? theme.accent)
+        let accent = raw.readableOnDark(RGBColor(hex: 0x010101))
+        s.accent = accent.hex
+        s.accentInkWhite = accent.textOn == .white
+        switch CardPrefs.look {
+        case .app: s.light = theme.forcedScheme.map { $0 == .light }
+        case .light: s.light = true
+        case .dark: s.light = false
+        case .auto: s.light = nil
+        }
+        s.fill = raw.hex
+        s.fillInkWhite = raw.textOn == .white
+        s.lineLight = raw.contrast(.white) < 1.6 ? 0x8E8E93 : raw.hex
+        s.headLight = raw.readableOnDark(RGBColor(hex: 0x39393B)).hex
+        s.island = CardPrefs.island
+        s.afterSetMode = CardPrefs.afterSet.rawValue
     }
 
     /// What the speed drop across a set usually means (a rule of thumb, not a measurement).
@@ -1245,6 +1707,14 @@ nonisolated struct CardAlert {
     }
 
     var fits: Bool { (json?.count ?? .max) < 3_800 }
+}
+
+/// A thread-safe "finished" flag (the card's end runs off the main thread while the main thread waits).
+nonisolated private final class DoneFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func set() { lock.lock(); value = true; lock.unlock() }
 }
 
 private extension String {

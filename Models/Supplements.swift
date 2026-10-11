@@ -116,6 +116,10 @@ struct Supplement: Identifiable, Codable, Hashable {
     var quantityOnHand: Int? = nil    // doses remaining
     var reorderURL: String? = nil     // Shopify product link
 
+    // Custom supplements (Oct 8, 2026): "client" = added by the person themselves; nil = their coach's.
+    var addedBy: String? = nil
+    var isOwn: Bool { addedBy == "client" }
+
     var isActive: Bool {
         let now = Date()
         if let s = cycleStart, now < s { return false }

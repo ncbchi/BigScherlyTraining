@@ -68,7 +68,7 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
     @Published private(set) var watchBuild: String?
     /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
-    static let expectedWatchBuild = "2026-10-07.1"
+    static let expectedWatchBuild = "2026-10-08.3"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -252,7 +252,7 @@ struct WatchExercise: Codable, Identifiable {
 struct WatchSet: Codable, Identifiable {
     var id: String
     var targetReps: Int
-    var targetWeight: Double
+    var targetWeight: Double            // the weight the set starts from (a back-off's worked-out weight; 0 = none yet / BW)
     var loggedReps: Int?
     var loggedWeight: Double?
     var rpe: Double?
@@ -349,6 +349,26 @@ extension WatchBridge: WCSessionDelegate {
         if message["motionCapture"] is Data {
             let box = WatchLink.Box(message)
             Task { @MainActor in MotionCaptureStore.shared.ingest(box.m) }
+            return
+        }
+        // DEBUG recorder (removed before release): recording started / stopped / closed on the Watch,
+        // and a live session's chunks (every 15 s).
+        if message["dbgChunk"] is Data {
+            let box = WatchLink.Box(message)
+            Task { @MainActor in PhoneDebugRecorder.shared.liveChunk(box.m) }
+            return
+        }
+        if message["dbgGo"] as? Bool == true {
+            let w = message["wrist"] as? String
+            Task { @MainActor in PhoneDebugRecorder.shared.watchWentGo(wrist: w) }
+            return
+        }
+        if message["dbgStopped"] as? Bool == true {
+            Task { @MainActor in PhoneDebugRecorder.shared.watchStopped() }
+            return
+        }
+        if message["dbgDone"] as? Bool == true {
+            Task { @MainActor in PhoneDebugRecorder.shared.end(fromWatch: true) }
             return
         }
         // Watch setup: Go tapped, the hold done, or the setup set captured.

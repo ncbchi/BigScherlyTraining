@@ -169,7 +169,7 @@ final class WatchState: NSObject, ObservableObject {
         let total = setup?.kind == "still" ? 3 : 5
         countdownTotal = Double(total)
         countdownEnds = Date().addingTimeInterval(Double(total))
-        MotionRecorder.shared.calibrating = true          // arm moving into place: not a rep, not a set
+        MotionRecorder.shared.beginCalibration()          // arm moving into place: not a rep, not a set
         WatchBuzz.tap()                                   // Go: got it
         countdownTask?.cancel()
         countdownTask = Task {
@@ -235,7 +235,7 @@ final class WatchState: NSObject, ObservableObject {
             }
         } else {
             setupPhase = "capturing"
-            MotionRecorder.shared.calibrating = true
+            MotionRecorder.shared.beginCalibration()
             // Presses and deadlifts go up first; squats and bench go down first.
             let upFirst = step.lift == "deadlift" || step.title.lowercased().contains("press")
             MotionRecorder.shared.setRepOrder(upFirst ? .upFirst : .downFirst)
@@ -621,7 +621,7 @@ final class WatchState: NSObject, ObservableObject {
     /// sound cue — is a live stream: best-effort, a missed sample doesn't matter.
     nonisolated private static let eventKeys: Set<String> =
         ["cardAction", "setupGo", "setupStillDone", "setupStillFailed", "setupExit", "setupReps",
-         "setStarted", "detectedSet", "sessionActive", "motionCapture", "dbgGo", "dbgStopped", "dbgDone"]
+         "setStarted", "detectedSet", "sessionActive", "motionCapture", "dbgGo", "dbgStopped", "dbgDone", "dbgChunk"]
 
     nonisolated static func sendLive(_ msg: [String: Any]) {
         guard WCSession.default.activationState == .activated else { return }
@@ -978,7 +978,11 @@ extension WatchState: WCSessionDelegate {
         if let d = message["dbgArm"] as? [String: Any] {
             let lift = d["lift"] as? String ?? "other", title = d["title"] as? String ?? "Recording"
             let upFirst = (d["upFirst"] as? Int ?? 0) == 1
-            Task { @MainActor in WatchDebugRecorder.shared.armed(lift: lift, title: title, upFirst: upFirst) }
+            let order = d["order"] as? String ?? (upFirst ? "up" : "down")
+            let live = (d["live"] as? Int ?? 0) == 1, session = d["session"] as? String ?? ""
+            Task { @MainActor in
+                WatchDebugRecorder.shared.armed(lift: lift, title: title, order: order, live: live, session: session)
+            }
         }
         if message["dbgEnd"] as? Bool == true { Task { @MainActor in WatchDebugRecorder.shared.ended() } }
     }
@@ -1003,7 +1007,7 @@ private extension UInt32 {
 /// Which build of the Watch app this is — shown on Home and reported to the phone, so a Watch
 /// that missed an update is obvious instead of a mystery. Bump with each Watch delivery.
 enum WatchBuild {
-    static let tag = "2026-10-07.1"
+    static let tag = "2026-10-08.3"
 }
 
 // MARK: - The live link

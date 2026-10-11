@@ -6,7 +6,7 @@ import AppIntents
 //
 // Target membership: BOTH BigScherlyTraining and BigScherlyWidgetsExtension.
 //
-// The left pane drives the set loop:  rest → Start set → lifting → Log set → rest.
+// The left pane drives the set loop:  rest → Start set → lifting → set done → Log set → rest.
 // The right pane shows data: seven views, picked with the icon row or the ‹ › arrows.
 // Buttons run the intents at the bottom. LiveActivityIntents always run inside the APP's
 // process (iOS wakes it in the background if needed); the app installs
@@ -62,6 +62,7 @@ nonisolated struct LiveSetRow: Codable, Hashable, Sendable {
     var weight: Double?            // display units
     var rpe: Double?
     var current: Bool
+    var tText: String? = nil       // the plan's reps × weight as the app works it out: "3 × 170", "3 × —" (optional: older payloads decode)
 }
 
 nonisolated struct WorkoutActivityAttributes: ActivityAttributes {
@@ -131,23 +132,36 @@ nonisolated struct WorkoutActivityAttributes: ActivityAttributes {
         var upNext: String? = nil
 
         // Predicted results, so a tap can show its outcome instantly (before the app runs)
-        var nextReps: Int = 0          // what the editor opens with
+        var nextReps: Int = 0          // the next set's planned reps
         var nextWeight: Double = 0     // display units
         var nextRPE: Double = 8
-        var restSeconds: Int = 0       // this exercise's rest (Save → rest border)
-        var afterSaveView: LiveView = .sets   // the right pane after Save
+        var restSeconds: Int = 0       // this exercise's rest (Log set → rest border)
+        var afterSaveView: LiveView = .sets   // the right pane after Log set
 
-        // Log-set editor (right pane)
-        var editing: Bool = false
-        var editorAuto: Bool = false   // opened by the Watch: closes itself at editorUntil (the stale date)
+        // The set waiting to be logged (logNeeded): filled in, nothing to enter on the card.
+        // dReps: the Watch's count (or the plan) · dWeight: last set's weight plus the plan's step ·
+        // dRPE: estimated from how the set went. The Watch reads these same fields for its log tile.
+        var editing: Bool = false      // always false now (no editor on the card); the Watch still reads it
+        var editorAuto: Bool = false
         var editorUntil: Date? = nil
-        var editSet: Int = 1
+        var editSet: Int = 1           // the set's number
         var dReps: Int = 0
         var dWeight: Double = 0        // display units
         var dRPE: Double = 8
-        // Three single-tap screens: 0 reps · 1 weight · 2 RPE (the RPE tap saves). Optional: older payloads decode.
-        var editStep: Int? = nil
-        var repsPage: Int? = nil       // 0 = 1–10, 1 = 11–20
+        var editStep: Int? = nil       // unused (kept so older payloads decode)
+        var repsPage: Int? = nil       // unused (kept so older payloads decode)
+        // Optional: older payloads decode.
+        var rpeWhy: String? = nil      // "speed dropped 22% · last rep a grind"
+        var doneByWatch: Bool? = nil   // true: the Watch saw the set end · false: you ended it
+        var editLink: String? = nil    // Edit: opens the app on this set, reps selected
+        // Settings ▸ Lock Screen & Dynamic Island (optional: older payloads decode)
+        var island: String? = nil      // the Dynamic Island's right pill: "hr" · "sets" · "rest"
+        var afterSetMode: String? = nil // after a set: "ask" (Log set + Edit) · "auto" (logs itself) · "off"
+        var autoLogAt: Date? = nil     // "auto": when the set logs itself (the card counts down to it)
+        // Set types (optional: older payloads decode). The app works out the weight (SetTarget);
+        // these are the same "reps × weight" as always, with that weight in it.
+        var goalText: String? = nil    // the set you're on: "5 × 275 lb", "3 × 170 lb", "3 × —"
+        var nextGoalText: String? = nil // the set after it in this exercise (Log set's instant preview)
     }
 
     var workoutId: String
@@ -161,7 +175,7 @@ nonisolated enum LiveAction: Sendable {
     case show(LiveView)
     case startSet
     case rest(seconds: Int)            // 0 = skip
-    case log(String)                   // open, cancel, commit, reps+, reps-, weight+, weight-, rpe+, rpe-
+    case log(String)                   // end (finish the set you're lifting), commit (log the filled-in set)
 }
 
 nonisolated enum LiveIntentRouter {
@@ -196,110 +210,20 @@ nonisolated struct LiveSkipRestIntent: SetValueIntent, LiveActivityIntent {
     func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.rest(seconds: 0)); return .result() }
 }
 
-nonisolated struct LiveLogOpenIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Log a set"
+nonisolated struct LiveEndSetIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "End the set"
     static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
     @Parameter(title: "On") var value: Bool    // instant-preview switch
     init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("open")); return .result() }
-}
-
-nonisolated struct LiveLogCancelIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Cancel logging"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    @Parameter(title: "On") var value: Bool    // instant-preview switch
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("cancel")); return .result() }
+    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("end")); return .result() }
 }
 
 nonisolated struct LiveLogCommitIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Save the set"
+    static let title: LocalizedStringResource = "Log the set"
     static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
     @Parameter(title: "On") var value: Bool    // instant-preview switch
     init() {}
     func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("commit")); return .result() }
-}
-
-nonisolated struct LiveRepsUpIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "One more rep"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("reps+")); return .result() }
-}
-
-nonisolated struct LiveRepsDownIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "One less rep"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("reps-")); return .result() }
-}
-
-nonisolated struct LiveWeightUpIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "More weight"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("weight+")); return .result() }
-}
-
-nonisolated struct LiveWeightDownIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Less weight"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("weight-")); return .result() }
-}
-
-nonisolated struct LiveRPEUpIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Raise RPE"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("rpe+")); return .result() }
-}
-
-nonisolated struct LiveRPEDownIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Lower RPE"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("rpe-")); return .result() }
-}
-
-// The log editor's picks: one tap each (shown at once), moving to the next screen.
-
-nonisolated struct LivePickRepsIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Pick reps"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    @Parameter(title: "On") var value: Bool    // instant-preview switch
-    @Parameter(title: "Reps", default: 0) var reps: Int
-    init() {}
-    init(reps: Int) { self.reps = reps }
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("reps=\(reps)")); return .result() }
-}
-
-nonisolated struct LivePickWeightIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Pick weight"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    @Parameter(title: "On") var value: Bool    // instant-preview switch
-    @Parameter(title: "Weight", default: 0) var weight: Double   // display units
-    init() {}
-    init(weight: Double) { self.weight = weight }
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("weight=\(weight)")); return .result() }
-}
-
-nonisolated struct LivePickRPEIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Pick RPE and save"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    @Parameter(title: "On") var value: Bool    // instant-preview switch
-    @Parameter(title: "RPE", default: 8) var rpe: Double
-    init() {}
-    init(rpe: Double) { self.rpe = rpe }
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("rpe=\(rpe)")); return .result() }
-}
-
-nonisolated struct LiveRepsPageIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "More reps"
-    static let isDiscoverable = false          // card buttons only — not listed in Shortcuts
-    @Parameter(title: "On") var value: Bool    // instant-preview switch
-    init() {}
-    func perform() async throws -> some IntentResult { await LiveIntentRouter.handler?(.log("repsPage")); return .result() }
 }
 
 // View selector and the set-loop controls: on/off switches (iOS redraws a switch the instant it's tapped, before the

@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import AVKit
 
 // MARK: - Coach's view of one client
 // Read + respond: check-ins, conversations, their photos and awards, your private notes.
@@ -11,10 +13,11 @@ struct TrainerClientView: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case checkins = "Check-Ins", workouts = "Workouts", chat = "Chat", progress = "Progress",
-             photos = "Photos", awards = "Awards", notes = "Notes"
+             photos = "Photos", awards = "Awards", supplements = "Supplements", notes = "Notes"
         var id: String { rawValue }
     }
     @State private var section: Section
+    @State private var previewing = false   // view as client (Oct 8, 2026)
 
     init(client: RosterItem) {
         self.client = client
@@ -61,7 +64,8 @@ struct TrainerClientView: View {
                     case .progress: TrainerProgressView(clientId: client.id)
                     case .photos:   TrainerPhotosView(clientId: client.id)
                     case .awards:   TrainerAwardsView(clientId: client.id, clientName: client.name)
-                    case .notes:    TrainerNotesView(clientId: client.id)
+                    case .supplements: CoachClientSupplements(clientId: client.id, clientName: client.name)   // Oct 8, 2026
+                    case .notes:    ClientNotebookView(clientId: client.id)   // binder: Notes page + more (Oct 8, 2026)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -69,12 +73,17 @@ struct TrainerClientView: View {
             .padding(.top, 8)
             .background(Brand.bg.ignoresSafeArea())
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { previewing = true } label: { Label("View as client", systemImage: "eye") }
+                        .foregroundColor(Brand.voltText)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { store.loadRoster(); dismiss() }.foregroundColor(Brand.voltText)
                 }
             }
         }
         .tint(Brand.volt)
+        .sheet(isPresented: $previewing) { ClientPreviewSheet(clientId: client.id, clientName: client.name) }
     }
 }
 
@@ -90,6 +99,7 @@ struct TrainerCheckInsView: View {
         let list = (data.checkIns[clientId] ?? []).filter { $0.status != "draft" }
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                ClientCheckInFormPicker(clientId: clientId)   // which form they answer (Oct 8, 2026)
                 if data.checkIns[clientId] == nil {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 30)
                 } else if list.isEmpty {
@@ -142,6 +152,12 @@ struct TrainerChatView: View {
     @State private var draft = ""
     @State private var loading = true
     @State private var sending = false
+    // Inbox extras (Oct 8, 2026): voice notes, video replies, their videos playable here.
+    @State private var recordingVoice = false
+    @State private var pickedVideo: PhotosPickerItem?
+    @State private var videoStatus: String?
+    @State private var playing: IdentifiableURL?
+    @State private var loadingVideo: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -171,14 +187,7 @@ struct TrainerChatView: View {
                         ForEach(messages, id: \.id) { m in
                             HStack {
                                 if m.fromTrainer { Spacer(minLength: 40) }
-                                Text(m.text)
-                                    .font(BrandFont.body(14))
-                                    .foregroundColor(m.fromTrainer ? Brand.onVolt : Brand.text)
-                                    .padding(.horizontal, 14).padding(.vertical, 10)
-                                    .background(m.fromTrainer ? Brand.volt : Brand.black)
-                                    .clipShape(BubbleShape(fromMe: m.fromTrainer))
-                                    .overlay(m.fromTrainer ? nil :
-                                        BubbleShape(fromMe: false).stroke(Brand.line, lineWidth: 1))
+                                messageBody(m)
                                 if !m.fromTrainer { Spacer(minLength: 40) }
                             }
                             .id(m.id)
@@ -191,9 +200,26 @@ struct TrainerChatView: View {
                 }
             }
 
-            QuickReplies(options: ["Love to hear it!", "Keep it up 💪", "Send me a video?", "Can we talk this week?"]) { draft = $0 }
+            QuickReplies { draft = $0 }   // his saved replies
                 .padding(.horizontal, 20).padding(.top, 6)
+            if let videoStatus {
+                HStack(spacing: 8) {
+                    if videoStatus.hasSuffix("…") { ProgressView().tint(Brand.volt) }
+                    Text(videoStatus).font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                }
+                .padding(.top, 6)
+            }
             HStack(spacing: 8) {
+                PhotosPicker(selection: $pickedVideo, matching: .videos, photoLibrary: .shared()) {
+                    Image(systemName: "video.badge.plus").font(.system(size: 20)).foregroundColor(Brand.voltText)
+                }
+                .accessibilityLabel("Send a video")
+                .disabled(activeThreadId == nil)
+                Button { recordingVoice = true } label: {
+                    Image(systemName: "mic.fill").font(.system(size: 19)).foregroundColor(Brand.voltText)
+                }
+                .accessibilityLabel("Record a voice note")
+                .disabled(activeThreadId == nil)
                 TextField("Message \(clientName)…", text: $draft)
                     .font(BrandFont.body(14))
                     .foregroundColor(Brand.text)
@@ -216,6 +242,89 @@ struct TrainerChatView: View {
         }
         .task { await load() }
         .tapToDismissKeyboard()
+        .sheet(isPresented: $recordingVoice) {
+            VoiceNoteSheet(title: "Voice note to \(clientName.split(separator: " ").first.map(String.init) ?? clientName)") { url, secs, transcript in
+                guard let tid = activeThreadId else { return }
+                try await APIClient.shared.sendVoiceNote(threadId: tid, fileURL: url, seconds: secs, transcript: transcript, asCoach: true)
+                await load()
+            }
+        }
+        .sheet(item: $playing) { p in
+            VideoPlayer(player: AVPlayer(url: p.url)).ignoresSafeArea()
+        }
+        .onChange(of: pickedVideo) { _, item in
+            guard let item else { return }
+            Task { await sendVideo(item) }
+        }
+    }
+
+    @ViewBuilder
+    private func messageBody(_ m: APIChatMessage) -> some View {
+        if m.isVoice {
+            VoiceNoteBubble(id: m.id, fromMe: m.fromTrainer, seconds: m.voiceSeconds ?? 0, available: m.voiceAvailable ?? false,
+                            expiresAt: m.voiceExpiresAt, transcript: m.transcript) {
+                try await APIClient.shared.voiceNoteAudio(threadId: activeThreadId ?? "", messageId: m.id, asCoach: true)
+            }
+        } else {
+            VStack(alignment: m.fromTrainer ? .trailing : .leading, spacing: 6) {
+                if let key = m.videoKey ?? (m.kind == "video" ? m.imageKey : nil) {
+                    Button {
+                        guard let tid = activeThreadId else { return }
+                        Task {
+                            loadingVideo = m.id
+                            if let url = try? await APIClient.shared.chatVideoFile(threadId: tid, key: key, asCoach: true) {
+                                playing = IdentifiableURL(url: url)
+                            }
+                            loadingVideo = nil
+                        }
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16).fill(Brand.black)
+                            if loadingVideo == m.id { ProgressView().tint(Brand.text) }
+                            else { Image(systemName: "play.circle.fill").font(.system(size: 42)).foregroundColor(Brand.text.opacity(0.9)) }
+                        }
+                        .frame(width: 200, height: 130)
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                    }
+                    .accessibilityLabel("Play video")
+                }
+                let txt = m.kind == "setComment" ? setCommentBody(m.text) : m.text
+                if !txt.isEmpty || m.setRef != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let ref = m.setRef { SetRefQuote(ref: ref, onVolt: m.fromTrainer) }
+                        if !txt.isEmpty { Text(txt).font(BrandFont.body(14)) }
+                    }
+                    .foregroundColor(m.fromTrainer ? Brand.onVolt : Brand.text)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(m.fromTrainer ? Brand.volt : Brand.black)
+                    .clipShape(BubbleShape(fromMe: m.fromTrainer))
+                    .overlay(m.fromTrainer ? nil : BubbleShape(fromMe: false).stroke(Brand.line, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    /// Compress on the phone (540p), then upload. Replies over ~28 MB are refused, so keep them short.
+    private func sendVideo(_ item: PhotosPickerItem) async {
+        guard let tid = activeThreadId else { return }
+        videoStatus = "Compressing video…"
+        defer { pickedVideo = nil }
+        do {
+            guard let movie = try await item.loadTransferable(type: Movie.self) else { videoStatus = nil; return }
+            let out = try await VideoCompressor.compress(movie.url)
+            let size = (try? FileManager.default.attributesOfItem(atPath: out.url.path)[.size] as? Int) ?? 0
+            if size > 28_000_000 {
+                videoStatus = "That video is too long to send (\(size / 1_000_000) MB). Trim it to about a minute."
+                return
+            }
+            videoStatus = "Sending video…"
+            try await APIClient.shared.coachSendVideo(threadId: tid, fileURL: out.url, caption: draft.trimmingCharacters(in: .whitespacesAndNewlines))
+            draft = ""
+            videoStatus = nil
+            await load()
+        } catch {
+            videoStatus = (error as? APIClient.APIError)?.message ?? "Couldn't send the video. Try again."
+        }
     }
 
     private func load() async {

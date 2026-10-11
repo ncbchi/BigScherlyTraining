@@ -136,12 +136,20 @@ struct CoachFilterChips: View {
 
 /// One-tap starter phrases that fill (not send) the message box.
 struct QuickReplies: View {
-    let options: [String]
+    /// Lines for this moment (a congrats, a nudge); the coach's saved replies follow.
+    var options: [String] = []
     let pick: (String) -> Void
+    @ObservedObject private var store = AppStore.shared   // Settings ▸ Coach ▸ Saved replies
+    private var shown: [String] {
+        var seen = Set<String>()
+        return (options + store.savedReplies).filter { seen.insert($0).inserted }
+    }
     var body: some View {
+        // Snaps pill-by-pill like every other left-right row (tap inserts, so no
+        // DSCarousel here — centring one would type it while you swipe).
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(options, id: \.self) { o in
+                ForEach(shown, id: \.self) { o in
                     Button { pick(o) } label: {
                         Text(o).font(BrandFont.body(12, .semibold)).foregroundColor(Brand.text)
                             .padding(.horizontal, 12).frame(minHeight: 32)
@@ -150,7 +158,9 @@ struct QuickReplies: View {
                     .buttonStyle(.plain)
                 }
             }
+            .scrollTargetLayout()
         }
+        .scrollTargetBehavior(.viewAligned)
     }
 }
 
@@ -216,6 +226,7 @@ struct CoachComposeSheet: View {
                 }
                 .padding(20)
             }
+            .sheetFitsScrollContent()            // the card is only as tall as what's in it
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)

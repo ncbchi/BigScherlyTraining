@@ -14,8 +14,10 @@ struct LoginView: View {
             BrandDark.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
-                Image("logo")            // add logo asset; text fallback below
+                // The volt logo from the asset catalog (the login page always stays dark).
+                Image("logoVolt").renderingMode(.template)
                     .resizable().scaledToFit()
+                    .foregroundColor(BrandDark.volt)
                     .frame(height: 120)
                     .padding(.bottom, 8)
 
@@ -66,8 +68,13 @@ struct LoginView: View {
                                         UserDefaults.standard.set(resp.name, forKey: "bst_userName")
 
                                         if store.isTrainer {
+                                            // His own training runs on a hidden profile; keep his login
+                                            // name and email on screen.
+                                            store.client = Client(id: resp.id, name: resp.name, email: email,
+                                                                  startDate: store.client.startDate, goal: store.client.goal)
+                                            UserDefaults.standard.set(email, forKey: "bst_userEmail")
                                             store.login()
-                                            store.loadRoster()
+                                            store.startCoachSession()
                                         } else {
                                             store.mustChangePassword = resp.mustChangePassword
                                             store.login()
@@ -83,6 +90,8 @@ struct LoginView: View {
                     .padding(.top, 4)
                 }
                 .padding(.horizontal, 32)
+                // iPad (Oct 9, 2026): the fields and button sit in a centred column, not edge to edge.
+                .frame(maxWidth: 440)
 
                 Spacer()
 
@@ -133,39 +142,60 @@ struct LoginView: View {
     }
 }
 
-// MARK: - Post-login welcome board
-// Revolving grid of #bigscherlytraining photos with the big overlay headline.
+// MARK: - Post-login welcome board (Entry B, Oct 9 2026)
+// The original headline stack over your accent's bumper plate, turning slowly off the
+// top-right, and a slide-to-enter bar in the same gold as the QUEENS outline.
+// Follows your theme (Dark · Light · System · Custom). In light, a pale accent (Volt,
+// Toxic, Amber…) can't draw lines on the light ground, so the rings go grey and the
+// accent shows only as fills — the same rule as Coach HQ.
 struct WelcomeBoardView: View {
-    @EnvironmentObject var store: AppStore
-    @StateObject private var motion = MotionManager()     // the QUEENS sheen follows the phone's tilt
+    // QUEENS and the gold bar's sheen follow the phone's tilt. Held, not observed: only those
+    // two small views redraw on each tilt tick, never the whole board (or the slider under your thumb).
+    @State private var motion = MotionManager()
+    @ObservedObject private var theme = ThemeStore.shared
+    @Environment(\.colorScheme) private var scheme
     @Binding var showBoard: Bool
+
+    private var p: Palette { theme.palette(for: scheme) }
+    private var light: Bool { p.scheme == .light }
+    private var ground: Color { light ? p.bg : BrandDark.black }
+    private var ink: Color { light ? p.text : .white }
+    /// A pale accent nearly vanishes on the light ground: there it fills, never draws lines.
+    private var paleOnLight: Bool {
+        light && RGBColor(hex: theme.accent).contrast(RGBColor(hex: 0xF2F2F4)) < 3
+    }
+    private var lineColor: Color { paleOnLight ? Color(hex: 0x8E8E93) : (light ? p.accent : p.accentText) }
 
     var body: some View {
         ZStack {
-            BrandDark.black.ignoresSafeArea()
+            ground.ignoresSafeArea()
 
-            // Flat grid of tiles that flip to the next photo
-            FlippingTileGrid(photos: store.boardPhotos)
-                .opacity(0.55)
+            PlateRings(line: lineColor, fill: p.accent, light: light, pale: paleOnLight)
                 .allowsHitTesting(false)
 
-            // Dark scrim for text legibility
-            LinearGradient(colors: [.black.opacity(0.7), .black.opacity(0.4), .black.opacity(0.8)],
+            // Fade the plate out behind the words and the bar
+            LinearGradient(stops: [.init(color: ground.opacity(0), location: 0.45),
+                                   .init(color: ground, location: 0.72)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             // Overlay headline — left aligned, fills the width, alternating
             // filled / outlined like the website. Each word auto-shrinks to fit one line.
             VStack(alignment: .leading, spacing: -4) {
                 Spacer()
                 filledWord("LET'S")
-                outlinedWord("GET")
+                outlinedWord("GET", color: ink)
                 filledWord("BIG")
-                outlinedWord("TOGETHER")
+                outlinedWord("TOGETHER", color: paleOnLight ? ink : lineColor)
                 MetallicRainbowText(text: "QUEENS", size: 140, fillWidth: true, motion: motion)
+                    // On the light ground a hairline of deep gold keeps the rim's pale highlights edged.
+                    .shadow(color: light ? Color(hex: 0x6B4E12).opacity(0.55) : .clear, radius: 0.6)
                 Spacer()
-                enterButton
-                    .padding(.top, 12)
+                GoldSlideToEnter(light: light, motion: motion) {
+                    withAnimation { showBoard = false }
+                }
+                .padding(.top, 12)
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 30)
@@ -177,33 +207,198 @@ struct WelcomeBoardView: View {
     // Big, heavy, one line each — shrinks to fit width so TOGETHER never wraps.
     private let headlineSize: CGFloat = 96
 
-    // The original Enter: a Volt capsule with black type, whatever accent is chosen.
-    private var enterButton: some View {
-        Button { withAnimation { showBoard = false } } label: {
-            Text("ENTER")
-                .font(BrandFont.body(14, .bold))
-                .tracking(1.5)
-                .foregroundColor(BrandDark.onVolt)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(BrandDark.volt)
-                .clipShape(Capsule())
-        }
-    }
-
     func filledWord(_ w: String) -> some View {
         Text(w)
             .font(BrandFont.welcome(headlineSize))
-            .foregroundColor(.white)
+            .foregroundColor(ink)
             .lineLimit(1)
             .minimumScaleFactor(0.4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
-    func outlinedWord(_ w: String) -> some View {
-        StrokeText(text: w, size: headlineSize)
+    func outlinedWord(_ w: String, color: Color) -> some View {
+        StrokeText(text: w, size: headlineSize, color: color)
             .lineLimit(1)
             .minimumScaleFactor(0.4)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - The plate behind the board
+// A bumper plate drawn in hairlines, bleeding off the top-right and turning once every two
+// minutes (still when Reduce Motion is on). Laid out for a 390-wide phone and scaled.
+private struct PlateRings: View {
+    let line: Color
+    let fill: Color
+    let light: Bool
+    let pale: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spin = 0.0
+
+    var body: some View {
+        GeometryReader { geo in
+            let s = geo.size.width / 390
+            let k: Double = light ? (pale ? 1.5 : 1.6) : 1     // heavier lines so they hold on a light ground
+            ZStack {
+                ring(300, 1.5, 0.16 * k)
+                ring(268, 2, min(1, 0.34 * k))
+                ring(236, 1, 0.12 * k)
+                Circle()
+                    .stroke(pale ? fill : line, lineWidth: 22)
+                    .opacity(pale ? 0.55 : (light ? 0.08 : 0.10))
+                    .frame(width: 396, height: 396)
+                ring(150, 1.5, 0.22 * k)
+                ring(96, 1, 0.14 * k)
+                ring(40, 2, min(1, 0.42 * k))
+                Circle()
+                    .fill(fill)
+                    .opacity(pale ? 1 : (light ? 0.22 : 0.18))
+                    .frame(width: 48, height: 48)
+                Circle()
+                    .trim(from: 0, to: 0.125)
+                    .stroke(pale ? fill : line, style: StrokeStyle(lineWidth: pale ? 10 : 3, lineCap: .round))
+                    .frame(width: 600, height: 600)
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 620, height: 620)
+            .rotationEffect(.degrees(spin))
+            .scaleEffect(s)
+            .position(x: 350 * s, y: 140 * s)
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 120).repeatForever(autoreverses: false)) { spin = 360 }
+        }
+    }
+
+    private func ring(_ r: CGFloat, _ width: CGFloat, _ opacity: Double) -> some View {
+        Circle()
+            .stroke(line, lineWidth: width)
+            .opacity(opacity)
+            .frame(width: r * 2, height: r * 2)
+    }
+}
+
+// MARK: - Slide to enter (gold)
+// A brushed-gold bar in the QUEENS outline's gold with a dark knob you push right. The sheen
+// rides the same tilt as QUEENS. A tick at each quarter, a heavy thunk when it locks. A tap
+// on the bar hops the knob to show how it works; VoiceOver gets a plain "Enter" button.
+private struct GoldSlideToEnter: View {
+    let light: Bool
+    let motion: MotionManager          // passed through to the sheen only
+    let action: () -> Void
+
+    @State private var dragX: CGFloat = 0
+    @State private var lastQuarter = 0
+    @State private var entered = false
+
+    private static let gold: [Gradient.Stop] = [
+        .init(color: Color(hex: 0x8A6A1E), location: 0),
+        .init(color: Color(hex: 0xE0A83C), location: 0.28),
+        .init(color: Color(hex: 0xFFF3B0), location: 0.5),
+        .init(color: Color(hex: 0xE0A83C), location: 0.72),
+        .init(color: Color(hex: 0x8A6A1E), location: 1)
+    ]
+    private let height: CGFloat = 66
+    private let knob: CGFloat = 54
+    private let inset: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geo in
+            let travel = max(1, geo.size.width - knob - inset * 2)
+            let progress = dragX / travel
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(LinearGradient(stops: Self.gold, startPoint: .topLeading, endPoint: .bottomTrailing))
+                GoldSheen(motion: motion, width: geo.size.width, height: height)
+                Text("ENTER")
+                    .font(BrandFont.welcome(19))
+                    .tracking(6)
+                    .foregroundColor(Color(hex: 0x2A1F07))
+                    .frame(maxWidth: .infinity)
+                    .padding(.leading, knob)
+                    .opacity(max(0, 1 - Double(progress) * 1.4))
+                Circle()
+                    .fill(light ? Color(hex: 0x111113) : Color(hex: 0x0B0B0C))
+                    .frame(width: knob, height: knob)
+                    .overlay(
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 17, weight: .heavy))
+                            .foregroundColor(Color(hex: 0xFFF3B0))
+                    )
+                    .shadow(color: .black.opacity(0.4), radius: 5, y: 3)
+                    .offset(x: inset + dragX)
+                    .gesture(slide(travel))
+            }
+            .frame(width: geo.size.width, height: height)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(Color(hex: 0x8A6A1E).opacity(light ? 0.35 : 0), lineWidth: 1))
+            .shadow(color: light ? Color(hex: 0x8A6A1E).opacity(0.28) : Color(hex: 0xE0A83C).opacity(0.32),
+                    radius: light ? 11 : 13, y: 8)
+            .contentShape(Capsule())
+            .onTapGesture { nudge() }
+        }
+        .frame(height: height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Enter")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
+    }
+
+    private func slide(_ travel: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                guard !entered else { return }
+                dragX = min(max(0, v.translation.width), travel)
+                let q = Int((dragX / travel) * 4)
+                if q != lastQuarter, q < 4 {
+                    lastQuarter = q
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+            }
+            .onEnded { _ in
+                guard !entered else { return }
+                if dragX >= travel * 0.85 {
+                    entered = true
+                    withAnimation(.easeOut(duration: 0.15)) { dragX = travel }
+                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        action()
+                    }
+                } else {
+                    lastQuarter = 0
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { dragX = 0 }
+                }
+            }
+    }
+
+    private func nudge() {
+        guard !entered, dragX == 0 else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { dragX = 28 }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { dragX = 0 }
+        }
+    }
+}
+
+/// The sheen band across the gold: the only part of the slider that watches the tilt.
+private struct GoldSheen: View {
+    @ObservedObject var motion: MotionManager
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        let tilt = (motion.roll + motion.wave * 0.6) / 1.6          // about -1…1
+        LinearGradient(colors: [Color(hex: 0xFFFDE8).opacity(0), Color(hex: 0xFFFDE8).opacity(0.95), Color(hex: 0xFFFDE8).opacity(0)],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(width: 70, height: height * 1.4)
+            .rotationEffect(.degrees(18))
+            .offset(x: width * (0.5 + 0.42 * tilt) - 35)
+            .blendMode(.screen)
+            .allowsHitTesting(false)
     }
 }
 
@@ -346,6 +541,7 @@ struct FlipTile: View {
 struct StrokeText: View {
     let text: String
     let size: CGFloat
+    var color: Color = .white
 
     var body: some View {
         ZStack {
@@ -354,7 +550,7 @@ struct StrokeText: View {
                 let angle = Double(i) / 8 * 2 * .pi
                 Text(text)
                     .font(BrandFont.welcome(size))
-                    .foregroundColor(.white)
+                    .foregroundColor(color)
                     .offset(x: CGFloat(cos(angle)) * 2.2, y: CGFloat(sin(angle)) * 2.2)
             }
             // Knock out the center so it's hollow (shows the board behind)

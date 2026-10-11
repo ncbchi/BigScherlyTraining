@@ -4,10 +4,12 @@ import SwiftUI
 import AppIntents
 
 // MARK: - Workout Live Activity (Lock Screen + Dynamic Island)
-// Left pane (centred): the set loop — rest border → Start set → lifting → Log set.
-// Right pane: seven data views, picked with the icon row or the ‹ › arrows.
-// iOS redraws the card by itself at its stale date (rest ends → Start set; the
-// Watch-opened log editor closes after 10 s), so it stays right even with the app asleep.
+// Left pane (centred): the set loop — rest border → Start set → lifting → set done.
+// Right pane: seven data views, picked with the icon row — or, once a set is done, that set
+// filled in (Watch reps · carried weight · estimated RPE) with Edit and Log set. Nothing is
+// entered on the card: Log set is one tap, Edit opens the app on the set.
+// iOS redraws the card by itself at its stale date (rest ends → Start set), so it stays
+// right even with the app asleep.
 
 /// The card's colours, chosen per draw. Dark: the original card (black, the accent made
 /// readable on it). Light: your Light theme — white card, ink text, the right pane on light
@@ -102,8 +104,10 @@ private struct Shown {
     func usePalette() { LiveTheme.set(s, light: light) }
     /// Rest ended while the app slept → show Start set.
     var stage: LiveStage { s.stage == .resting && stale ? .ready : s.stage }
-    /// The Watch-opened editor closes itself at the stale date.
-    var editing: Bool { s.editing && !(s.editorAuto && stale) }
+    /// A finished set waiting for Log set (or Edit) — shown on the right unless Settings ▸ After a set is Off.
+    var setDone: Bool { stage == .lifting && s.logNeeded && s.afterSetMode != "off" }
+    /// A finished set waiting at all (Off included: a tap on the card opens it in the app).
+    var waiting: Bool { stage == .lifting && s.logNeeded }
 
     func sized(_ size: CGSize) -> Shown { var c = self; c.card = size; return c }
     func asPreview() -> Shown { var c = self; c.isPreview = true; return c }
@@ -120,26 +124,18 @@ private struct Shown {
         c.s.stage = .ready; c.s.restStart = nil; c.s.restEnd = nil
         return c
     }
-    func afterOpenEditor() -> Shown {
+    /// End set (no Watch): the left pane shows the set done straight away. The right pane's
+    /// filled-in set arrives with the app's update — previewing it would put Edit and Log set
+    /// where the view icons still sit underneath, and a quick tap would land on an icon.
+    func afterEndSet() -> Shown {
         var c = self; c.stale = false
-        c.s.editing = true; c.s.editorAuto = false; c.s.editorUntil = nil
-        c.s.dReps = s.nextReps; c.s.dWeight = s.nextWeight; c.s.dRPE = s.nextRPE; c.s.editSet = s.setNumber
-        c.s.editStep = 0; c.s.repsPage = s.nextReps > 10 ? 1 : 0
-        return c
-    }
-    func afterReps(_ n: Int) -> Shown { var c = self; c.stale = false; c.s.dReps = n; c.s.editStep = 1; return c }
-    func afterWeight(_ w: Double) -> Shown { var c = self; c.stale = false; c.s.dWeight = w; c.s.editStep = 2; return c }
-    func afterRPE(_ r: Double) -> Shown { var c = afterSave(); c.s.dRPE = r; return c }
-    func afterRepsPage() -> Shown { var c = self; c.stale = false; c.s.repsPage = (s.repsPage ?? 0) == 0 ? 1 : 0; return c }
-    func afterCancel() -> Shown {
-        var c = self; c.stale = false; c.s.editing = false; c.s.editorAuto = false
+        c.s.logNeeded = true; c.s.doneByWatch = false
         return c
     }
     func afterSave() -> Shown {
         var c = self; c.stale = false; c.frozen = true
-        c.s.editing = false; c.s.editorAuto = false
         c.s.logNeeded = false; c.s.setStart = nil
-        if c.s.setNumber < c.s.setCount { c.s.setNumber += 1 }
+        if c.s.setNumber < c.s.setCount { c.s.setNumber += 1; c.s.goalText = s.nextGoalText }
         if s.restSeconds > 0 {
             // A rest that hasn't started yet shows a full border and the full time, still.
             let a = Date().addingTimeInterval(365 * 86_400)
@@ -225,6 +221,9 @@ struct BigScherlyWidgetsLiveActivity: Widget {
             let forced = context.state.light
             let _ = LiveTheme.set(context.state, light: forced ?? false)
             LiveCard(x: Shown(s: context.state, stale: context.isStale))
+                // A finished set: Edit. The Lock Screen card takes one link for the whole card (Apple
+                // allows no per-button links there), so a tap anywhere but Log set opens the set.
+                .widgetURL(editURL(context.state, stale: context.isStale))
                 .activityBackgroundTint(forced == true ? Color.white : (forced == false ? C.card : nil))
                 .activitySystemActionForegroundColor(forced == true ? Color(.sRGB, red: 17 / 255, green: 17 / 255, blue: 19 / 255, opacity: 1) : C.volt)
         } dynamicIsland: { context in
@@ -245,7 +244,14 @@ struct BigScherlyWidgetsLiveActivity: Widget {
             } compactLeading: {
                 CompactLeading(x: x)
             } compactTrailing: {
-                if let hr = x.s.hr {
+                // Settings ▸ Dynamic Island, right: heart rate (the default) · the set count · the rest left.
+                if x.s.island == "sets" || (x.s.island == "rest" && x.stage != .resting) {
+                    Text("\(x.s.setNumber)/\(x.s.setCount)").font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(C.volt)
+                } else if x.s.island == "rest", let a = x.s.restStart, let b = x.s.restEnd {
+                    Text(timerInterval: a...b, countsDown: true).font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .monospacedDigit().foregroundStyle(C.volt).frame(maxWidth: 52)
+                } else if let hr = x.s.hr {
                     HStack(spacing: 2) {
                         Image(systemName: "heart.fill").font(.system(size: 10))
                         Text("\(hr)").font(.system(size: 13, weight: .heavy, design: .rounded))
@@ -264,8 +270,15 @@ struct BigScherlyWidgetsLiveActivity: Widget {
                 }
             }
             .keylineTint(C.volt)
+            .widgetURL(editURL(context.state, stale: context.isStale))
         }
     }
+}
+
+/// Edit's link while a set is done and waiting (nil otherwise: a tap just opens the app).
+private func editURL(_ s: WorkoutActivityAttributes.ContentState, stale: Bool) -> URL? {
+    guard Shown(s: s, stale: stale).waiting, let l = s.editLink else { return nil }
+    return URL(string: l)
 }
 
 private struct CompactLeading: View {
@@ -274,7 +287,9 @@ private struct CompactLeading: View {
         Group {
             switch x.stage {
             case .resting:
-                if let a = x.s.restStart, let b = x.s.restEnd {
+                if x.s.island == "rest" {
+                    Text("Set \(x.s.setNumber)").foregroundStyle(C.volt)      // the rest is on the right
+                } else if let a = x.s.restStart, let b = x.s.restEnd {
                     Text(timerInterval: a...b, countsDown: true).foregroundStyle(C.volt)
                 }
             case .lifting:
@@ -294,8 +309,11 @@ private func num(_ v: Double, _ d: Int = 1) -> String {
     v == v.rounded() ? String(Int(v)) : String(format: "%.\(d)f", v)
 }
 
+/// The set you're on: reps × weight, with the weight the app worked out (a back-off's, an RPE set's
+/// starting weight). Older data without it builds it from the numbers.
 private func goal(_ s: S) -> String {
-    s.goalWeight > 0 ? "\(s.goalReps) × \(num(s.goalWeight)) \(s.unit)" : "\(s.goalReps) reps"
+    if let t = s.goalText, !t.isEmpty { return t }
+    return s.goalWeight > 0 ? "\(s.goalReps) × \(num(s.goalWeight)) \(s.unit)" : "\(s.goalReps) reps"
 }
 
 private func pill(_ t: String, filled: Bool, height: CGFloat = 22) -> some View {
@@ -390,28 +408,35 @@ private struct LeftPane: View {
             }
         case .lifting:
             VStack(spacing: 4) {
-                VStack(spacing: 0) {
+                VStack(spacing: 1) {
                     Text(s.logNeeded ? "SET \(s.setNumber) DONE" : "SET \(s.setNumber) · LIFTING")
                         .font(.system(size: 7, weight: .heavy)).tracking(0.8).foregroundStyle(C.acc)
-                    if x.frozen && !s.logNeeded {
+                    if s.logNeeded {
+                        Image(systemName: "checkmark").font(.system(size: 20, weight: .heavy)).foregroundStyle(C.text)
+                    } else if x.frozen {
                         Text("0:00").font(.system(size: 22, weight: .heavy, design: .rounded))
                             .monospacedDigit().foregroundStyle(C.text)
-                    } else if let st = s.setStart, !s.logNeeded {
+                    } else if let st = s.setStart {
                         Text(st, style: .timer).font(.system(size: 22, weight: .heavy, design: .rounded))
                             .monospacedDigit().foregroundStyle(C.text)
                     } else {
-                        Image(systemName: "checkmark").font(.system(size: 20, weight: .heavy)).foregroundStyle(C.text)
+                        Text("0:00").font(.system(size: 22, weight: .heavy, design: .rounded))
+                            .monospacedDigit().foregroundStyle(C.text)
                     }
                 }
                 .frame(maxWidth: .infinity).frame(height: 52)
                 .background(RoundedRectangle(cornerRadius: 12).fill(C.tile))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.stroke, lineWidth: 1.5))
-                if x.editing {
-                    pill("Logging…", filled: false, height: 20)          // open already: a label, not a button
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(s.logNeeded ? C.line : C.stroke, lineWidth: 1.5))
+                if s.logNeeded {
+                    // Done: Log set and Edit are on the right. Here, just where the set came from.
+                    Text(s.afterSetMode == "off" ? "tap to log it in the app"
+                         : (s.doneByWatch == false ? "you ended the set" : "from your Watch"))
+                        .font(.system(size: 7.5, weight: .bold)).foregroundStyle(C.mute)
+                        .lineLimit(1).minimumScaleFactor(0.7).frame(height: 20)
                 } else {
-                    instant(LiveLogOpenIntent(), x, live: !x.editing,
-                            face: { _ in pill("✓ Log set", filled: true, height: 20) },
-                            result: { CardPreview(card: x.card, right: x.afterOpenEditor()) })
+                    instant(LiveEndSetIntent(), x, live: x.stage == .lifting && !s.logNeeded,
+                            face: { on in pill(on ? "✓ Set done" : "✓ End set", filled: true, height: 20) },
+                            result: { CardPreview(card: x.card, left: x.afterEndSet()) })
                 }
             }
         case .done:
@@ -546,7 +571,7 @@ private struct RestBorder: View {
     }
 }
 
-// MARK: - Right pane: icon row, ‹ view ›, or the log editor
+// MARK: - Right pane: icon row and the view — or the finished set, ready to log
 
 private struct RightPane: View {
     let x: Shown
@@ -554,8 +579,8 @@ private struct RightPane: View {
 
     var body: some View {
         let _ = x.usePalette()
-        if x.editing {
-            LogEditor(x: x).id("editor-\(x.s.editSet)")
+        if x.setDone {
+            DonePane(x: x)
         } else {
             // The data on top, the selector along the bottom. Each icon is an on/off switch
             // whose "on" look draws its view over the data area — iOS shows that the moment
@@ -815,7 +840,8 @@ private struct ViewBody: View {
             ForEach(s.rows, id: \.n) { r in
                 HStack(spacing: 5) {
                     Text("\(r.n)").font(.system(size: 8, weight: .heavy)).foregroundStyle(C.mute).frame(width: 8)
-                    Text("\(r.tReps) × \(num(r.tWeight))").font(.system(size: 9)).foregroundStyle(C.mute)
+                    Text(r.tText ?? "\(r.tReps) × \(num(r.tWeight))").font(.system(size: 9)).foregroundStyle(C.mute)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 2)
                     if let reps = r.reps {
                         Text("\(reps) × \(num(r.weight ?? r.tWeight))").font(.system(size: 9, weight: .heavy)).foregroundStyle(C.text)
@@ -924,127 +950,95 @@ private struct HRGraph: View {
     }
 }
 
-// MARK: - Log a set: three single-tap screens — Reps · Weight · RPE (the RPE tap saves)
-// All three screens are always in the pane, stacked at the same spot; the one you're on is shown,
-// the others are hidden and can't be tapped. Nothing is swapped in place — when the card swaps a
-// region, iOS crossfades the pixels while the old controls still own the touch area for a moment,
-// so what you saw and what you tapped came apart. Hidden layers can't do that.
+// MARK: - Set done: the set filled in, Edit and Log set
+// Nothing to enter here. Reps (the Watch's count, or the plan), weight (last set's plus the plan's
+// step) and an estimated RPE, with one line saying where the RPE came from. Log set saves exactly
+// this; Edit opens the app on the set. Both stay put while you look, so what you tap is what you see.
 
-private struct LogEditor: View {
+private struct DonePane: View {
     let x: Shown
     private var s: S { x.s }
 
     var body: some View {
         let _ = x.usePalette()
-        let step = s.editStep ?? 0
         GeometryReader { g in
-            let w = g.size.width
-            VStack(spacing: 6) {
-                HStack(spacing: 6) {
-                    head(step == 0 ? "REPS" : step == 1 ? "WEIGHT · \(s.unit.uppercased())" : "RPE")
-                    if step > 0 {
-                        Text("\(s.dReps) reps" + (step > 1 ? "  ·  \(num(s.dWeight)) \(s.unit)" : ""))
-                            .font(.system(size: 9, weight: .heavy, design: .rounded)).monospacedDigit()
-                            .foregroundStyle(C.text).lineLimit(1).minimumScaleFactor(0.7)
-                    }
+            let w = g.size.width, h = g.size.height
+            let headH: CGFloat = 16, whyH: CGFloat = 11, btnH: CGFloat = 29, gap: CGFloat = 4
+            let tileH = max(h - headH - whyH - btnH - gap * 3, 30)
+            VStack(spacing: gap) {
+                HStack(spacing: 4) {
+                    head("LOG SET \(s.editSet)")
                     Spacer(minLength: 0)
-                    Text("SET \(s.editSet)").font(.system(size: 7.5, weight: .heavy)).tracking(0.8).foregroundStyle(C.mute)
-                    instant(LiveLogCancelIntent(), x, live: x.editing,
-                            face: { _ in
-                                Image(systemName: "xmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(C.mute)
-                                    .frame(width: 18, height: 18).background(Circle().fill(C.dim))
-                            },
-                            result: { CardPreview(card: x.card, right: x.afterCancel()) })
+                    let now = Date()
+                    if let at = s.autoLogAt, at > now {
+                        // Settings ▸ After a set ▸ Log by itself: the countdown (Edit stops it).
+                        (Text("logs in ") + Text(timerInterval: now...at, countsDown: true))
+                            .font(.system(size: 7.5, weight: .bold)).monospacedDigit().foregroundStyle(C.mute).lineLimit(1)
+                    } else {
+                        Text("ready to save").font(.system(size: 7.5, weight: .bold)).foregroundStyle(C.mute).lineLimit(1)
+                    }
                 }
-                .frame(height: 18)
-                let gridH = max(g.size.height - 24, 0)
-                ZStack {
-                    layer(step == 0) { reps(width: w, height: gridH, active: step == 0) }
-                    layer(step == 1) { weight(width: w, height: gridH, active: step == 1) }
-                    layer(step == 2) { rpe(width: w, height: gridH, active: step == 2) }
+                .frame(height: headH)
+                HStack(spacing: 5) {
+                    tile("REPS", "\(s.dReps)", est: false, h: tileH)
+                    tile(s.unit.uppercased(), num(s.dWeight), est: false, h: tileH)
+                    tile("RPE", num(s.dRPE), est: true, h: tileH)
                 }
-                .frame(width: w, height: gridH)
+                Text("RPE from: " + (s.rpeWhy ?? "your last set"))
+                    .font(.system(size: 7, weight: .bold)).foregroundStyle(C.mute)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading).frame(height: whyH)
+                HStack(spacing: 6) {
+                    edit(width: (w - 6) * 0.41, height: btnH)
+                    instant(LiveLogCommitIntent(), x, live: x.setDone,
+                            face: { on in button(on ? "Logged" : "Log set", icon: "checkmark", filled: true, height: btnH) },
+                            // Log set: rest starts in the left pane at once. The right pane changes with
+                            // the app's update — a preview there would put the view icons over Edit.
+                            result: { CardPreview(card: x.card, left: x.afterSave()) })
+                }
+                .frame(height: btnH)
             }
+            .frame(width: w, height: h, alignment: .top)
         }
     }
 
-    /// A screen in the stack: shown and tappable only while it's the one you're on.
-    private func layer<V: View>(_ on: Bool, @ViewBuilder _ v: () -> V) -> some View {
-        v().opacity(on ? 1 : 0).allowsHitTesting(on).zIndex(on ? 1 : 0)
-    }
-
-    /// Two rows of five (1–10, or 11–20); a slim column at the right flips between them.
-    private func reps(width: CGFloat, height: CGFloat, active: Bool) -> some View {
-        let page = s.repsPage ?? 0, base = page * 10
-        let gap: CGFloat = 4, flipW: CGFloat = 30
-        let chipW = (width - flipW - gap * 5) / 5, chipH = (height - gap) / 2
-        return HStack(spacing: gap) {
-            grid((1...10).map { base + $0 }, columns: 5, w: chipW, h: chipH, gap: gap) { n in
-                instant(LivePickRepsIntent(reps: n), x, live: active,
-                        face: { _ in chip("\(n)", on: n == s.dReps, w: chipW, h: chipH, size: 14) },
-                        result: { CardPreview(card: x.card, right: x.afterReps(n)) })
-            }
-            instant(LiveRepsPageIntent(), x, live: active,
-                    face: { _ in
-                        VStack(spacing: 2) {
-                            Image(systemName: page == 0 ? "chevron.right" : "chevron.left").font(.system(size: 9, weight: .heavy))
-                            Text(page == 0 ? "11+" : "1–10").font(.system(size: 7, weight: .heavy))
-                        }
-                        .foregroundStyle(C.acc)
-                        .frame(width: flipW, height: height)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(C.dim))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.line, lineWidth: 1))
-                    },
-                    result: { CardPreview(card: x.card, right: x.afterRepsPage()) })
-        }
-        .frame(width: width, height: height)
-    }
-
-    /// Two rows of five around the weight so far, in 5s (2.5s in kg).
-    private func weight(width: CGFloat, height: CGFloat, active: Bool) -> some View {
-        let inc: Double = s.unit == "kg" ? 2.5 : 5
-        let gap: CGFloat = 4
-        let lowest = max(0, s.dWeight - 5 * inc)
-        let values = (0..<10).map { lowest + Double($0) * inc }
-        let chipW = (width - gap * 4) / 5, chipH = (height - gap) / 2
-        return grid(values, columns: 5, w: chipW, h: chipH, gap: gap) { v in
-            instant(LivePickWeightIntent(weight: v), x, live: active,
-                    face: { _ in chip(num(v), on: abs(v - s.dWeight) < 0.01, w: chipW, h: chipH, size: 13) },
-                    result: { CardPreview(card: x.card, right: x.afterWeight(v)) })
-        }
-        .frame(width: width, height: height)
-    }
-
-    /// 1–10 in two rows of five; the tap saves the set.
-    private func rpe(width: CGFloat, height: CGFloat, active: Bool) -> some View {
-        let gap: CGFloat = 4
-        let chipW = (width - gap * 4) / 5, chipH = (height - gap) / 2
-        return grid((1...10).map { Double($0) }, columns: 5, w: chipW, h: chipH, gap: gap) { r in
-            instant(LivePickRPEIntent(rpe: r), x, live: active,
-                    face: { _ in chip(num(r), on: abs(r - s.dRPE) < 0.01, w: chipW, h: chipH, size: 14) },
-                    result: { CardPreview(card: x.card, left: x.afterRPE(r), right: x.afterRPE(r)) })
-        }
-        .frame(width: width, height: height)
-    }
-
-    private func grid<T: Hashable, V: View>(_ values: [T], columns: Int, w: CGFloat, h: CGFloat, gap: CGFloat,
-                                            @ViewBuilder cell: @escaping (T) -> V) -> some View {
-        let rows = stride(from: 0, to: values.count, by: columns).map { Array(values[$0..<min($0 + columns, values.count)]) }
-        return VStack(spacing: gap) {
-            ForEach(rows.indices, id: \.self) { r in
-                HStack(spacing: gap) {
-                    ForEach(rows[r], id: \.self) { v in cell(v) }
-                    if rows[r].count < columns { Spacer(minLength: 0) }
+    /// One number: its label, the value, and (RPE only) the EST. tag. The tag's space is kept in the
+    /// other two so the numbers line up.
+    private func tile(_ label: String, _ value: String, est: Bool, h: CGFloat) -> some View {
+        VStack(spacing: 2) {
+            Text(label).font(.system(size: 6.5, weight: .heavy)).tracking(0.9).foregroundStyle(C.mute).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
+                Text(value).font(.system(size: 24, weight: .heavy, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(C.text).lineLimit(1).minimumScaleFactor(0.6)
+                if est {
+                    Text("~").font(.system(size: 12, weight: .heavy, design: .rounded)).foregroundStyle(C.mute)
                 }
             }
+            Text("EST.").font(.system(size: 6, weight: .heavy)).tracking(0.6).foregroundStyle(C.mute)
+                .padding(.horizontal, 4).frame(height: 10)
+                .overlay(Capsule().stroke(C.mute.opacity(0.6), lineWidth: 1))
+                .opacity(est ? 1 : 0)
         }
+        .frame(maxWidth: .infinity).frame(height: h)
+        .background(RoundedRectangle(cornerRadius: 12).fill(C.tile))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.line, lineWidth: 1))
     }
 
-    private func chip(_ t: String, on: Bool, w: CGFloat, h: CGFloat, size: CGFloat) -> some View {
-        Text(t).font(.system(size: size, weight: .heavy, design: .rounded)).monospacedDigit()
-            .foregroundStyle(on ? C.onVolt : C.text).lineLimit(1).minimumScaleFactor(0.6)
-            .frame(width: w, height: h)
-            .background(RoundedRectangle(cornerRadius: 8).fill(on ? C.volt : C.dim))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.clear : C.line, lineWidth: 1))
+    /// Edit: not a control — the card's link (widgetURL) opens the app on this set, reps selected,
+    /// number pad up. Nothing on the card changes, so there's no update to wait on.
+    private func edit(width: CGFloat, height: CGFloat) -> some View {
+        button("Edit", icon: "pencil", filled: false, height: height).frame(width: width)
+    }
+
+    private func button(_ t: String, icon: String, filled: Bool, height: CGFloat) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 10, weight: .heavy))
+            Text(t).font(.system(size: 12, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(filled ? C.onVolt : C.text)
+        .frame(maxWidth: .infinity).frame(height: height)
+        .background(Capsule().fill(filled ? C.volt : Color.clear))
+        .overlay(Capsule().stroke(filled ? Color.clear : C.mute.opacity(0.5), lineWidth: 1.5))
+        .contentShape(Capsule())
     }
 }

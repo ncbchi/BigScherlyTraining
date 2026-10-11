@@ -26,7 +26,7 @@ struct AuthedAsyncImage<Content: View, Placeholder: View>: View {
     private func load() async {
         guard let url else { failed = true; return }
         var req = URLRequest(url: url)
-        if let token = APIClient.shared.authToken {
+        if let token = APIClient.shared.token(for: url.path) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         do {

@@ -9,6 +9,7 @@ struct WorkoutsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("bst_units") private var units = "lb"
     @State private var selected: Workout?          // completed → summary
+    @State private var building = false            // coach: plan his own workout
     @State private var showPreWorkoutPrompt = false
     @State private var preWorkoutDue: [Supplement] = []
     // Remembers the day we last showed the pre-workout drawer, so it appears at most
@@ -35,6 +36,11 @@ struct WorkoutsView: View {
                     DSScreenHeader(eyebrow: "Training", title: "Workouts")
                         .padding(.top, 28)
                         .id("upcoming")
+                    // A coach programs himself, same builder he uses for clients.
+                    if store.isTrainer, store.selfClientId != nil {
+                        Button { building = true } label: { Label("Plan a workout", systemImage: "plus") }
+                            .buttonStyle(DSButtonStyle(kind: .secondary))
+                    }
                     DSSectionHeader(title: "UPCOMING", subtitle: store.upcomingWorkouts.isEmpty ? nil : "\(store.upcomingWorkouts.count) planned")
                     ForEach(store.upcomingWorkouts) { w in upcomingRow(w) }
                     if store.upcomingWorkouts.isEmpty {
@@ -46,6 +52,11 @@ struct WorkoutsView: View {
             }
             .background(Brand.bg.ignoresSafeArea())
             .dsTopFade()
+            .sheet(isPresented: $building) {
+                if let me = store.selfClientId {
+                    WorkoutBuilderView(clientId: me, clientName: "") { store.loadAllFromAPI() }
+                }
+            }
             .onAppear {
                 DispatchQueue.main.async {
                     withAnimation(.none) { proxy.scrollTo("upcoming", anchor: .top) }
@@ -70,7 +81,7 @@ struct WorkoutsView: View {
         }
         // Fires only when a logged set earns a throttled PR (see ProgressEngine).
         .sheet(item: Binding(get: { (store.sessionWorkoutId == nil || store.sessionMinimized) ? store.prToCelebrate : nil },
-                             set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr) }
+                             set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr).sheetFitsContent() }
     }
 
     // MARK: Rows
@@ -497,13 +508,25 @@ struct ExerciseDetailView: View {
                             }
                         }
                     }
+                    if let link = exercise.videoUrl, let url = URL(string: link) {
+                        // Demo video from your coach's exercise library (Oct 8, 2026)
+                        Link(destination: url) {
+                            Label("Watch the demo", systemImage: "play.rectangle.fill")
+                                .font(BrandFont.body(15, .bold)).foregroundColor(Brand.voltText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 14).padding(.horizontal, 18)
+                                .background(RoundedRectangle(cornerRadius: 16).fill(Brand.black))
+                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Brand.line, lineWidth: 1))
+                        }
+                    }
 
                     // Sets
                     Text("YOUR PLAN").font(BrandFont.body(12, .bold)).tracking(1.5).headerPill()
                     ForEach($exercise.sets) { $set in
                         SetRow(set: $set,
                                number: (exercise.sets.firstIndex(where: {$0.id == set.id}) ?? 0) + 1,
-                               restSeconds: exercise.restSeconds)
+                               restSeconds: exercise.restSeconds,
+                               targetText: SetTarget.text(set, in: exercise))
                     }
 
                     // Heart rate by set (shown once the exercise has been performed).
@@ -617,13 +640,14 @@ struct SetRow: View {
     @Binding var set: ExerciseSet
     let number: Int
     var restSeconds: Int = 90
+    var targetText: String? = nil      // "1 @ RPE 8.5", "3 × 170 lb" (SetTarget)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("SET \(number)").font(BrandFont.display(20)).foregroundColor(Brand.text)
                 Spacer()
-                Text("Target: \(set.targetReps) × \(Int(set.targetWeight))lb")
+                Text("Target: \(targetText ?? "\(set.targetReps) × \(Int(set.targetWeight))lb")")
                     .font(BrandFont.body(12, .semibold)).foregroundColor(Brand.mute)
             }
             HStack(spacing: 12) {

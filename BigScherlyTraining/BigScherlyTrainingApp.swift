@@ -46,8 +46,13 @@ struct RootView: View {
     @EnvironmentObject var store: AppStore
     @ObservedObject private var theme = ThemeStore.shared
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.horizontalSizeClass) private var hSize
     @State private var showBoard = true
     @State private var showSplash = true
+
+    /// Coach HQ on iPad (Oct 8, 2026): a coach on an iPad with room for a sidebar gets the
+    /// split layout. In a narrow Split View window (compact width) it's the phone layout.
+    private var padLayout: Bool { UIDevice.current.userInterfaceIdiom == .pad && hSize == .regular }
 
     var body: some View {
         ZStack {
@@ -55,9 +60,12 @@ struct RootView: View {
 
             if !store.isLoggedIn {
                 LoginView()
+            } else if store.isTrainer && padLayout {
+                CoachPadShell().id(theme.signature(scheme))
             } else if store.isTrainer {
-                // Trainers get an entirely different app — triage, not training.
-                TrainerShell().id(theme.signature(scheme))   // redraw once on a theme change
+                // Coaches get the same app as everyone else — they train too — with the
+                // COACH group of screens added to the top of the menu.
+                MainShell().id(theme.signature(scheme))   // redraw once on a theme change
             } else if store.mustChangePassword {
                 SetPasswordView()
             } else if showBoard {
@@ -76,6 +84,7 @@ struct RootView: View {
         .onChange(of: store.isLoggedIn) { _, newValue in
             if newValue { showBoard = true }   // show board fresh on each login
         }
+        .plateCalculatorHost()        // Tools ▸ Plate calculator and the set-card barbell open here
         // A widget was tapped: skip the welcome board and go where it points.
         .onOpenURL { url in
             showBoard = false
@@ -178,10 +187,13 @@ struct MainShell: View {
                                  }
                              })
 
-            // Floating menu button, upper right, over the content
-            FloatingMenuButton()
-                .padding(.trailing, 16)
-                .padding(.top, 8)
+            // Floating menu button, upper right, over the content. Not on Share: the editor's
+            // tools live there (the menu still opens with the edge swipe).
+            if store.activeTab != .share && store.activeTab != .coachShare {
+                FloatingMenuButton()
+                    .padding(.trailing, 16)
+                    .padding(.top, 8)
+            }
 
             NavTray()
 
@@ -213,6 +225,9 @@ struct MainShell: View {
         .fullScreenCover(item: $store.awardToCelebrate) { award in
             AwardCelebrationView(award: award)
         }
+        // Coach: one place opens a client's profile, from any coach screen.
+        .sheet(item: $store.selectedClient) { c in TrainerClientView(client: c) }
+        .onAppear { if store.isTrainer && store.roster.isEmpty { store.loadRoster() } }
         // A new coach announcement pulls up from the bottom shortly after the app opens.
         .task {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -238,6 +253,17 @@ struct MainShell: View {
         case .announcements: AnnouncementsView()
         case .share: ShareView()
         case .settings: SettingsView()
+        // Coach screens
+        case .coachToday: TrainerTodayView()
+        case .coachClients: RosterView()
+        case .coachPrograms: NavigationStack { CoachProgramsView() }
+        case .coachNotebook: NavigationStack { CoachNotebookView() }
+        case .coachChat: NavigationStack { TrainerChatSection() }
+        case .coachCheckins: CheckInQueueView()
+        case .coachWins: WinsFeedView()
+        case .coachInsights: TrainerInsightsView()
+        case .coachAnnounce: AnnouncementsComposerView()
+        case .coachShare: TrainerShareView()
         }
     }
 

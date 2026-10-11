@@ -354,7 +354,10 @@ enum BrandFont {
     /// Big Shoulders Display Black ships in the app (BigScherlyTraining/Fonts). Registered at
     /// launch, so no Info.plist entry is needed. Call once, before anything draws.
     static func registerFonts() {
-        for name in ["BigShouldersDisplay-Black"] {
+        // Coach HQ on iPad (Platform design, Oct 8, 2026) adds Barlow and Barlow Semi Condensed.
+        for name in ["BigShouldersDisplay-Black",
+                     "Barlow-Regular", "Barlow-Medium", "Barlow-SemiBold", "Barlow-Bold",
+                     "BarlowSemiCondensed-Medium", "BarlowSemiCondensed-SemiBold", "BarlowSemiCondensed-Bold"] {
             guard let url = Bundle.main.url(forResource: name, withExtension: "ttf")
                     ?? Bundle.main.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts") else { continue }
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
