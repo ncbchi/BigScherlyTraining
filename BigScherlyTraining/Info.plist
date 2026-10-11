@@ -25,5 +25,9 @@
 	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Big Scherly Training writes a transcript of your voice notes on your phone.</string>
+	<key>NSBluetoothServices</key>
+	<array>
+		<string></string>
+	</array>
 </dict>
 </plist>
