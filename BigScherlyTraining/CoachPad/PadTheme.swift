@@ -296,12 +296,19 @@ struct PadAvatar: View {
     var volt = false
     var dot: Color? = nil
     var onRail = false
+    /// The client's id, when the caller has it (otherwise the name finds them in the roster).
+    var id: String? = nil
     var body: some View {
-        Text(name.initials)
+        // Server 2.3.0 (Oct 11): a client who picked an accent in their app shows in it. Without one, the
+        // neutral fill as before, so volt still only means "you" / "lifting now" / the open one.
+        let accent: UInt32? = volt ? nil : ClientAccents.hex(id: id, name: name)
+        let fill: Color = volt ? Pad.volt : (accent.map { RGBColor(hex: $0).color } ?? (onRail ? Pad.railRaised : Pad.raised))
+        let ink: Color = volt ? Pad.onVolt : (accent.map { RGBColor(hex: $0).textOn.color } ?? (onRail ? Pad.railText : Pad.text))
+        return Text(name.initials)
             .font(PadFont.display(size * 0.44))
-            .foregroundColor(volt ? Pad.onVolt : (onRail ? Pad.railText : Pad.text))
+            .foregroundColor(ink)
             .frame(width: size, height: size)
-            .background(Circle().fill(volt ? Pad.volt : (onRail ? Pad.railRaised : Pad.raised)))
+            .background(Circle().fill(fill))
             .overlay(alignment: .bottomTrailing) {
                 if let dot {
                     Circle().fill(dot).frame(width: 10, height: 10)

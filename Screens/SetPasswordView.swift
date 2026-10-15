@@ -10,6 +10,9 @@ struct SetPasswordView: View {
     @State private var confirm = ""
     @State private var error: String?
     @State private var working = false
+    /// Signed in with an emailed code (LoginView sets this): the email already proved who
+    /// they are, so there's no temporary password to type (Oct 10, 2026).
+    private var viaCode: Bool { UserDefaults.standard.bool(forKey: "bst_codeSignIn") }
 
     var body: some View {
         ZStack {
@@ -19,10 +22,14 @@ struct SetPasswordView: View {
                 Eyebrow(text: "One Quick Step")
                 Text("Set Your\nPassword")
                     .font(BrandFont.display(44)).foregroundColor(.white)
-                Text("You're logged in with a temporary password from your coach. Choose your own to continue.")
+                Text(viaCode
+                     ? "You signed in with an emailed code. Choose your own password to continue."
+                     : "You're logged in with a temporary password from your coach. Choose your own to continue.")
                     .font(BrandFont.body(14)).foregroundColor(BrandDark.mute)
 
-                field("Temporary password", text: $current, secure: true)
+                if !viaCode {
+                    field("Temporary password", text: $current, secure: true)
+                }
                 field("New password (min 8 characters)", text: $newPass, secure: true)
                 field("Confirm new password", text: $confirm, secure: true)
 
@@ -66,10 +73,18 @@ struct SetPasswordView: View {
         working = true
         Task {
             do {
-                try await APIClient.shared.changePassword(current: current, new: newPass)
-                await MainActor.run { store.mustChangePassword = false; store.loadAllFromAPI(); working = false }
+                try await APIClient.shared.changePassword(current: viaCode ? "" : current, new: newPass)
+                await MainActor.run {
+                    UserDefaults.standard.set(false, forKey: "bst_codeSignIn")
+                    store.mustChangePassword = false; store.loadAllFromAPI(); working = false
+                }
             } catch {
-                await MainActor.run { self.error = "Couldn't set password. Check your temporary password."; working = false }
+                await MainActor.run {
+                    self.error = viaCode
+                        ? "Couldn't set password. Try again in a moment."
+                        : "Couldn't set password. Check your temporary password."
+                    working = false
+                }
             }
         }
     }

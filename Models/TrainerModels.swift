@@ -47,6 +47,8 @@ struct RosterItem: Identifiable, Decodable {
     let daysSinceTrained: Int
     let recentAwards: Int
     let attentionScore: Int
+    /// The accent the client picked in their app ("#RRGGBB"; server 2.3.0). nil = the standard look.
+    var accent: String? = nil
 
     /// Does this person need the trainer to actually do something?
     var needsAttention: Bool {

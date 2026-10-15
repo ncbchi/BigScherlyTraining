@@ -575,7 +575,8 @@ struct SetEntryRow: View {
                 // Barbell lifts and plate-loaded machines: this set's plates, the mirror of the set number.
                 if let lift = plateLift {
                     Button { openPlates(lift) } label: {
-                        PlateBarIcon(plates: gym.iconPlates(lift: lift, total: weightShown))
+                        PlateBubbles(plates: gym.iconPlates(lift: lift, total: weightShown),
+                                     kg: gym.isKg, pair: gym.setup(for: lift).sides == 2)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Plate calculator")
@@ -1447,6 +1448,24 @@ private struct TopCentreRoundedRect: Shape {
 
 // MARK: - The card
 
+/// A live-card window arriving or leaving (Oct 11, 2026): fades, blurs, slides a little and settles from 97%.
+private struct WindowReveal: ViewModifier {
+    let shown: Double                         // 0 = away, 1 = in place
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown)
+            .blur(radius: (1 - shown) * 8)
+            .scaleEffect(0.97 + 0.03 * shown, anchor: .top)
+            .offset(y: (1 - shown) * -14)
+    }
+}
+
+extension AnyTransition {
+    static var windowReveal: AnyTransition {
+        .modifier(active: WindowReveal(shown: 0), identity: WindowReveal(shown: 1))
+    }
+}
+
 struct LiveCard: View {
     let workout: Workout
     var onEdit: () -> Void = {}
@@ -1513,24 +1532,25 @@ struct LiveCard: View {
             LinkDiagnosticsStrip()                                   // DIAGNOSTIC (temporary)
             Rectangle().fill(Brand.line).frame(height: 1)
             ZStack(alignment: .topTrailing) {
+                // One list of windows (Oct 11, 2026), so changing the count animates: the first window
+                // resizes in place, new ones fade in from a blur and drop into place (cascading when you
+                // jump from one to four), removed ones blur and lift away.
                 VStack(spacing: 0) {
-                    if windows == 1 {
-                        staged(0, ctx, compact: false).frame(height: Self.windowHeight)
-                        dotsRow(0)
-                    } else {
-                        staged(0, ctx, compact: true).frame(height: Self.half - 1)
-                        dotsRow(0)
-                        divider
-                        staged(1, ctx, compact: true).frame(height: Self.half)
-                        dotsRow(1)
-                        ForEach(2..<windows, id: \.self) { i in
-                            divider
-                            staged(i, ctx, compact: true).frame(height: Self.half)
+                    ForEach(0..<windows, id: \.self) { i in
+                        VStack(spacing: 0) {
+                            if i > 0 { divider }
+                            staged(i, ctx, compact: windows > 1)
+                                .frame(height: i == 0 ? (windows == 1 ? Self.windowHeight : Self.half - 1) : Self.half)
                             dotsRow(i)
                         }
+                        .transition(.asymmetric(
+                            insertion: .windowReveal.animation(.spring(response: 0.42, dampingFraction: 0.82)
+                                                                .delay(0.07 * Double(max(0, i - 1)))),
+                            removal: .windowReveal.animation(.easeIn(duration: 0.18))))
                     }
                 }
                 .padding(.bottom, 6)
+                .clipped()
                 sideDots
                     .frame(height: Self.windowHeight + (windows == 1 ? 0 : 22))   // centred on the first window
             }
@@ -1579,9 +1599,26 @@ struct LiveCard: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Four dots down the side: how many windows (tap the third for three, and so on).
+    /// Four dots down the side: how many windows (tap the third for three, and so on). The chevron
+    /// above them (Oct 11, 2026) says it's a drop-down: pointing down it opens one more window; at four it
+    /// points up and folds back to one.
     private var sideDots: some View {
         VStack(spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    windowCount = windows < Self.maxWindows ? windows + 1 : 1
+                }
+                UISelectionFeedbackGenerator().selectionChanged()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundColor(Brand.voltText)
+                    .rotationEffect(.degrees(windows == Self.maxWindows ? 180 : 0))
+                    .frame(width: 26, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(windows == Self.maxWindows ? "Show one window" : "Show another window")
             ForEach(0..<Self.maxWindows, id: \.self) { k in
                 Button {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { windowCount = k + 1 }

@@ -5,8 +5,9 @@ import Combine
 //
 // The business over the last 4, 8 or 12 weeks: sessions per week across everyone against the
 // average, check-ins sent on time, PRs, every client in one table (tap to open them), renewals
-// coming up, and wins. All worked out from what the app already loads. Reply time and retention
-// history need the server to keep them, so they aren't shown yet.
+// coming up, and wins. All worked out from what the app already loads.
+// Server 2.3.0 (Oct 11): your reply time (a tile, a weekly chart, who's waited longest) and retention
+// (average stay, who stayed 90 days, recent pauses and ends) from the server's history.
 // Strength (Oct 9): each client's squat, bench and deadlift over the period from their Stats, in the
 // table, in its own pane (tap to open their Stats), and in what's noticed across the roster.
 // Synchronized folder: no target step needed.
@@ -21,6 +22,9 @@ struct PadInsightsView: View {
     @AppStorage("bst_pad_insights_weeks") private var weeks = 8
     @State private var prs: [String: [PersonalRecord]] = [:]
     @State private var strength: [String: PadStrength] = [:]
+    @State private var replies: APIReplyInsights?
+    @State private var retention: APIRetention?
+    @State private var v23 = true
 
     private var cal: Calendar { Calendar.training }
     private var weekStart: Date { cal.startOfWeek(for: Date()) }
@@ -35,34 +39,35 @@ struct PadInsightsView: View {
         let prev = sessionSeries(weeks * 2).prefix(weeks)
         let noticed = notes(facts, series: series)
         let inStrip = Set(noticed.prefix(3).map { $0.id })
-        return ScrollView {
+        return VStack(spacing: 0) {
+                    PadPageTop(title: "Insights", subtitle: "The business over the last \(weeks) weeks.", compact: true, facts: PadFact.from(strip(facts, series: series, prev: Array(prev))), notes: noticed) {
+                        PadSeg(options: [(id: 4, label: "4 wks"), (id: 8, label: "8 wks"), (id: 12, label: "12 wks")], selection: $weeks)
+                    }
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PadPageTop(title: "Insights", subtitle: "The business over the last \(weeks) weeks.") {
-                    PadSeg(options: [(id: 4, label: "4 wks"), (id: 8, label: "8 wks"), (id: 12, label: "12 wks")], selection: $weeks)
-                }
-                PadPageStrip(stats: strip(facts, series: series, prev: Array(prev)), notes: noticed)
-                PadRule()
                 if sideBySide {
                     HStack(alignment: .top, spacing: 16) {
-                        VStack(spacing: 12) { sessionsPane(series); chartsRow(facts); strengthPane(facts, shown: inStrip); clientTable(facts) }.frame(maxWidth: .infinity)
-                        VStack(spacing: 12) { renewalsPane(facts); winsPane; rosterPane(facts) }.frame(width: 330)
+                        VStack(spacing: 12) { sessionsPane(series); replyPane; chartsRow(facts); strengthPane(facts, shown: inStrip); clientTable(facts) }.frame(maxWidth: .infinity)
+                        VStack(spacing: 12) { renewalsPane(facts); retentionPane; winsPane; rosterPane(facts) }.frame(width: 330)
                     }
                     .padding(20)
                 } else {
-                    VStack(spacing: 12) { sessionsPane(series); chartsRow(facts); strengthPane(facts, shown: inStrip); clientTable(facts); renewalsPane(facts); winsPane; rosterPane(facts) }
+                    VStack(spacing: 12) { sessionsPane(series); replyPane; chartsRow(facts); strengthPane(facts, shown: inStrip); clientTable(facts); renewalsPane(facts); retentionPane; winsPane; rosterPane(facts) }
                         .padding(20)
                 }
             }
         }
+        }
         .background(Pad.page.ignoresSafeArea())
-        .refreshable { store.loadRoster(); await data.refresh(roster: store.roster) }
+        .refreshable { store.loadRoster(); await data.refresh(roster: store.roster); await loadServer() }
         .task {
             await renewals.load(store: store)
             if !data.hasLoaded { await data.refresh(roster: store.roster) }
             loadPRs()
+            await loadServer()
         }
         .onChange(of: data.loadedAt) { _, _ in loadPRs() }
-        .onChange(of: weeks) { _, _ in loadStrength() }
+        .onChange(of: weeks) { _, _ in loadStrength(); Task { await loadReplies() } }
     }
 
     // MARK: Numbers
@@ -112,6 +117,31 @@ struct PadInsightsView: View {
         loadStrength()
     }
 
+    /// Reply time and retention (server 2.3.0).
+    private func loadServer() async {
+        guard store.isLive else { v23 = false; return }
+        v23 = await ServerVersion.has23()
+        guard v23 else { return }
+        await loadReplies()
+        if let r = try? await APIClient.shared.retentionInsights() { retention = r }
+    }
+
+    private func loadReplies() async {
+        guard store.isLive, v23 else { return }
+        if let r = try? await APIClient.shared.replyInsights(weeks: weeks) { replies = r }
+    }
+
+    /// 0.6 → "36 min", 3.44 → "3.4 h", 27 → "27 h".
+    static func hours(_ h: Double) -> (value: String, unit: String) {
+        if h < 1 { return ("\(max(1, Int((h * 60).rounded())))", "min") }
+        if h < 10 { return (String(format: "%.1f", h), "h") }
+        return ("\(Int(h.rounded()))", "h")
+    }
+
+    static func repliesText(_ n: Int) -> String { n == 1 ? "1 reply" : "\(n) replies" }
+
+    static func hoursText(_ h: Double) -> String { let x = hours(h); return "\(x.value) \(x.unit)" }
+
     private func loadStrength() {
         var out: [String: PadStrength] = [:]
         let from = periodStart
@@ -143,11 +173,23 @@ struct PadInsightsView: View {
         let atRisk = renewing.filter { $0.risk == .high }.count
         return [
             PadStat(label: "Active clients", value: "\(active.count)", sub: "\(paused) paused · \(new) new"),
+        ] + replyStat + [
             PadStat(label: "Sessions per client", value: String(format: "%.1f", per), unit: "/wk", sub: perSub, warn: perWarn),
             PadStat(label: "Check-ins sent", value: ciPct, unit: ci.isEmpty ? nil : "%", sub: "on time, \(min(weeks, 12)) wks"),
             PadStat(label: "PRs", value: "\(prNow)", sub: prSub, good: prDelta > 0),
             PadStat(label: "Renewals, \(window) days", value: "\(renewing.count)", sub: atRisk > 0 ? "\(atRisk) at risk" : (renewing.isEmpty ? "none set" : "none at risk"), warn: atRisk > 0),
         ]
+    }
+
+    /// "Your reply time 3.4 h, was 5.1 h" (last 4 weeks against the 4 before).
+    private var replyStat: [PadStat] {
+        guard let r = replies, let now = r.medianHours else { return [] }
+        let x = Self.hours(now)
+        let prev = r.prevMedianHours
+        let sub: String = prev.map { "was \(Self.hoursText($0))" } ?? "\(Self.repliesText(r.replies)), 4 wks"
+        let faster = prev.map { now <= $0 * 0.85 } ?? false
+        let slower = prev.map { now >= $0 * 1.25 && now - $0 >= 1 } ?? false
+        return [PadStat(label: "Your reply time", value: x.value, unit: x.unit, sub: sub, warn: slower, good: faster)]
     }
 
     private func notes(_ facts: [PadClientFacts], series: [Int]) -> [PadNote] {
@@ -188,7 +230,34 @@ struct PadInsightsView: View {
         if prNow > 0, prNow >= prBefore + 3 {
             out.append(PadNote(icon: "bolt.fill", tint: Pad.voltText, text: "PRs are up:", aside: "\(prNow) in \(weeks) weeks, \(prBefore) in the \(weeks) before."))
         }
+        out.append(contentsOf: replyNotes)
         out.append(contentsOf: strengthNotes(facts))
+        return out
+    }
+
+    /// Reply time: faster or slower than the month before, and anyone waiting over a day.
+    private var replyNotes: [PadNote] {
+        guard let r = replies else { return [] }
+        var out: [PadNote] = []
+        if let now = r.medianHours, let prev = r.prevMedianHours, prev > 0 {
+            let aside = "\(Self.hoursText(now)) the last 4 weeks, \(Self.hoursText(prev)) the 4 before."
+            if now <= prev * 0.8 {
+                out.append(PadNote(icon: "bolt.horizontal.fill", tint: Pad.voltText, text: "Replies got faster:", aside: aside))
+            } else if now >= prev * 1.25 && now - prev >= 1 {
+                out.append(PadNote(icon: "hourglass", tint: Pad.orange, text: "Replies got slower:", aside: aside))
+            }
+        }
+        let waiting = r.byClient.compactMap { c -> (id: String, since: Date)? in c.waitingSince.map { (id: c.clientId, since: $0) } }
+            .filter { Date().timeIntervalSince($0.since) > 86400 }
+            .sorted { $0.since < $1.since }
+        if let w = waiting.first, let name = store.roster.first(where: { $0.id == w.id })?.name.firstName {
+            let h = Date().timeIntervalSince(w.since) / 3600
+            let others: String = waiting.count > 1 ? " \(waiting.count - 1) more waiting over a day." : ""
+            let id = w.id
+            out.append(PadNote(icon: "bubble.left.fill", tint: Pad.orange, text: "\(name) has waited \(Self.hoursText(h)) for a reply.",
+                               aside: others.isEmpty ? "The longest anyone's waiting." : others,
+                               go: "Messages", run: { PadOpen.inbox(id, go: go) }))
+        }
         return out
     }
 
@@ -229,6 +298,98 @@ struct PadInsightsView: View {
         return PadPane(title: "Sessions per week, all clients", aside: "dashed line = average · this week so far in the accent") {
             PadAverageBars(values: series.map { Double($0) }, average: avg, labels: labels, height: 130)
         }
+    }
+
+    /// "Your reply time, hours, weekly" (server 2.3.0).
+    @ViewBuilder private var replyPane: some View {
+        if let r = replies {
+            let vals: [Double] = r.weeks.map { $0.medianHours ?? 0 }
+            // Weeks start Monday 00:00 UTC on the server; read them at midday so the label is that Monday everywhere.
+            let labels: [String] = r.weeks.enumerated().map { i, w in
+                let d = w.weekStart.addingTimeInterval(43200)
+                return i == 0 || cal.component(.day, from: d) <= 7 ? PadDay.short(d) : "\(cal.component(.day, from: d))"
+            }
+            let slow = r.byClient.filter { $0.replies >= 2 && ($0.medianHours ?? 0) > 0 }
+                .sorted { ($0.medianHours ?? 0) > ($1.medianHours ?? 0) }.prefix(3)
+            let slowText: String = slowNames(Array(slow))
+            let aside: String = r.medianHours.map { "median \(Self.hoursText($0)), last 4 weeks" } ?? "no replies in 4 weeks"
+            PadPane(title: "Your reply time, hours, weekly", aside: aside) {
+                if vals.allSatisfy({ $0 == 0 }) {
+                    PadEmptyLine(text: "Shows once you've answered a client's message.")
+                } else {
+                    PadBars(values: vals, labels: labels, height: 90)
+                }
+                HStack(spacing: 8) {
+                    PadStatTile(stat: PadStat(label: "Within a day", value: r.within24hPct.map { "\($0)" } ?? "—", unit: r.within24hPct == nil ? nil : "%", sub: "\(Self.repliesText(r.replies)), 4 wks"))
+                    PadStatTile(stat: PadStat(label: "You open them in", value: r.readMedianHours.map { Self.hours($0).value } ?? "—",
+                                              unit: r.readMedianHours.map { Self.hours($0).unit }, sub: "median, 4 wks"))
+                }
+                if !slowText.isEmpty {
+                    PadLab("Slowest lately: \(slowText). From their first message to your answer.", color: Pad.mute, size: 12)
+                }
+            }
+        } else if !v23 && store.isLive {
+            PadPane(title: "Your reply time") {
+                PadEmptyLine(text: "Needs server 2.3.0.")
+            }
+        }
+    }
+
+    private func slowNames(_ list: [APIReplyClient]) -> String {
+        var parts: [String] = []
+        for c in list {
+            guard let name = store.roster.first(where: { $0.id == c.clientId })?.name.firstName else { continue }
+            parts.append("\(name) \(Self.hoursText(c.medianHours ?? 0))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Who's stayed, who paused, who left (server 2.3.0).
+    @ViewBuilder private var retentionPane: some View {
+        if let r = retention {
+            let changes = Self.changes(r)
+            PadPane(title: "Retention", aside: "\(r.activeNow) active · \(r.pausedNow) paused") {
+                HStack(spacing: 8) {
+                    PadStatTile(stat: PadStat(label: "Average stay", value: r.averageStayMonths.map { String(format: "%.1f", $0) } ?? "—", unit: "mo", sub: "paused time left out"))
+                    PadStatTile(stat: PadStat(label: "Stayed 90 days", value: r.stayed90Pct.map { "\($0)" } ?? "—", unit: r.stayed90Pct == nil ? nil : "%",
+                                              sub: "\(r.endedLast12Months) ended, 12 mo"))
+                }
+                if changes.isEmpty {
+                    PadLab(r.historyFrom == nil ? "Pauses and ends are kept from now on. Start dates come from each client's start." : "No pauses or ends lately.", color: Pad.faint, size: 12)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(changes.prefix(5), id: \.self) { line in
+                            Text(line).font(PadFont.ui(13)).foregroundColor(Pad.text).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// "Chris L. paused Aug 30, back Oct 20." Newest first, from what was really recorded (not backfilled).
+    static func changes(_ r: APIRetention) -> [String] {
+        var out: [(at: Date, text: String)] = []
+        for c in r.clients {
+            let evs = c.events.filter { !$0.backfilled }.sorted { $0.at < $1.at }
+            let parts = c.name.split(separator: " ")
+            let short: String = parts.count > 1 ? "\(parts[0]) \(parts[parts.count - 1].prefix(1))." : c.name
+            var i = 0
+            while i < evs.count {
+                let e = evs[i]
+                if e.status == "paused" {
+                    if i + 1 < evs.count, evs[i + 1].status == "active" {
+                        out.append((evs[i + 1].at, "\(short) paused \(PadDay.short(e.at)), back \(PadDay.short(evs[i + 1].at))."))
+                        i += 2; continue
+                    }
+                    out.append((e.at, "\(short) paused \(PadDay.short(e.at))."))
+                } else if e.status == "archived" {
+                    out.append((e.at, "\(short) left \(PadDay.short(e.at)) after \(String(format: "%.1f", c.months)) months."))
+                }
+                i += 1
+            }
+        }
+        return out.sorted { $0.at > $1.at }.map { $0.text }
     }
 
     private func chartsRow(_ facts: [PadClientFacts]) -> some View {
@@ -443,7 +604,6 @@ struct PadInsightsView: View {
             if !paused.isEmpty {
                 PadLab("Paused: " + paused.map { $0.first }.joined(separator: ", ") + ". No session in 45 days and nothing planned.", size: 12)
             }
-            PadLab("Retention over a year needs the server to keep start and end dates. On the 2.1 list.", color: Pad.faint, size: 12)
         }
     }
 }

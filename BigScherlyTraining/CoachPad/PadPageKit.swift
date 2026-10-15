@@ -55,11 +55,79 @@ struct PadNoteCard: View {
     }
 }
 
+/// A strip tile in one line: the number, then its label over its sub-line (compact strips).
+struct PadStatChip: View {
+    let stat: PadStat
+    var body: some View {
+        let subColor: Color = stat.warn ? Pad.orange : (stat.good ? Pad.voltText : Pad.mute)
+        let valueColor: Color = stat.warn ? Pad.orange : Pad.text
+        return HStack(alignment: .center, spacing: 8) {
+            PadNumber(value: stat.value, unit: stat.unit, size: 22, color: valueColor)
+            VStack(alignment: .leading, spacing: 0) {
+                PadLab(stat.label, size: 11).lineLimit(1)
+                PadLab(stat.sub, color: subColor, size: 11).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: 220, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Pad.well))
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A noticing card in one line (compact strips): icon, sentence, fix button.
+struct PadNoteLine: View {
+    let note: PadNote
+    var more: Int = 0
+    var body: some View {
+        let aside: String = note.aside.isEmpty ? "" : " " + note.aside
+        let line: Text = Text(note.text).foregroundColor(Pad.text) + Text(aside).foregroundColor(Pad.mute)
+        HStack(spacing: 8) {
+            Image(systemName: note.icon).font(.system(size: 12, weight: .semibold)).foregroundColor(note.tint)
+                .frame(width: 24, height: 24).background(RoundedRectangle(cornerRadius: 7).fill(Pad.raised))
+            line.font(PadFont.ui(13)).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 4)
+            if more > 0 { PadLab("+\(more) more", size: 11) }
+            if let g = note.go, let run = note.run {
+                Button(g, action: run).buttonStyle(PadButtonStyle(kind: .outline, small: true))
+            }
+        }
+        .padding(.horizontal, 10).frame(minHeight: 44)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Pad.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Pad.line, lineWidth: 1))
+    }
+}
+
 /// Headline strip, then the noticing line (up to three).
 struct PadPageStrip: View {
     let stats: [PadStat]
     var notes: [PadNote] = []
+    /// One row: the numbers as chips, then the first thing worth noticing (Inbox, Insights, Announcements).
+    var compact = false
     var body: some View {
+        if compact { compactBody } else { fullBody }
+    }
+
+    private var compactBody: some View {
+        let chips = HStack(spacing: 6) { ForEach(stats) { s in PadStatChip(stat: s) } }
+        let note: PadNote? = notes.first
+        let more: Int = max(0, min(notes.count, 3) - 1)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                chips
+                if let note { PadNoteLine(note: note, more: more).frame(minWidth: 320) }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) { chips }
+                if let note { PadNoteLine(note: note, more: more) }
+            }
+        }
+        .padding(.horizontal, 20).padding(.bottom, 10)
+    }
+
+    private var fullBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !stats.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {

@@ -36,7 +36,7 @@ struct FloatingMenuButton: View {
 // MARK: - Menu groups and your layout (Settings ▸ Menu order)
 
 enum MenuGroup: String, CaseIterable, Identifiable {
-    case coach = "Coach", train = "Train", fuel = "Fuel", progress = "Progress", connect = "Connect"
+    case coach = "Coach", communications = "Communications", train = "Train", fuel = "Fuel", progress = "Progress", connect = "Connect"
     var id: String { rawValue }
     var tabs: [AppTab] {
         // A coach trains with the same screens as his clients, minus the ones that only
@@ -45,6 +45,7 @@ enum MenuGroup: String, CaseIterable, Identifiable {
         let coach = AppStore.shared.isTrainer
         switch self {
         case .coach: return coach ? AppTab.coachTabs : []
+        case .communications: return coach ? AppTab.commsTabs : []
         case .train: return [.dashboard, .workouts, .history]
         case .fuel: return [.macros, .supplements]
         case .progress: return coach ? [.photos, .awards] : [.checkins, .photos, .awards]
@@ -83,6 +84,7 @@ struct NavTray: View {
     @State private var confirmLogout = false
     /// The COACH group starts collapsed and remembers when it's opened.
     @AppStorage("bst_coach_open") private var coachOpen = false
+    @ObservedObject private var comms = CommsBadges.shared
 
     var body: some View {
         GeometryReader { geo in
@@ -118,6 +120,7 @@ struct NavTray: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
         }
         .allowsHitTesting(store.showTray)     // closed: touches go straight to the screen underneath
+        .onChange(of: store.showTray) { _, open in if open { comms.refresh() } }
         .confirmationDialog(store.isDemoMode ? "Leave Demo Mode?" : "Log out of Big Scherly?",
                             isPresented: $confirmLogout, titleVisibility: .visible) {
             Button(store.isDemoMode ? "Exit demo" : "Log out", role: .destructive) {
@@ -247,7 +250,8 @@ struct NavTray: View {
     // MARK: COACH — a dropdown of every coaching screen
 
     private func coachSection(_ tabs: [AppTab]) -> some View {
-        let waiting = store.totalUnread + store.pendingCheckInCount
+        // Unread messages and check-ins badge under COMMUNICATIONS now, not on the folded COACH header.
+        let waiting = 0
         return VStack(alignment: .leading, spacing: 6) {
             Button {
                 UISelectionFeedbackGenerator().selectionChanged()
@@ -339,6 +343,10 @@ struct NavTray: View {
             return AnyView(badge("\(store.totalUnread)"))
         case .coachCheckins where store.pendingCheckInCount > 0:
             return AnyView(badge("\(store.pendingCheckInCount)"))
+        case .coachMail where comms.unreadMail > 0:
+            return AnyView(badge("\(comms.unreadMail)"))
+        case .coachAnnounce where comms.scheduledAnnouncements > 0:
+            return AnyView(badge("\(comms.scheduledAnnouncements)"))
         case .coachToday where store.attentionCount > 0:
             return AnyView(hint("\(store.attentionCount) need you"))
         case .announcements where !store.liveAnnouncements.isEmpty:

@@ -444,9 +444,13 @@ struct PadTargetSheet: View {
     @State private var template: String = ""
     @State private var savedTemplate = false
 
-    init(facts: PadClientFacts, existing: PadTarget?) {
+    /// A template to start from (Library ▸ Targets ▸ Give to…).
+    let startFrom: PadTargetTemplate?
+
+    init(facts: PadClientFacts, existing: PadTarget?, startFrom: PadTargetTemplate? = nil) {
         self.facts = facts
         self.existing = existing
+        self.startFrom = startFrom
         let start = PadLiftGoals.stamp.string(from: Date())
         let base = existing ?? PadTarget(title: "", kind: .sessions, count: 12, weeks: 4, start: start)
         _t = State(initialValue: base)
@@ -539,6 +543,7 @@ struct PadTargetSheet: View {
         }
         .background(Pad.surface)
         .frame(minWidth: 560, minHeight: 620)
+        .onAppear { if let tp = startFrom, existing == nil, template.isEmpty { apply(tp) } }
     }
 
     private var templatesRow: some View {

@@ -33,7 +33,7 @@ struct TrainerChatSection: View {
         }
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                DSScreenHeader(eyebrow: "Messages", title: "Chat",
+                DSScreenHeader(eyebrow: "Communications", title: "Messages",
                                subtitle: unread.isEmpty ? "All caught up · newest first" : "\(unread.count) unread · newest first")
                 CoachSearchField(prompt: "Search clients or messages", text: $query)
                 // Same category carousel as the client's Chat: All in the middle,

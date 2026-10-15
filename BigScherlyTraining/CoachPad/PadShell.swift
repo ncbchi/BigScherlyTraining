@@ -12,7 +12,8 @@ import SwiftUI
 // Synchronized folder: no target step needed.
 
 enum PadSection: String, CaseIterable, Identifiable {
-    case today, clients, checkins, inbox, programs, calendar, library, wins, insights, announcements, notebook, settings
+    // Communications (Oct 11, 2026): mail = the email Inbox; inbox = Messages (the app chat; id kept so links still work).
+    case today, clients, mail, inbox, checkins, announcements, programs, calendar, library, wins, insights, notebook, settings
     var id: String { rawValue }
 
     var title: String {
@@ -20,7 +21,8 @@ enum PadSection: String, CaseIterable, Identifiable {
         case .today: return "Today"
         case .clients: return "Clients"
         case .checkins: return "Check-ins"
-        case .inbox: return "Inbox"
+        case .mail: return "Inbox"
+        case .inbox: return "Messages"
         case .programs: return "Programs"
         case .calendar: return "Calendar"
         case .library: return "Library"
@@ -36,6 +38,7 @@ enum PadSection: String, CaseIterable, Identifiable {
         case .today: return "sun.max"
         case .clients: return "person.2"
         case .checkins: return "checkmark.square"
+        case .mail: return "tray"
         case .inbox: return "bubble.left"
         case .programs: return "list.bullet.rectangle"
         case .calendar: return "calendar"
@@ -49,9 +52,10 @@ enum PadSection: String, CaseIterable, Identifiable {
     }
 
     static let groups: [(name: String, items: [PadSection])] = [
-        ("Coaching", [.today, .clients, .checkins, .inbox]),
+        ("Coaching", [.today, .clients]),
+        ("Communications", [.mail, .inbox, .checkins, .announcements]),
         ("Planning", [.programs, .calendar, .library]),
-        ("Results", [.wins, .insights, .announcements]),
+        ("Results", [.wins, .insights]),
         ("You", [.notebook, .settings])
     ]
 
@@ -61,6 +65,7 @@ enum PadSection: String, CaseIterable, Identifiable {
         case .today: return .coachToday
         case .clients: return .coachClients
         case .checkins: return .coachCheckins
+        case .mail: return .coachMail
         case .inbox: return .coachChat
         case .programs: return .coachPrograms
         case .wins: return .coachWins
@@ -88,6 +93,7 @@ struct CoachPadShell: View {
     @State private var newWorkoutPick = false
     @State private var newWorkoutFor: RosterItem?
     @State private var broadcast = false
+    @ObservedObject private var comms = CommsBadges.shared
 
     private var section: PadSection {
         get { PadSection(rawValue: sectionRaw) ?? .today }
@@ -181,6 +187,7 @@ struct CoachPadShell: View {
             if store.roster.isEmpty { store.loadRoster() }
             Task { await data.refresh(roster: store.roster) }
             data.startAuto(store: store)
+            comms.refresh(force: true)
             if let t = section.appTab, store.activeTab != t { store.activeTab = t }
         }
         .onDisappear { data.stopAuto() }
@@ -190,6 +197,7 @@ struct CoachPadShell: View {
             if let s = PadSection.from(t), s != section { section = s }
         }
         .onChange(of: sectionRaw) { _, _ in
+            comms.refresh()
             if let t = section.appTab, store.activeTab != t { store.activeTab = t }
             // Leaving Clients while a client had closed the sidebar: bring it back.
             if section != .clients, autoHidden { withAnimation(.easeOut(duration: 0.22)) { autoHidden = false } }
@@ -215,13 +223,15 @@ struct CoachPadShell: View {
     }
 
     private var counts: [PadSection: Int] {
-        [.checkins: store.pendingCheckInCount, .inbox: store.totalUnread]
+        [.mail: comms.unreadMail, .inbox: store.totalUnread, .checkins: store.pendingCheckInCount,
+         .announcements: comms.scheduledAnnouncements]
     }
 
     @ViewBuilder
     private func content(sideBySide: Bool) -> some View {
         switch section {
         case .today: PadTodayView()
+        case .mail: PadMailView()
         case .inbox: PadInboxView()
         case .checkins: PadCheckInsView()
         case .calendar: PadCalendarView()
@@ -290,28 +300,143 @@ struct PadSidebarButton: View {
 
 struct PadPageTop<Actions: View>: View {
     let title: String
+    /// No longer shown: the bar says what's true now instead (explainers belong in empty states). Kept so callers compile.
     var subtitle: String? = nil
-    var titleSize: CGFloat = 46
+    var titleSize: CGFloat = 30
+    var compact = false
+    /// The status line: the page's numbers, said in a few words each (Oct 10, 2026 · canvas row 3.1.7).
+    var facts: [PadFact] = []
+    /// The noticing line under the bar: the first one, "+N more" for the rest. Nothing when there's nothing.
+    var notes: [PadNote] = []
     @ViewBuilder var actions: () -> Actions
 
+    @State private var allNotes = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
                 PadSidebarButton()
-                Spacer()
-            }
-            HStack(alignment: .bottom, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title).font(PadFont.display(titleSize)).foregroundColor(Pad.text).lineLimit(1).minimumScaleFactor(0.7)
-                    if let subtitle {
-                        Text(subtitle).font(PadFont.ui(15)).foregroundColor(Pad.mute).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 12)
+                Text(title).font(PadFont.display(30)).foregroundColor(Pad.text).lineLimit(1).fixedSize()
+                status.frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 8) { actions() }
             }
+            .padding(.horizontal, 20).frame(minHeight: 64)
+            Rectangle().fill(Pad.line).frame(height: 1)
+            if let first = notes.first {
+                noteRow(first, more: allNotes ? 0 : notes.count - 1)
+                if allNotes {
+                    ForEach(notes.dropFirst()) { n in noteRow(n, more: 0) }
+                }
+            }
         }
-        .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 18)
+        .background(Pad.page)
+    }
+
+    /// As many facts as fit, in order (the first ones matter most).
+    private var status: some View {
+        let f: [PadFact] = facts
+        return ViewThatFits(in: .horizontal) {
+            factsRow(f)
+            factsRow(Array(f.prefix(4)))
+            factsRow(Array(f.prefix(3)))
+            factsRow(Array(f.prefix(2)))
+            factsRow(Array(f.prefix(1)))
+            Color.clear.frame(width: 1, height: 1)
+        }
+    }
+
+    private func factsRow(_ fs: [PadFact]) -> some View {
+        HStack(spacing: 2) {
+            ForEach(Array(fs.enumerated()), id: \.offset) { i, f in
+                if i > 0 { Text("·").font(PadFont.ui(15)).foregroundColor(Pad.faint).padding(.horizontal, 2) }
+                PadFactView(fact: f)
+            }
+        }
+        .fixedSize()
+    }
+
+    private func noteRow(_ n: PadNote, more: Int) -> some View {
+        let warm: Bool = n.tint == Pad.orange || n.tint == Pad.red
+        let aside: String = n.aside.isEmpty ? "" : " " + n.aside
+        let line: Text = Text(n.text).foregroundColor(Pad.text) + Text(aside).foregroundColor(Pad.mute)
+        return VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: n.icon).font(.system(size: 13, weight: .semibold)).foregroundColor(n.tint).frame(width: 20)
+                line.font(PadFont.ui(14)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 6)
+                if more > 0 {
+                    Button { withAnimation(.easeOut(duration: 0.15)) { allNotes = true } } label: {
+                        Text("+\(more) more").font(PadFont.cond(13)).foregroundColor(Pad.mute)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if let g = n.go, let run = n.run {
+                    Button(g, action: run).buttonStyle(PadButtonStyle(kind: .outline, small: true))
+                }
+            }
+            .padding(.horizontal, 20).frame(minHeight: 44)
+            .background(warm ? Pad.orange.opacity(Pad.isLight ? 0.07 : 0.10) : Pad.surface)
+            Rectangle().fill(Pad.line).frame(height: 1)
+        }
+    }
+}
+
+/// One fact in a page's status line: "4 to review", "oldest Maya, 2 days ›". Orange when it needs you;
+/// a fact with an action is a tap (it filters the page or opens the thing).
+struct PadFact: Identifiable {
+    var lead: String = ""
+    let bold: String
+    var tail: String = ""
+    var warn = false
+    var run: (() -> Void)? = nil
+    var id: String { lead + bold + tail }
+
+    /// A headline-strip number said in a few words: "2 of 3 sessions today", "last posted Oct 3".
+    static func from(_ s: PadStat) -> PadFact? {
+        let v: String = s.value.trimmingCharacters(in: .whitespaces)
+        if v.isEmpty || v == "—" { return nil }
+        let unit: String = s.unit.map { u in (u.hasPrefix("/") || u == "%") ? u : " " + u } ?? ""
+        let label: String = lowerFirst(s.label)
+        if let c = v.first, c.isNumber || c == "+" || c == "−" || c == "-" {
+            return PadFact(bold: v + unit, tail: " " + label, warn: s.warn)
+        }
+        return PadFact(lead: label + " ", bold: v + unit, warn: s.warn)
+    }
+
+    static func from(_ stats: [PadStat]) -> [PadFact] { stats.compactMap { from($0) } }
+
+    /// "Sessions today" → "sessions today", but "PRs this week" stays.
+    private static func lowerFirst(_ t: String) -> String {
+        guard let f = t.first else { return t }
+        let second: Character? = t.dropFirst().first
+        if let second, second.isUppercase { return t }
+        return f.lowercased() + t.dropFirst()
+    }
+}
+
+struct PadFactView: View {
+    let fact: PadFact
+    var body: some View {
+        let soft: Color = fact.warn ? Pad.orange : Pad.mute
+        let strong: Color = fact.warn ? Pad.orange : Pad.text
+        let t: Text = Text(fact.lead).foregroundColor(soft)
+            + Text(fact.bold).font(PadFont.ui(15, .bold)).foregroundColor(strong)
+            + Text(fact.tail).foregroundColor(soft)
+        if let run = fact.run {
+            Button(action: run) {
+                HStack(spacing: 4) {
+                    t.font(PadFont.ui(15)).lineLimit(1)
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundColor(soft.opacity(0.7))
+                }
+                .padding(.horizontal, 9).frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Pad.text.opacity(0.045)))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+        } else {
+            t.font(PadFont.ui(15)).lineLimit(1).padding(.horizontal, 4)
+        }
     }
 }
 

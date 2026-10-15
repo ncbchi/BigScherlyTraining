@@ -42,9 +42,16 @@ struct PadClientsView: View {
         let order = Self.needsOrder(all)
         let cur = selectedId.flatMap { id in all.first { $0.id == id } }
         VStack(spacing: 0) {
-            crumbBar(cur, order: order)
-            header(cur, all: all)
-            PadRule()
+            if cur == nil {
+                // The roster: the same one-line bar as every page (canvas row 3.1.7).
+                PadPageTop(title: "Clients", facts: rosterFacts(all)) {
+                    PadIconButton(systemName: "megaphone", label: "Message everyone") { broadcast() }
+                }
+            } else {
+                crumbBar(cur, order: order)
+                header(cur, all: all)
+                PadRule()
+            }
             GeometryReader { g in
                 columns(all: all, order: order, cur: cur, width: g.size.width)
             }
@@ -219,19 +226,18 @@ struct PadClientsView: View {
     @ViewBuilder
     private func header(_ cur: PadClientFacts?, all: [PadClientFacts]) -> some View {
         if let cur {
-            HStack(alignment: .center, spacing: 14) {
-                PadClientAvatar(facts: cur, size: level == 3 ? 44 : 64)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(cur.name).font(PadFont.display(level == 3 ? 40 : 46)).foregroundColor(Pad.text).lineLimit(1).minimumScaleFactor(0.7)
-                    if level == 2 { Text(clientLine(cur)).font(PadFont.ui(15)).foregroundColor(Pad.mute).lineLimit(1) }
-                }
+            // One line under the crumbs (canvas row 3.1.7): avatar, name, what's true about them, tools.
+            HStack(alignment: .center, spacing: 12) {
+                PadClientAvatar(facts: cur, size: 36)
+                Text(cur.name).font(PadFont.display(30)).foregroundColor(Pad.text).lineLimit(1).fixedSize()
+                if level == 2 { Text(clientLine(cur)).font(PadFont.ui(14)).foregroundColor(Pad.mute).lineLimit(1).truncationMode(.tail) }
                 Spacer(minLength: 12)
                 Button { withAnimation(.easeInOut(duration: 0.25)) { section = .chat } } label: { Label("Message", systemImage: "bubble.left") }
                     .buttonStyle(PadButtonStyle(kind: .outline))
                 Button { newWorkoutFor = cur.client } label: { Label("New workout", systemImage: "plus") }
                     .buttonStyle(PadButtonStyle(kind: .primary))
             }
-            .padding(.horizontal, 24).padding(.bottom, 14)
+            .padding(.horizontal, 20).padding(.bottom, 10)
         } else {
             HStack(alignment: .bottom, spacing: 14) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -252,6 +258,26 @@ struct PadClientsView: View {
         if let s = f.firstSeen { bits.append("coached since \(s.formatted(.dateTime.month(.wide)))") }
         if let r = f.renewsOn { bits.append("renews \(r.formatted(.dateTime.month(.abbreviated).day()))") }
         return bits.joined(separator: " · ")
+    }
+
+    /// The roster's status line: active, who needs you, who's slipping.
+    private func rosterFacts(_ all: [PadClientFacts]) -> [PadFact] {
+        let active: Int = all.filter { !$0.paused }.count
+        let paused: Int = all.count - active
+        let need: Int = all.filter { $0.needs >= 40 }.count
+        let risky: [PadClientFacts] = all.filter { $0.risk == .high }.sorted { $0.score > $1.score }
+        var f: [PadFact] = [PadFact(bold: "\(active)", tail: " active")]
+        if paused > 0 { f.append(PadFact(bold: "\(paused)", tail: " paused")) }
+        if need > 0 { f.append(PadFact(bold: "\(need)", tail: need == 1 ? " needs you" : " need you", warn: true)) }
+        if let r = risky.first {
+            let rid: String = r.id
+            if risky.count == 1 {
+                f.append(PadFact(bold: r.first, tail: " is slipping", warn: true, run: { open(rid) }))
+            } else {
+                f.append(PadFact(bold: "\(risky.count)", tail: " slipping", warn: true, run: { open(rid) }))
+            }
+        }
+        return f
     }
 
     private func rosterLine(_ all: [PadClientFacts]) -> String {
@@ -411,8 +437,9 @@ struct PadClientAvatar: View {
     let facts: PadClientFacts
     var size: CGFloat = 64
     var body: some View {
-        // The open client, filled with the coach's accent colour.
-        PadAvatar(name: facts.name, size: size, volt: true)
+        // The open client: in their own accent if they've picked one (server 2.3.0), otherwise the coach's.
+        let own = ClientAccents.hex(id: facts.id, name: facts.name) != nil
+        PadAvatar(name: facts.name, size: size, volt: !own, id: facts.id)
             .overlay(Circle().stroke(facts.risk == .high ? Pad.orange : Color.clear, lineWidth: 2).padding(-4))
     }
 }

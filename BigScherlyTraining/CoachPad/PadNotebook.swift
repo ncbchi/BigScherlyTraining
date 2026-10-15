@@ -29,15 +29,13 @@ struct PadNotebookView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PadPageTop(title: "Notebook", subtitle: "Your binders. Each client's pages also live in their Notes.") {
+            PadPageTop(title: "Notebook", subtitle: "Your binders. Each client's pages also live in their Notes.", facts: PadFact.from(strip)) {
                 Button { newBinder = true } label: { Label("New binder", systemImage: "folder.badge.plus") }
                     .buttonStyle(PadButtonStyle(kind: .outline))
                 Button { Task { await quickNote() } } label: { Label("Quick note", systemImage: "plus") }
                     .buttonStyle(PadButtonStyle(kind: .primary))
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
-            PadPageStrip(stats: strip)
-            PadRule()
             HStack(alignment: .top, spacing: 0) {
                 binderColumn.frame(width: sideBySide ? 230 : 190)
                 Rectangle().fill(Pad.line).frame(width: 1)

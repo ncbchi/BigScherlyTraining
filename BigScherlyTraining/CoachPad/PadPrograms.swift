@@ -54,14 +54,13 @@ struct PadProgramsView: View {
     }
 
     var body: some View {
-        ScrollView {
+        VStack(spacing: 0) {
+                    PadPageTop(title: "Programs", subtitle: subtitle, facts: PadFact.from(strip), notes: notes) {
+                        Button { PadLibraryStore.shared.shelf = .programs; go(.library) } label: { Label("Results in Library", systemImage: "books.vertical") }
+                            .buttonStyle(PadButtonStyle(kind: .outline))
+                    }
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PadPageTop(title: "Programs", subtitle: subtitle) {
-                    Button { go(.library) } label: { Label("Library", systemImage: "books.vertical") }
-                        .buttonStyle(PadButtonStyle(kind: .outline))
-                }
-                PadPageStrip(stats: strip, notes: notes)
-                PadRule()
                 if sideBySide {
                     HStack(alignment: .top, spacing: 16) {
                         board.frame(maxWidth: .infinity)
@@ -72,6 +71,7 @@ struct PadProgramsView: View {
                     VStack(spacing: 16) { board; worksPane; increasesPane }.padding(20)
                 }
             }
+        }
         }
         .background(Pad.page.ignoresSafeArea())
         .refreshable { await load() }

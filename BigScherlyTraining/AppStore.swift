@@ -879,6 +879,12 @@ final class AppStore: ObservableObject {
     static var openTapAt = Date()
 
     func openSession(_ id: String) {
+        // Past its end (2½ hours after it started — say, a workout from last week with a set logged):
+        // it's saved as finished instead of reopening.
+        if let w = workouts.first(where: { $0.id == id }), LiveSessionController.shared.timedOut(w) {
+            LiveSessionController.shared.closeTimedOut(w)
+            return
+        }
         Self.openTapAt = Date()
         activeWorkoutId = id
         print(String(format: "[Open] watch payload sent · %.0f ms after tap", Date().timeIntervalSince(Self.openTapAt) * 1000))
@@ -923,6 +929,7 @@ enum AppTab: String, CaseIterable, Identifiable {
     // Coach screens (trainer accounts only) — live in the menu's COACH group.
     case coachToday     = "Coach Today"
     case coachClients   = "Coach Clients"
+    case coachMail      = "Coach Inbox"      // email (Communications, Oct 11, 2026)
     case coachPrograms  = "Coach Programs"
     case coachNotebook  = "Coach Notebook"
     case coachChat      = "Coach Chat"
@@ -934,10 +941,15 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     /// Coach screens appear inside the COACH group, so the "Coach " prefix is dropped there.
-    var title: String { isCoach ? String(rawValue.dropFirst(6)) : rawValue }
+    var title: String {
+        if self == .coachChat { return "Messages" }      // the app chat, under COMMUNICATIONS (Oct 11, 2026)
+        return isCoach ? String(rawValue.dropFirst(6)) : rawValue
+    }
     var isCoach: Bool { rawValue.hasPrefix("Coach ") }
-    static let coachTabs: [AppTab] = [.coachToday, .coachClients, .coachPrograms, .coachNotebook, .coachChat, .coachCheckins,
-                                      .coachWins, .coachInsights, .coachAnnounce, .coachShare]
+    static let coachTabs: [AppTab] = [.coachToday, .coachClients, .coachPrograms, .coachNotebook,
+                                      .coachWins, .coachInsights, .coachShare]
+    /// The menu's COMMUNICATIONS group (coaches only): email Inbox, Messages, Check-ins, Announcements.
+    static let commsTabs: [AppTab] = [.coachMail, .coachChat, .coachCheckins, .coachAnnounce]
     var icon: String {
         switch self {
         case .dashboard: return "house.fill"
@@ -954,6 +966,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .settings: return "gearshape.fill"
         case .coachToday: return "sun.max.fill"
         case .coachClients: return "person.2.fill"
+        case .coachMail: return "tray.fill"
         case .coachPrograms: return "square.stack.3d.up.fill"
         case .coachNotebook: return "book.closed.fill"
         case .coachChat: return "bubble.left.and.bubble.right.fill"

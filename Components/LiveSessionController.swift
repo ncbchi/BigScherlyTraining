@@ -3,6 +3,7 @@ import Combine
 import ActivityKit
 import UIKit
 import AVFoundation
+import UserNotifications
 import SwiftUI
 
 // MARK: - Live session
@@ -67,6 +68,12 @@ final class LiveSessionController: ObservableObject {
     private var idleTask: Task<Void, Never>?
     /// The card was ended for being idle: it comes back when something happens (or the app opens).
     private var idleEnded = false
+    /// Workouts close by themselves 2½ hours after they start (Oct 11, 2026): one left open was still
+    /// "in progress" a week later. It waits for 15 quiet minutes after your last set or rest, never past 4 hours.
+    static let autoEndAfter: TimeInterval = 2.5 * 3600
+    static let autoEndQuiet: TimeInterval = 15 * 60
+    static let autoEndHardCap: TimeInterval = 4 * 3600
+    private var timeoutTask: Task<Void, Never>?
     /// What the card settings were last time (a change mid-workout redraws or ends the card).
     private var lastPrefs = ""
     /// The sample card from Settings (ended after 15 s).
@@ -214,6 +221,8 @@ final class LiveSessionController: ObservableObject {
         }
         // Settings ▸ Lock Screen & Dynamic Island changed: apply it to the card that's up.
         lastPrefs = Self.prefsSignature()
+        // A workout restored from before the app closed that's past its 2½ hours: close it now.
+        DispatchQueue.main.async { [weak self] in self?.checkTimeout() }
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.cardPrefsChanged() }
@@ -241,6 +250,8 @@ final class LiveSessionController: ObservableObject {
             mark("watch app launch requested")
         }
         guard let w = store?.workouts.first(where: { $0.id == id }), !w.completed else { return }
+        // Past its end (2½ hours after it started, however long ago): it's over, not reopened.
+        if timedOut(w) { closeTimedOut(w); return }
         touch()
         if workoutId != id {
             workoutId = id
@@ -283,6 +294,7 @@ final class LiveSessionController: ObservableObject {
         }
         push(now: true)
         mark("first card push")
+        scheduleTimeout()
         LiveLink.shared.start()                          // the coach's iPad can find this session (Bluetooth, in the room)
     }
 
@@ -315,6 +327,7 @@ final class LiveSessionController: ObservableObject {
     /// `dismissal` nil: Settings ▸ End with the workout (on: gone at once · off: iOS shows the last state a while).
     func end(dismissal: ActivityUIDismissalPolicy? = nil) {
         let dismissal: ActivityUIDismissalPolicy = dismissal ?? (CardPrefs.endWithWorkout ? .immediate : .default)
+        timeoutTask?.cancel(); timeoutTask = nil
         UserDefaults.standard.removeObject(forKey: closedKeepKey)
         SetVideoRecorder.shared.stopAll()
         endRest()
@@ -414,6 +427,7 @@ final class LiveSessionController: ObservableObject {
 
     /// Logout: close any card immediately.
     func endAll() {
+        timeoutTask?.cancel(); timeoutTask = nil
         SetVideoRecorder.shared.stopAll()
         cancelRestAlerts()
         watchLaunchedFor = nil
@@ -693,6 +707,73 @@ final class LiveSessionController: ObservableObject {
                               sound: "bst_silent.wav", attributes: WorkoutActivityAttributes(workoutId: wid, title: w.title))
         guard start.fits else { return }
         Task { try? await APIClient.shared.scheduleCardAlerts([start]) }
+    }
+
+    // MARK: Auto-end after 2½ hours
+
+    private func scheduleTimeout() {
+        timeoutTask?.cancel()
+        guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }) else { return }
+        let wait = min(6 * 3600, max(1, timeoutDue(w).timeIntervalSinceNow + 1))   // re-checked at least every 6 h
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.checkTimeout()
+        }
+    }
+
+    /// When this workout closes: 2½ hours after it started, pushed back to 15 quiet minutes after the
+    /// last set you logged or the end of a rest that's running — but never past 4 hours.
+    private func timeoutDue(_ w: Workout) -> Date {
+        // The workout that's open uses its open time too; any other starts at its first logged set.
+        let logged = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }
+        let start = w.id == workoutId ? sessionStart(w) : (logged.min() ?? .distantFuture)
+        guard start != .distantFuture else { return .distantFuture }
+        var due = start.addingTimeInterval(Self.autoEndAfter)
+        if let last = logged.max() { due = max(due, last.addingTimeInterval(Self.autoEndQuiet)) }
+        if w.id == workoutId, let r = restEnd, r > Date() { due = max(due, r.addingTimeInterval(Self.autoEndQuiet)) }
+        return min(due, start.addingTimeInterval(Self.autoEndHardCap))
+    }
+
+    /// Past its end: 2½ hours after it started (a workout with nothing logged that isn't open never times out).
+    func timedOut(_ w: Workout) -> Bool { !w.completed && Date() >= timeoutDue(w) }
+
+    /// The open workout: checked on a timer, whenever the app comes to the front, and at launch.
+    func checkTimeout() {
+        guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }) else { return }
+        guard timedOut(w) else { scheduleTimeout(); return }
+        closeTimedOut(w)
+    }
+
+    /// The workout's over: it ends 2½ hours after it started. With sets logged it's saved as finished
+    /// with those sets (the rest count as skipped) and goes to your history; with nothing logged it just
+    /// closes and stays on your plan. The Lock Screen card, the Watch session and the floating card close,
+    /// and a notification says why.
+    func closeTimedOut(_ w: Workout) {
+        guard let store else { return }
+        let wid = w.id
+        let start = timeoutStart(w)
+        print(String(format: "[Live] auto-end · %@ · started %.1f h ago", w.title, Date().timeIntervalSince(start) / 3600))
+        if workoutId == wid { end(dismissal: .immediate) }
+        let logged = w.exercises.flatMap { $0.sets }.contains { $0.loggedReps != nil }
+        if logged, let i = store.workouts.firstIndex(where: { $0.id == wid }) {
+            store.workouts[i].completed = true
+            store.refreshAwards()
+        }
+        if store.activeWorkoutId == wid { store.activeWorkoutId = nil }
+        if store.sessionWorkoutId == wid { store.closeSession() }
+        UIApplication.shared.isIdleTimerDisabled = false
+        let recent = Date().timeIntervalSince(start) < 12 * 3600
+        let c = UNMutableNotificationContent()
+        c.title = "Workout ended"
+        c.body = (recent ? "\(w.title) ended 2½ hours after it started."
+                         : "\(w.title) ended on \(start.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())), 2½ hours after it started.")
+            + (logged ? " It's in your history with the sets you logged." : "")
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bst.workout.autoend.\(wid)", content: c, trigger: nil))
+    }
+
+    private func timeoutStart(_ w: Workout) -> Date {
+        w.id == workoutId ? sessionStart(w) : (w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min() ?? Date())
     }
 
     // MARK: Settings changed mid-workout
@@ -1216,6 +1297,7 @@ final class LiveSessionController: ObservableObject {
     /// The app opened mid-workout: bring the card back if it was closed, and take over the rest
     /// alerts here (the in-app bell), so nothing rings twice.
     func appBecameActive() {
+        checkTimeout()                                  // past 2½ hours while the app was away: close it first
         endCloseWatch()
         idleEnded = false
         touch()                                         // opening the app is activity: no idle end in your face
@@ -1415,8 +1497,7 @@ final class LiveSessionController: ObservableObject {
         guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }) else { return nil }
         let unit = StatsUnits.weightLabel
         let disp: (Double) -> Double = { (StatsUnits.weight($0) * 2).rounded() / 2 }
-        let first = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min()
-        var s = WorkoutActivityAttributes.ContentState(startedAt: min(first ?? openedAt, openedAt))
+        var s = WorkoutActivityAttributes.ContentState(startedAt: sessionStart(w))
         Self.applyLook(&s)
 
         // Left quarter: the set you're on (or the last one, when everything's logged).

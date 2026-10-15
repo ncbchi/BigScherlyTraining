@@ -44,17 +44,16 @@ struct PadCalendarView: View {
     }
 
     var body: some View {
-        ScrollView {
+        VStack(spacing: 0) {
+                    PadPageTop(title: "Week of \(weekStart.formatted(.dateTime.month(.wide).day()))", subtitle: "One row per client. Drag a session along its row to move it.", facts: PadFact.from(strip), notes: notes) {
+                        weekSeg
+                        Button { copyOnly = nil; confirmCopy = true } label: { Label("Copy week forward", systemImage: "doc.on.doc") }
+                            .buttonStyle(PadButtonStyle(kind: .outline))
+                            .disabled(copying)
+                        Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
+                    }
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PadPageTop(title: "Week of \(weekStart.formatted(.dateTime.month(.wide).day()))", subtitle: "One row per client. Drag a session along its row to move it.") {
-                    weekSeg
-                    Button { copyOnly = nil; confirmCopy = true } label: { Label("Copy week forward", systemImage: "doc.on.doc") }
-                        .buttonStyle(PadButtonStyle(kind: .outline))
-                        .disabled(copying)
-                    Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
-                }
-                PadPageStrip(stats: strip, notes: notes)
-                PadRule()
                 VStack(alignment: .leading, spacing: 14) {
                     PadPane(title: "This week", aside: legendLine) {
                         if sideBySide { grid } else { ScrollView(.horizontal, showsIndicators: true) { grid.frame(width: 1080) } }
@@ -64,6 +63,7 @@ struct PadCalendarView: View {
                 }
                 .padding(20)
             }
+        }
         }
         .background(Pad.page.ignoresSafeArea())
         .refreshable { store.loadRoster(); await data.refresh(roster: store.roster) }

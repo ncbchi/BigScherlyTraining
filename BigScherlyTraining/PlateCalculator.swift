@@ -29,6 +29,10 @@ nonisolated struct PlateKind: Hashable {
     /// White and chrome need a darker edge to show on a light card.
     var edgeColor: Color { (base == 0xECECE8 || base == 0xC8CDD4) ? Color(hex: 0x8E8E93) : Color(hex: dark) }
     var label: String { PlateMath.text(weight) }
+    /// Its picture in Assets (Oct 11, 2026): plate_lb_45, plate_kg_1_25… — the face with the weight printed on it.
+    func assetName(kg: Bool) -> String {
+        "plate_" + (kg ? "kg_" : "lb_") + PlateMath.key(weight).replacingOccurrences(of: ".", with: "_")
+    }
 
     /// Heaviest first. lb: 55 red · 45 blue · 35 yellow · 25 green · 10 white · 5 black · 2.5 chrome.
     /// kg: 25 · 20 · 15 · 10 · 5 · 2.5 · 1.25 in the same colours.
@@ -123,7 +127,10 @@ final class GymEquipment: ObservableObject {
         if let d = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(d, forKey: Self.key) }
     }
 
-    var isKg: Bool { StatsUnits.isKg }
+    /// The plate calculator's own lb ⇄ kg switch (Oct 13, 2026): set while it's open, nil = your app units.
+    /// Never changes Settings ▸ Units; cleared when the calculator closes.
+    @Published var calcKg: Bool? = nil
+    var isKg: Bool { calcKg ?? StatsUnits.isKg }
     var unit: String { isKg ? "kg" : "lb" }
     var kinds: [PlateKind] { PlateKind.all(kg: isKg) }
 
@@ -323,6 +330,10 @@ struct PlateCalculatorView: View {
     @State private var appeared = false
     @State private var contentHeight: CGFloat = 0     // the card is only as tall as what's in it
     @FocusState private var totalFocused: Bool
+    /// The total's selection (Oct 13, 2026): tapping the number selects all of it, so typing replaces it.
+    @State private var totalSelection: TextSelection? = nil
+    /// What the total said when you tapped it: the cards show "selected" until you type.
+    @State private var editSnapshot: String? = nil
 
     private var setup: PlateSetup {
         if case .barbell(let liftBar)? = request.lift { return gym.setup(for: .barbell(barId: barId ?? liftBar)) }
@@ -358,9 +369,22 @@ struct PlateCalculatorView: View {
         // Only as tall as the card; My Gym (a longer page) opens to full height.
         .presentationDetents([showGym ? .large : .height(SheetFit.clamp(contentHeight > 0 ? contentHeight + SheetFit.homeStrip : 640))])
         .onAppear(perform: start)
+        .onDisappear { gym.calcKg = nil }          // back to your app units
         .onChange(of: typed) { _, t in if totalFocused { aim(at: t) } }
-        .onChange(of: totalFocused) { _, f in if !f, cantMake == nil { typed = PlateMath.text(total) } }
-        .onChange(of: barId) { _, _ in aim(at: typed) }
+        .onChange(of: totalFocused) { _, f in
+            if f {
+                editSnapshot = typed
+                // A beat after the keyboard takes focus, or the tap's own caret placement wins.
+                DispatchQueue.main.async { totalSelection = TextSelection(range: typed.startIndex..<typed.endIndex) }
+            } else if cantMake == nil {
+                typed = PlateMath.text(total)
+            }
+        }
+        // A different bar: the plates stay on, and the total follows the new bar (no "the bar alone is…").
+        .onChange(of: barId) { _, _ in
+            cantMake = nil; below = nil; above = nil
+            typed = PlateMath.text(total)
+        }
         .onChange(of: gym.settings.pairsLb) { _, _ in aim(at: typed) }
         .onChange(of: gym.settings.pairsKg) { _, _ in aim(at: typed) }
     }
@@ -393,30 +417,81 @@ struct PlateCalculatorView: View {
     }
 
     private var totalRow: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("TOTAL").font(BrandFont.body(11, .heavy)).tracking(1.8).foregroundColor(Brand.mute)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    TextField("0", text: $typed)
-                        .keyboardType(.decimalPad)
-                        .focused($totalFocused)
-                        .font(BrandFont.display(64)).foregroundColor(Brand.text)
-                        .fixedSize()
-                        .accessibilityLabel("Total weight")
-                    Text(gym.unit).font(BrandFont.display(24)).foregroundColor(Brand.mute)
-                }
-                .padding(.bottom, 2)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(totalFocused ? Brand.voltLine : Brand.line).frame(height: 2)
-                }
+                totalGauge
             }
             Spacer(minLength: 6)
             VStack(alignment: .trailing, spacing: 6) {
                 barChip
                 Text(sideText).font(BrandFont.body(12, .semibold)).foregroundColor(Brand.mute)
             }
-            .padding(.bottom, 6)
+            .padding(.top, 18)
         }
+    }
+
+    /// The total as flip cards (Oct 13, 2026): white cards, black numerals, then the unit switch and the
+    /// ≈ conversion, all in a Liquid Glass tray. No underline, no lens over the cards. Tap it: the hidden field takes the keyboard, everything is
+    /// selected (an accent wash on the cards) and the first key replaces it.
+    private var totalGauge: some View {
+        HStack(spacing: 8) {
+            FlipReadout(text: typed.isEmpty ? PlateMath.text(setup.start + setup.collars) : typed, dim: typed.isEmpty,
+                        selected: totalFocused && typed == editSnapshot)
+                .overlay {
+                    TextField("", text: $typed, selection: $totalSelection)
+                        .keyboardType(.decimalPad)
+                        .focused($totalFocused)
+                        .font(BrandFont.display(40))
+                        .foregroundColor(.clear).tint(.clear)           // the cards are the readout
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .accessibilityLabel("Total weight")
+                        .accessibilityValue("\(typed.isEmpty ? "0" : typed) \(gym.unit)")
+                }
+                .fixedSize()
+            VStack(alignment: .leading, spacing: 4) {
+                // Quick switch (Oct 13, 2026): tap the unit to work in the other one.
+                Button { switchUnits() } label: {
+                    HStack(spacing: 4) {
+                        Text(gym.unit).font(BrandFont.display(22)).lineLimit(1)
+                        Image(systemName: "arrow.left.arrow.right").font(.system(size: 11, weight: .bold))
+                    }
+                    .fixedSize()
+                    .foregroundColor(Brand.voltText)
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(Capsule().stroke(Brand.voltLine.opacity(0.6), lineWidth: 1))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Switch to \(gym.isKg ? "pounds" : "kilograms")")
+                // Quick convert: the other unit, live as you type.
+                if let other = convertedText {
+                    Text(other)
+                        .font(BrandFont.body(12.5, .bold)).foregroundColor(Brand.voltText)
+                        .lineLimit(1).fixedSize()
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.15), value: other)
+                        .accessibilityLabel("About \(other)")
+                }
+            }
+        }
+        .padding(.leading, 8).padding(.trailing, 10).padding(.vertical, 8)
+        .modifier(GlassBubble(cornerRadius: 24, focused: totalFocused))       // the tray the cards sit in
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: typed.count)
+    }
+
+    /// The total in the other unit: "≈ 102.1 kg" for 225 lb, "≈ 220.5 lb" for 100 kg. Uses what's typed
+    /// (as you type), else the loaded total. 1 lb = 0.45359237 kg.
+    private var convertedText: String? {
+        let raw = typed.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        let v = Double(raw) ?? (raw.isEmpty ? total : 0)
+        guard v > 0 else { return nil }
+        let out = gym.isKg ? v / 0.45359237 : v * 0.45359237
+        let r = (out * 10).rounded() / 10
+        let num = r == r.rounded() ? String(format: "%.0f", r) : String(format: "%.1f", r)
+        return "≈ \(num) \(gym.isKg ? "lb" : "kg")"
     }
 
     private var sideText: String {
@@ -551,7 +626,12 @@ struct PlateCalculatorView: View {
     private var changed: Bool {
         guard request.onUse != nil else { return false }
         guard let s = request.startTotal else { return true }
-        return abs(s - total) > 0.001
+        return abs(s - toAppUnits(total)) > 0.01
+    }
+    /// The set's LB/KG box is in your app units: a total worked out in the other unit converts back.
+    private func toAppUnits(_ v: Double) -> Double {
+        guard gym.isKg != StatsUnits.isKg else { return v }
+        return gym.isKg ? v / 0.45359237 : v * 0.45359237
     }
     private var primaryTitle: String {
         changed ? "Use \(PlateMath.text(total)) \(gym.unit)\(request.useFor.map { " for \($0)" } ?? "")" : "Done"
@@ -562,6 +642,7 @@ struct PlateCalculatorView: View {
     private func start() {
         guard !appeared else { return }
         appeared = true
+        gym.calcKg = nil                                     // opens in your app units
         if let t = request.startTotal {
             typed = PlateMath.text(t)
             aim(at: typed)
@@ -575,6 +656,7 @@ struct PlateCalculatorView: View {
     private func aim(at text: String) {
         guard let t = Double(text.replacingOccurrences(of: ",", with: ".")) else {
             cantMake = nil; below = nil; above = nil
+            if text.trimmingCharacters(in: .whitespaces).isEmpty { plates = [] }   // empty = the empty bar
             return
         }
         let s = setup
@@ -640,8 +722,140 @@ struct PlateCalculatorView: View {
     }
 
     private func finish() {
-        if changed { request.onUse?(total) }
+        if changed { request.onUse?(toAppUnits(total)) }
         dismiss()
+    }
+
+    /// lb ⇄ kg: convert what's typed (or loaded), then load the nearest weight in the other unit's plates.
+    private func switchUnits() {
+        let raw = Double(typed.replacingOccurrences(of: ",", with: ".")) ?? total
+        let wasEmpty = plates.isEmpty
+        let wasKg = gym.isKg
+        let v = wasKg ? raw / 0.45359237 : raw * 0.45359237
+        gym.calcKg = !wasKg
+        totalFocused = false
+        let base = setup.start + setup.collars               // the bar (or sled) in the new unit
+        if wasEmpty || v <= base {
+            // An empty bar stays an empty bar: 20 kg → the 45 lb bar, never "44 lb — the bar alone is 45".
+            plates = []
+            cantMake = nil; below = nil; above = nil
+            typed = PlateMath.text(total)
+        } else {
+            typed = PlateMath.text((v * 2).rounded() / 2)
+            aim(at: typed)
+            if cantMake == nil { typed = PlateMath.text(total) }
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+}
+
+// MARK: - The total gauge's pieces (Oct 13, 2026)
+
+/// The digits as white flip cards with black numerals (a "." is a small dot between cards). Three digits get
+/// full-size cards; four or more get narrower ones so the row still fits beside the bar chip.
+private struct FlipReadout: View {
+    let text: String
+    let dim: Bool
+    let selected: Bool
+
+    var body: some View {
+        let digits = text.filter { $0 != "." }.count
+        let w: CGFloat = digits <= 3 ? 36 : 28
+        let h: CGFloat = digits <= 3 ? 54 : 48
+        HStack(spacing: 3) {
+            ForEach(Array(text.enumerated()), id: \.offset) { _, ch in
+                if ch == "." {
+                    RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x0B0B0C))
+                        .frame(width: 6, height: 6)
+                        .frame(width: 8, height: h, alignment: .bottom).padding(.bottom, 16)
+                } else {
+                    FlipCard(ch: String(ch), w: w, h: h, selected: selected)
+                }
+            }
+        }
+        .opacity(dim ? 0.45 : 1)
+    }
+}
+
+/// One card: split face (a hinge line across the middle, a pin each side), black numeral, flips down on change.
+private struct FlipCard: View {
+    let ch: String
+    let w: CGFloat
+    let h: CGFloat
+    let selected: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        ZStack {
+            shape.fill(LinearGradient(stops: [.init(color: .white, location: 0),
+                                              .init(color: Color(hex: 0xF3F3F5), location: 0.495),
+                                              .init(color: Color(hex: 0xE4E4E8), location: 0.505),
+                                              .init(color: .white, location: 1)],
+                                      startPoint: .top, endPoint: .bottom))
+            Text(ch)
+                .font(BrandFont.display(h * 0.86))
+                .foregroundColor(Color(hex: 0x0B0B0C))
+                .id(ch)
+                .transition(.plateFlip)
+            Rectangle().fill(Color.black.opacity(0.28)).frame(height: 1.5)
+            if selected { shape.fill(Brand.volt.opacity(0.28)) }
+        }
+        .frame(width: w, height: h)
+        .clipShape(shape)
+        .overlay(shape.stroke(Color.black.opacity(0.07), lineWidth: 1))
+        .overlay {
+            HStack {
+                pin
+                Spacer()
+                pin
+            }
+            .padding(.horizontal, -2)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 1.5, y: 2)
+        .shadow(color: .black.opacity(0.08), radius: 5, y: 6)
+        .animation(.easeInOut(duration: 0.28), value: ch)
+    }
+
+    private var pin: some View {
+        RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x9A9AA0)).frame(width: 5, height: 9)
+    }
+}
+
+/// The top half folding down over the old digit, the new one folding in.
+private struct PlateFlipFold: ViewModifier {
+    let angle: Double
+    func body(content: Content) -> some View {
+        content
+            .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
+            .opacity(abs(angle) >= 89 ? 0 : 1)
+    }
+}
+
+extension AnyTransition {
+    static var plateFlip: AnyTransition {
+        .asymmetric(insertion: .modifier(active: PlateFlipFold(angle: -90), identity: PlateFlipFold(angle: 0)),
+                    removal: .modifier(active: PlateFlipFold(angle: 90), identity: PlateFlipFold(angle: 0)))
+    }
+}
+
+/// The bubble around the whole gauge: regular Liquid Glass (iOS 26), else a frosted material. Accent ring while editing.
+private struct GlassBubble: ViewModifier {
+    let cornerRadius: CGFloat
+    let focused: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: shape)
+                .overlay(shape.stroke(Brand.voltLine, lineWidth: focused ? 2 : 0))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.6), lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+                .overlay(shape.stroke(Brand.voltLine, lineWidth: focused ? 2 : 0))
+        }
     }
 }
 
@@ -709,6 +923,57 @@ struct PlateBarIcon: View {
         .frame(width: 28, height: 28)
         .overlay(Circle().stroke(Brand.voltLine, lineWidth: 2))
         .contentShape(Circle())
+    }
+}
+
+// MARK: - The set-card plates, as bubbles (Oct 11, 2026; replaces PlateBarIcon on the set card)
+// One bubble per plate on a side, each the set number's size with the same accent ring, filled with a
+// picture of the plate (its weight printed on it). Stacked like coins: the heaviest on top at the right,
+// each lighter one tucked in behind to its left, so 405 stays short. Then "×2" for the pair (not on a
+// one-sided machine). An empty bar is a single bar-end bubble. Tap opens the calculator, as before.
+
+struct PlateBubbles: View {
+    let plates: [PlateKind]                 // one side, heaviest first (innermost first)
+    let kg: Bool
+    var pair: Bool = true
+    private let size: CGFloat = 25          // 10% under the set number's 28 (Nick, Oct 11)
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            HStack(spacing: -size * 0.42) {
+                if plates.isEmpty {
+                    bubble("plate_bar", z: 0, onTop: false)
+                } else {
+                    // Lightest on the left … heaviest on the right, each drawn over the one before it.
+                    ForEach(Array(plates.reversed().enumerated()), id: \.offset) { i, p in
+                        bubble(p.assetName(kg: kg), z: Double(i), onTop: i > 0)
+                    }
+                }
+            }
+            if pair && !plates.isEmpty {
+                Text("×2")
+                    .font(BrandFont.body(11, .heavy))
+                    .foregroundColor(Brand.voltText)
+                    .offset(y: 3)                    // sits low, like a subscript
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityValue(plates.isEmpty ? "Empty bar"
+            : plates.map { $0.label }.joined(separator: ", ") + (pair ? " a side" : ""))
+    }
+
+    private func bubble(_ name: String, z: Double, onTop: Bool) -> some View {
+        Image(name)
+            .resizable()
+            .scaledToFill()
+            .frame(width: size - 2, height: size - 2)
+            .clipShape(Circle())
+            .frame(width: size, height: size)
+            .background(Circle().fill(Brand.card))
+            .overlay(Circle().stroke(Brand.voltLine, lineWidth: 2))
+            .shadow(color: .black.opacity(onTop ? 0.45 : 0), radius: 2, x: -2, y: 0)   // falls on the plate behind
+            .zIndex(z)
     }
 }
 

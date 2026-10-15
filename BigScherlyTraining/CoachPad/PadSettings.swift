@@ -59,7 +59,6 @@ struct PadSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PadPageTop(title: "Settings", subtitle: "Grouped like the sidebar. Coaching first, your account last.") { EmptyView() }
-            PadRule()
             HStack(alignment: .top, spacing: 0) {
                 nav
                     .frame(width: 260)
@@ -406,10 +405,16 @@ struct PadAlertsPane: View {
 // MARK: - Theme & accent (the phone's options, kept on this iPad)
 
 struct PadThemePane: View {
+    @EnvironmentObject var store: AppStore
     @ObservedObject private var theme = ThemeStore.shared
     @State private var customPick: Color = Color(hex: 0x00E5FF)
+    /// Server 2.3.0 (Oct 11): take the theme from your phone instead of setting it here.
+    @AppStorage("bst_pad_follow_phone_theme") private var follow = false   // = ThemeSync.followKey
+    @State private var phone: CoachThemeSnapshot?
+    @State private var serverReady = true
 
     private var explainer: String {
+        if follow { return "Set on your phone. Turn off Use my phone's theme to set it here." }
         switch theme.choice {
         case .custom: return "Your own look. Set it up below; it's remembered when you switch back."
         case .system: return "Follows this iPad's light or dark setting."
@@ -420,13 +425,15 @@ struct PadThemePane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            PadPane(title: "Theme", aside: "the same options as the phone app") {
+            followPane
+            PadPane(title: "Theme", aside: follow ? "from your phone" : "the same options as the phone app") {
                 HStack(spacing: 8) {
                     ForEach(ThemeChoice.allCases) { c in choiceTile(c) }
                 }
+                .disabled(follow)
                 Text(explainer).font(PadFont.ui(13)).foregroundColor(Pad.mute)
             }
-            if theme.choice == .custom {
+            if theme.choice == .custom && !follow {
                 PadPane(title: "Base") {
                     PadSeg(options: ThemeBase.allCases.map { (id: $0, label: $0.label) }, selection: $theme.customBase)
                 }
@@ -457,9 +464,47 @@ struct PadThemePane: View {
                 }
             }
             preview
-            PadLab("Kept on this iPad, separate from your phone for now. Following your phone's theme is coming.", size: 12)
         }
         .frame(maxWidth: 760, alignment: .leading)
+        .task { await check() }
+        .onReceive(NotificationCenter.default.publisher(for: .bstPhoneThemeApplied)) { _ in phone = ThemeSync.shared.lastPhoneTheme }
+    }
+
+    private var followPane: some View {
+        PadPane(title: "Your phone") {
+            PadSettingRow(title: "Use my phone's theme",
+                          sub: follow ? followLine : "Off: this iPad keeps its own theme, set below.") {
+                Toggle("", isOn: Binding(get: { follow }, set: { on in
+                    follow = on
+                    ThemeSync.shared.setFollow(on)
+                    if on { Task { try? await Task.sleep(nanoseconds: 1_500_000_000); phone = ThemeSync.shared.lastPhoneTheme } }
+                }))
+                .labelsHidden().tint(Pad.volt)
+                .disabled(!serverReady && !follow)
+            }
+            if !serverReady {
+                PadLab("Needs server 2.3.0. Until then this iPad keeps its own theme.", color: Pad.faint, size: 12)
+            }
+        }
+    }
+
+    private var followLine: String {
+        guard let p = phone else { return "Takes the theme from the iPhone you coach on, whenever you open the app. Open the app on your phone once so it's sent." }
+        let c = ThemeChoice(rawValue: p.choice)?.label ?? p.choice.capitalized
+        let detail: String = p.choice == ThemeChoice.custom.rawValue
+            ? "\(c), \(theme.accentName(ClientAccents.parse(p.accent) ?? ThemeStore.volt)) on \(p.base)"
+            : c
+        return "Your phone is on \(detail). Change it there and this iPad follows the next time you open it."
+    }
+
+    private func check() async {
+        guard store.isLive else { serverReady = false; return }
+        serverReady = await ServerVersion.has23()
+        if follow, serverReady {
+            ThemeSync.shared.refreshNow()
+            if let s = try? await APIClient.shared.trainerSetting("coachTheme"), let json = s.json,
+               let snap = try? JSONDecoder().decode(CoachThemeSnapshot.self, from: Data(json.utf8)) { phone = snap }
+        }
     }
 
     private func choiceTile(_ c: ThemeChoice) -> some View {

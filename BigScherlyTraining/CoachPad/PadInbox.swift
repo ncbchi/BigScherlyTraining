@@ -39,8 +39,9 @@ struct PadInboxView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PadPageTop(title: "Inbox", subtitle: unread == 0 ? "All caught up. Every client’s messages, voice notes and set comments, one thread per topic."
-                                                             : "\(unread.plural("unread thread")). Every client’s messages, voice notes and set comments, one thread per topic.") {
+            PadPageTop(title: "Messages", subtitle: unread == 0 ? "All caught up. Every client’s messages, voice notes and set comments, one thread per topic."
+                                                             : "\(unread.plural("unread thread")). Every client’s messages, voice notes and set comments, one thread per topic.",
+                       compact: true, facts: barFacts, notes: notes.filter { $0.icon != "bubble.left" }) {
                 PadSeg(options: [(id: false, label: "All"), (id: true, label: "Unread")], selection: $unreadOnly)
                 Menu {
                     Button("Any category") { category = "Any category" }
@@ -53,8 +54,6 @@ struct PadInboxView: View {
                 }
                 .hoverEffect(.highlight)
             }
-            PadPageStrip(stats: strip, notes: notes)
-            PadRule()
             HStack(spacing: 0) {
                 threadList.frame(width: 320)
                 Rectangle().fill(Pad.line).frame(width: 1)
@@ -121,6 +120,27 @@ struct PadInboxView: View {
             PadStat(label: "Talked today", value: "\(active)", unit: "of \(store.roster.count)", sub: "clients with a message today"),
             PadStat(label: "Quiet a week+", value: "\(q.count)", sub: quietSub, warn: !q.isEmpty),
         ]
+    }
+
+    /// The bar's status line (canvas row 3.1.7). "Quiet" is here, so its noticing card isn't shown twice.
+    private var barFacts: [PadFact] {
+        let waiting = items.filter { $0.thread.unread > 0 }.sorted { $0.thread.lastActivity < $1.thread.lastActivity }
+        var f: [PadFact] = []
+        if let w = waiting.first {
+            let wid: String = w.id
+            f.append(PadFact(bold: "\(waiting.count)", tail: " unread", warn: true, run: { unreadOnly = true }))
+            f.append(PadFact(lead: "oldest ", bold: w.client.name.firstName, tail: ", " + hoursText(w.thread.lastActivity), run: { selected = wid }))
+        } else {
+            f.append(PadFact(bold: "All caught up"))
+        }
+        if let q = quiet.first, let t = items.first(where: { $0.client.id == q.client.id }) {
+            let tid: String = t.id
+            f.append(PadFact(bold: q.client.name.firstName, tail: " quiet \(q.days) days", warn: true, run: { selected = tid }))
+        }
+        let weekStart: Date = Calendar.training.startOfWeek(for: Date())
+        let talked: Int = Set(items.filter { $0.thread.lastActivity >= weekStart }.map { $0.client.id }).count
+        f.append(PadFact(bold: "\(talked) of \(store.roster.count)", tail: " talked this week"))
+        return f
     }
 
     private var notes: [PadNote] {
@@ -292,7 +312,7 @@ struct PadConversation: View {
                             .id(p.id)
                         }
                     }
-                    .padding(22)
+                    .padding(.horizontal, 18).padding(.vertical, 14)
                 }
                 .onChange(of: messages.count) { _, _ in if let l = messages.last { withAnimation { proxy.scrollTo(l.id, anchor: .bottom) } } }
                 .onChange(of: pending.count) { _, _ in if let l = pending.last { withAnimation { proxy.scrollTo(l.id, anchor: .bottom) } } }
@@ -313,20 +333,20 @@ struct PadConversation: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            PadAvatar(name: client.name, size: 34)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(client.name).font(PadFont.ui(16, .bold)).foregroundColor(Pad.text).lineLimit(1)
-                Text(contextLine).font(PadFont.cond(13)).foregroundColor(Pad.mute).lineLimit(1)
-            }
+        // One line (canvas row 3.1.7): name and what the thread's about, then icons.
+        let line: Text = Text(client.name).font(PadFont.ui(15, .bold)).foregroundColor(Pad.text)
+            + Text("  ·  " + contextLine).font(PadFont.cond(13)).foregroundColor(Pad.mute)
+        return HStack(spacing: 8) {
+            PadAvatar(name: client.name, size: 30)
+            line.lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 8)
-            Button("View as \(client.name.firstName)") { previewing = true }.buttonStyle(PadButtonStyle(kind: .outline, small: true))
+            PadIconButton(systemName: "eye", label: "View as \(client.name.firstName)", small: true) { previewing = true }
             if !embedded {
-                Button("Open profile") { store.selectedClient = client }.buttonStyle(PadButtonStyle(kind: .outline, small: true))
-                PadIconButton(systemName: "sidebar.right", label: showContext ? "Hide details" : "Show details", on: showContext) { onToggleContext() }
+                PadIconButton(systemName: "person.crop.circle", label: "Open profile", small: true) { store.selectedClient = client }
+                PadIconButton(systemName: "sidebar.right", label: showContext ? "Hide details" : "Show details", small: true, on: showContext) { onToggleContext() }
             }
         }
-        .padding(.horizontal, 16).frame(height: 72)
+        .padding(.horizontal, 14).frame(height: 52)
     }
 
     private var contextLine: String {
@@ -399,15 +419,16 @@ struct PadConversation: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            composerTools
+        VStack(alignment: .leading, spacing: 8) {
             if let videoStatus {
                 HStack(spacing: 8) {
                     if videoStatus.hasSuffix("…") { ProgressView().tint(Pad.text) }
                     Text(videoStatus).font(PadFont.ui(13)).foregroundColor(Pad.mute)
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 6) {
+                composerTools
+                Rectangle().fill(Pad.line2).frame(width: 1, height: 24).padding(.bottom, 10).padding(.horizontal, 2)
                 TextField("Message \(client.name.firstName)", text: $draft, axis: .vertical)
                     .lineLimit(1...6).focused($composing)
                     .padInput(multiline: true)
@@ -426,7 +447,7 @@ struct PadConversation: View {
             Button("Reply") { composing = true }.keyboardShortcut("r", modifiers: .control)
                 .frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
         }
-        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 14)
+        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 10)
     }
 
     // MARK: Composer tools: attach a workout, comment on a set, saved replies, save to their notes
@@ -455,7 +476,8 @@ struct PadConversation: View {
                         composing = true
                     }
                 }
-            } label: { PadMenuLabel(text: "Workout", icon: "dumbbell") }
+            } label: { toolIcon("dumbbell") }
+            .accessibilityLabel("Attach a workout")
             Menu {
                 if let w = recentWorkouts.first(where: { $0.exercises.contains { $0.sets.contains { $0.loggedReps != nil } } }) {
                     Section(w.title) {
@@ -466,20 +488,30 @@ struct PadConversation: View {
                 } else {
                     Text("No logged sets yet")
                 }
-            } label: { PadMenuLabel(text: "Set", icon: "text.bubble") }
+            } label: { toolIcon("text.bubble") }
+            .accessibilityLabel("Comment on a set")
             Menu {
                 ForEach(store.savedReplies, id: \.self) { r in
-                    Button(r) { draft = draft.isEmpty ? r : draft + " " + r; composing = true }
+                    Button(r) { draft = draft.isEmpty ? r : draft + " " + r; composing = true; PadReplyUses.used(r) }
                 }
-            } label: { PadMenuLabel(text: "Saved replies", icon: "text.quote") }
-            Button { saveToNotes() } label: { PadMenuLabel(text: "To \(first)'s notes", icon: "pin") }
+            } label: { toolIcon("text.quote") }
+            .accessibilityLabel("Saved replies")
+            Button { saveToNotes() } label: { toolIcon("pin") }
                 .buttonStyle(.plain)
                 .disabled(noteSource.isEmpty)
-            Spacer(minLength: 0)
+                .accessibilityLabel("Save to \(first)'s notes")
         }
         .sheet(item: $setComment) { p in
             SetCommentSheet(setId: p.id, label: p.label, clientName: client.name)
         }
+    }
+
+    /// A composer tool, icon only (labels are for VoiceOver and the pointer).
+    private func toolIcon(_ name: String) -> some View {
+        Image(systemName: name).font(.system(size: 16, weight: .semibold)).foregroundColor(Pad.mute)
+            .frame(width: 40, height: 44)
+            .contentShape(Rectangle())
+            .hoverEffect(.highlight)
     }
 
     struct SetPick: Identifiable { let id: String; let label: String }

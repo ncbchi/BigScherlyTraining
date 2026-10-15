@@ -95,11 +95,13 @@ struct CoachAvatar: View {
     var size: CGFloat = 44
     var highlighted = false
     var body: some View {
-        Text(name.initials)
+        // Server 2.3.0 (Oct 11): a client's own accent, when they've picked one in their app.
+        let accent: UInt32? = highlighted ? nil : ClientAccents.hex(name: name)
+        return Text(name.initials)
             .font(BrandFont.display(size * 0.42))
-            .foregroundColor(highlighted ? Brand.onVolt : Brand.text)
+            .foregroundColor(highlighted ? Brand.onVolt : (accent.map { RGBColor(hex: $0).textOn.color } ?? Brand.text))
             .frame(width: size, height: size)
-            .background(Circle().fill(highlighted ? Brand.volt : Brand.text.opacity(0.08)))
+            .background(Circle().fill(highlighted ? Brand.volt : (accent.map { RGBColor(hex: $0).color } ?? Brand.text.opacity(0.08))))
             .accessibilityHidden(true)
     }
 }

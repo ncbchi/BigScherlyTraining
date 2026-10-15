@@ -498,6 +498,8 @@ struct AnnouncementsView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
+        // Server 2.3.0: your coach sees that you've read them.
+        .task(id: store.liveAnnouncements.map { $0.id }) { AnnouncementReads.mark(store.liveAnnouncements.map { $0.id }) }
     }
 }
 

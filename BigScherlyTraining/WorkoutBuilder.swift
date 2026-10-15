@@ -21,6 +21,8 @@ struct WorkoutBuilderView: View {
     let clientName: String
     var editing: Workout? = nil
     var programLabel: String? = nil
+    /// New workout only: exercises to start with (Library ▸ Exercises ▸ Add to a workout).
+    var startWith: [DraftExercise] = []
     var onSaved: () -> Void = {}
 
     @State private var title = ""
@@ -127,6 +129,11 @@ struct WorkoutBuilderView: View {
     }
 
     private func prefill() {
+        if editing == nil, !prefilled, !startWith.isEmpty {
+            prefilled = true
+            exercises = startWith
+            return
+        }
         guard let w = editing, !prefilled else { return }
         prefilled = true
         title = w.title

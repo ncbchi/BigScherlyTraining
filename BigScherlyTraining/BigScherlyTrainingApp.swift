@@ -21,7 +21,7 @@ struct BigScherlyTrainingApp: App {
             ThemeHost {
                 RootView().environmentObject(store)                  // Settings ▸ Appearance
                     // Push: register on launch too — a saved session is restored without login().
-                    .task { PushCenter.shared.start(store) }
+                    .task { PushCenter.shared.start(store); ThemeSync.shared.start() }   // + theme/accent to the server (2.3.0)
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -49,6 +49,7 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var showBoard = true
     @State private var showSplash = true
+    @ObservedObject private var setupLink = AccountSetupLink.shared   // welcome email's Set Up My Account (2.5.0)
 
     /// Coach HQ on iPad (Oct 8, 2026): a coach on an iPad with room for a sidebar gets the
     /// split layout. In a narrow Split View window (compact width) it's the phone layout.
@@ -87,8 +88,28 @@ struct RootView: View {
         .plateCalculatorHost()        // Tools ▸ Plate calculator and the set-card barbell open here
         // A widget was tapped: skip the welcome board and go where it points.
         .onOpenURL { url in
+            // The welcome email's "Set Up My Account" link signs a new client in (server 2.5.0).
+            if setupLink.handle(url, store: store) { return }
             showBoard = false
             WidgetBridge.shared.handle(url)
+        }
+        .overlay {
+            if setupLink.working {
+                ZStack {
+                    Color.black.opacity(0.55).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView().tint(.white)
+                        Text("Opening your account…").font(BrandFont.body(14, .semibold)).foregroundColor(.white)
+                    }
+                }
+            }
+        }
+        .alert("Couldn't open your account", isPresented: Binding(
+            get: { setupLink.error != nil },
+            set: { if !$0 { setupLink.error = nil } })) {
+            Button("OK", role: .cancel) { setupLink.error = nil }
+        } message: {
+            Text(setupLink.error ?? "")
         }
     }
 }
@@ -256,6 +277,7 @@ struct MainShell: View {
         // Coach screens
         case .coachToday: TrainerTodayView()
         case .coachClients: RosterView()
+        case .coachMail: CoachMailView()
         case .coachPrograms: NavigationStack { CoachProgramsView() }
         case .coachNotebook: NavigationStack { CoachNotebookView() }
         case .coachChat: NavigationStack { TrainerChatSection() }

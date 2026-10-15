@@ -49,6 +49,8 @@ struct NewAnnouncementSheet: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { shown = true } }
+        // Server 2.3.0: the coach sees it was read, one at a time as each shows.
+        .task(id: item.id) { AnnouncementReads.mark([item.id]) }
     }
 
     private var card: some View {

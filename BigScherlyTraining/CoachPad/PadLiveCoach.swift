@@ -371,7 +371,8 @@ struct PadLiveNotesCard: View {
     @State private var saving = false
     @FocusState private var focused: Bool
 
-    private let starters: [String] = ["Go up 5 lb", "Same weight, cleaner", "Pause reps", "Slow the lowering", "Brace before the unrack"]
+    /// Edited in Library ▸ Messages ▸ Notes for next time.
+    private var starters: [String] { PadLiveStarters.list }
 
     var body: some View {
         let names: [String] = (ctx.workout?.exercises ?? []).map { $0.name }

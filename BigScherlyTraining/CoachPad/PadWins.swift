@@ -38,14 +38,13 @@ struct PadWinsView: View {
     var body: some View {
         let streaks = streakList()
         let close = closeList()
-        return ScrollView {
+        return VStack(spacing: 0) {
+                    PadPageTop(title: "Wins", subtitle: "PRs, awards and milestones across everyone.", facts: PadFact.from(strip(streaks)), notes: notes(close, streaks: streaks)) {
+                        Button { roundup = draftRoundup() } label: { Label("Weekly round-up", systemImage: "text.bubble") }
+                            .buttonStyle(PadButtonStyle(kind: .outline))
+                    }
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PadPageTop(title: "Wins", subtitle: "PRs, awards and milestones across everyone.") {
-                    Button { roundup = draftRoundup() } label: { Label("Weekly round-up", systemImage: "text.bubble") }
-                        .buttonStyle(PadButtonStyle(kind: .outline))
-                }
-                PadPageStrip(stats: strip(streaks), notes: notes(close, streaks: streaks))
-                PadRule()
                 if sideBySide {
                     HStack(alignment: .top, spacing: 16) {
                         feedPane.frame(maxWidth: .infinity)
@@ -56,6 +55,7 @@ struct PadWinsView: View {
                     VStack(spacing: 12) { closePane(close); feedPane; streakPane(streaks); roundupPane }.padding(20)
                 }
             }
+        }
         }
         .background(Pad.page.ignoresSafeArea())
         .refreshable { await load() }

@@ -55,11 +55,94 @@ final class APIClient {
     struct APIError: Error { let message: String }
 
     // MARK: Auth
-    func login(email: String, password: String) async throws -> LoginResponse {
-        try await post("/auth/login", body: ["email": email, "password": password])
+    /// Server 2.4.0: a phone the account hasn't used before gets an emailed code first
+    /// (.needsCode). Older servers ignore the extra fields and always sign in.
+    enum LoginOutcome {
+        case signedIn(LoginResponse)
+        case needsCode(MfaChallenge)
     }
 
-    // Client sets their own password (first-login forced change)
+    func login(email: String, password: String) async throws -> LoginOutcome {
+        let data = try await request("/auth/login", method: "POST", body: try JSONSerialization.data(withJSONObject: [
+            "email": email, "password": password,
+            "deviceId": DeviceIdentity.id, "deviceName": DeviceIdentity.name, "client": "app"
+        ]))
+        if let ch = try? decoder.decode(MfaChallenge.self, from: data), ch.mfaRequired {
+            return .needsCode(ch)
+        }
+        return .signedIn(try decoder.decode(LoginResponse.self, from: data))
+    }
+
+    /// The welcome email's "Set Up My Account" link (server 2.5.0): trades its token for a sign-in.
+    /// Works once. This phone is trusted for 2-step sign-in from then on.
+    struct SetupAnswer: Decodable { let token: String; let role: String; let name: String; let id: String; let mustChangePassword: Bool; let email: String }
+    func setupAccount(token: String) async throws -> SetupAnswer {
+        let d = try await authPost("/auth/setup", body: ["token": token, "deviceId": DeviceIdentity.id, "deviceName": DeviceIdentity.name])
+        return try decoder.decode(SetupAnswer.self, from: d)
+    }
+
+    /// Finishes a 2-step sign-in with the emailed code. This phone is trusted from then on.
+    func verifyLoginCode(mfaToken: String, code: String) async throws -> LoginResponse {
+        let d = try await authPost("/auth/mfa/verify", body: ["mfaToken": mfaToken, "code": code])
+        return try decoder.decode(LoginResponse.self, from: d)
+    }
+
+    /// Sends a fresh code for the same sign-in. Returns seconds before another can be sent.
+    func resendLoginCode(mfaToken: String) async throws -> Int {
+        let d = try await authPost("/auth/mfa/resend", body: ["mfaToken": mfaToken])
+        return (try? decoder.decode(CodeSentReply.self, from: d))?.retryAfter ?? 60
+    }
+
+    // MARK: Emailed 6-digit codes (forgot password + code sign-in, Oct 10, 2026)
+    // These go out with no login token. Failures carry the server's own sentence
+    // ("That code is wrong. 4 tries left.") in APIError.message for the sheet to show.
+    private struct CodeSentReply: Decodable { var retryAfter: Int? }
+
+    /// Emails a reset code. Returns the seconds before another can be sent.
+    func sendResetCode(email: String) async throws -> Int {
+        let d = try await authPost("/auth/forgot-password", body: ["email": email])
+        return (try? decoder.decode(CodeSentReply.self, from: d))?.retryAfter ?? 60
+    }
+    /// Checks the code, sets the new password and signs in.
+    func resetPassword(email: String, code: String, newPassword: String) async throws -> LoginResponse {
+        let d = try await authPost("/auth/reset-password", body: ["email": email, "code": code, "newPassword": newPassword,
+                                                                   "deviceId": DeviceIdentity.id, "deviceName": DeviceIdentity.name])
+        return try decoder.decode(LoginResponse.self, from: d)
+    }
+    /// Emails a sign-in code. Returns the seconds before another can be sent.
+    func sendSignInCode(email: String) async throws -> Int {
+        let d = try await authPost("/auth/email-code", body: ["email": email])
+        return (try? decoder.decode(CodeSentReply.self, from: d))?.retryAfter ?? 60
+    }
+    /// Signs in with an emailed code instead of a password.
+    func signInWithCode(email: String, code: String) async throws -> LoginResponse {
+        let d = try await authPost("/auth/email-code/verify", body: ["email": email, "code": code,
+                                                                      "deviceId": DeviceIdentity.id, "deviceName": DeviceIdentity.name])
+        return try decoder.decode(LoginResponse.self, from: d)
+    }
+
+    private struct ServerErrorReply: Decodable { var error: String?; var message: String? }
+
+    /// POST without a token. A non-2xx answer throws APIError with the server's message.
+    private func authPost(_ path: String, body: [String: Any]) async throws -> Data {
+        var req = URLRequest(url: url(path))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let result: (Data, URLResponse)
+        do { result = try await URLSession.shared.data(for: req) }
+        catch { throw APIError(message: "Couldn't reach the server. Check your connection.") }
+        let (data, resp) = result
+        guard let http = resp as? HTTPURLResponse else { throw APIError(message: "Request failed") }
+        guard (200..<300).contains(http.statusCode) else {
+            let r = try? decoder.decode(ServerErrorReply.self, from: data)
+            throw APIError(message: r?.error ?? r?.message ?? "Something went wrong (\(http.statusCode)). Try again.")
+        }
+        return data
+    }
+
+    // Client sets their own password (first-login forced change). After an emailed-code
+    // sign-in, `current` may be empty: the server accepts that only on a code session.
     func changePassword(current: String, new: String) async throws {
         _ = try await request("/change-password", method: "POST",
                               body: try JSONSerialization.data(withJSONObject: ["currentPassword": current, "newPassword": new]))
@@ -473,6 +556,15 @@ final class APIClient {
 // Chat video endpoint responses
 struct VideoUploadResponse: Decodable { let videoKey: String }
 struct SignedURLResponse: Decodable { let url: String }
+
+/// /auth/login's answer when this phone needs an emailed code first (server 2.4.0).
+struct MfaChallenge: Decodable, Identifiable {
+    let mfaRequired: Bool
+    let mfaToken: String
+    let sentTo: String
+    var retryAfter: Int? = 60
+    var id: String { mfaToken }
+}
 
 // LoginResponse decodes from the API's /auth/login result
 struct LoginResponse: Decodable {

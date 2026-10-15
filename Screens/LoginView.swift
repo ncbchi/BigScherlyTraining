@@ -8,26 +8,36 @@ struct LoginView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var showError = false
+    /// "Forgot password?" or "Email me a code" (Oct 10, 2026): both open EmailCodeSheet.
+    @State private var codeSheet: EmailCodeSheet.Mode?
+    /// 2-step sign-in (server 2.4.0): set when this phone needs an emailed code after the password.
+    @State private var mfa: MfaChallenge?
+    /// The splash's logo glides into this page's logo at launch (SplashView ▸ LogoDock).
+    @ObservedObject private var dock = LogoDock.shared
+    @ObservedObject private var theme = ThemeStore.shared
+    /// Your accent, readable on black (Volt on a phone that's never had a sign-in).
+    private var accent: Color { _ = theme.accent; return LoginLook.palette().accentText }
+    /// The fields wait for the logo to land.
+    private var shown: Bool { dock.phase != .splash }
 
     var body: some View {
         ZStack {
             BrandDark.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
-                // The volt logo from the asset catalog (the login page always stays dark).
+                // The logo alone, in your accent (the login page always stays dark). At launch it's
+                // hidden until the splash's logo has glided into this exact spot.
                 Image("logoVolt").renderingMode(.template)
                     .resizable().scaledToFit()
-                    .foregroundColor(BrandDark.volt)
-                    .frame(height: 120)
-                    .padding(.bottom, 8)
-
-                Text("Big Scherly Training")
-                    .font(BrandFont.display(30))
-                    .foregroundColor(BrandDark.white)
-                Text("Lets Get Big Together Queens")
-                    .font(BrandFont.body(11, .bold))
-                    .tracking(3).foregroundColor(BrandDark.volt)
-                    .padding(.bottom, 40)
+                    .foregroundColor(accent)
+                    .frame(height: 150)
+                    .background(GeometryReader { g in
+                        Color.clear
+                            .onAppear { dock.target = g.frame(in: .global); dock.loginUp = true }
+                            .onChange(of: g.frame(in: .global)) { _, f in dock.target = f }
+                    })
+                    .opacity(dock.phase == .done ? 1 : 0)
+                    .padding(.bottom, 44)
 
                 VStack(spacing: 14) {
                     styledField("Email", text: $email, secure: false)
@@ -47,38 +57,11 @@ struct LoginView: View {
                         } else {
                             Task {
                                 do {
-                                    let resp = try await APIClient.shared.login(email: email, password: password)
-                                    APIClient.shared.setToken(resp.token)
+                                    let outcome = try await APIClient.shared.login(email: email, password: password)
                                     await MainActor.run {
-                                        // The same login screen serves both roles — the
-                                        // server tells us which shell to show.
-                                        store.isTrainer = (resp.role == "trainer")
-                                        store.trainerName = resp.name
-                                        store.isDemoMode = false   // isLive computes from this
-                                        // Set identity immediately from the login response
-                                        // so the greeting is correct even before /me loads.
-                                        if resp.role != "trainer" {
-                                            store.client = Client(id: resp.id, name: resp.name,
-                                                                  email: email, startDate: store.client.startDate,
-                                                                  goal: store.client.goal)
-                                        }
-                                        // Persist role + name so relaunch restores the
-                                        // correct shell and identity, not a default.
-                                        UserDefaults.standard.set(resp.role == "trainer", forKey: "bst_isTrainer")
-                                        UserDefaults.standard.set(resp.name, forKey: "bst_userName")
-
-                                        if store.isTrainer {
-                                            // His own training runs on a hidden profile; keep his login
-                                            // name and email on screen.
-                                            store.client = Client(id: resp.id, name: resp.name, email: email,
-                                                                  startDate: store.client.startDate, goal: store.client.goal)
-                                            UserDefaults.standard.set(email, forKey: "bst_userEmail")
-                                            store.login()
-                                            store.startCoachSession()
-                                        } else {
-                                            store.mustChangePassword = resp.mustChangePassword
-                                            store.login()
-                                            if !resp.mustChangePassword { store.loadAllFromAPI() }
+                                        switch outcome {
+                                        case .signedIn(let resp): finishLogin(resp, email: email, viaCode: false)
+                                        case .needsCode(let ch): mfa = ch
                                         }
                                     }
                                 } catch {
@@ -88,10 +71,23 @@ struct LoginView: View {
                         }
                     }
                     .padding(.top, 4)
+
+                    // Emailed 6-digit codes: sign in without the password, or reset it.
+                    HStack(spacing: 18) {
+                        Button("Email me a code") { showError = false; codeSheet = .signIn }
+                            .foregroundColor(accent)
+                        Text("·").foregroundColor(BrandDark.mute)
+                        Button("Forgot password?") { showError = false; codeSheet = .reset }
+                            .foregroundColor(BrandDark.mute)
+                    }
+                    .font(BrandFont.body(14, .semibold))
+                    .padding(.top, 2)
                 }
                 .padding(.horizontal, 32)
                 // iPad (Oct 9, 2026): the fields and button sit in a centred column, not edge to edge.
                 .frame(maxWidth: 440)
+                .opacity(shown ? 1 : 0)
+                .offset(y: shown ? 0 : 18)
 
                 Spacer()
 
@@ -104,19 +100,40 @@ struct LoginView: View {
                 } label: {
                     Text("Demo Mode")
                         .font(BrandFont.body(12, .semibold))
-                        .foregroundColor(BrandDark.volt)
+                        .foregroundColor(accent)
                         .padding(.horizontal, 16).padding(.vertical, 7)
-                        .overlay(Capsule().stroke(BrandDark.volt.opacity(0.35), lineWidth: 1))
+                        .overlay(Capsule().stroke(accent.opacity(0.35), lineWidth: 1))
                 }
                 .padding(.bottom, 14)
+                .opacity(shown ? 1 : 0)
 
                 Text("LGBTQ+ owned · Since 2024")
                     .font(BrandFont.body(11, .semibold))
                     .tracking(2).foregroundColor(BrandDark.mute)
                     .padding(.bottom, 20)
+                    .opacity(shown ? 1 : 0)
             }
         }
+        .onDisappear { dock.loginUp = false }
         .tapToDismissKeyboard()
+        .sheet(item: $mfa) { ch in
+            MfaCodeSheet(challenge: ch) { resp in
+                finishLogin(resp, email: email, viaCode: false)
+            }
+        }
+        .sheet(item: $codeSheet) { mode in
+            EmailCodeSheet(mode: mode, startEmail: email) { resp, signedInEmail in
+                email = signedInEmail
+                finishLogin(resp, email: signedInEmail, viaCode: true)
+            }
+        }
+    }
+
+    /// Everything after the server says yes — shared by the password login and the
+    /// emailed-code sheet, so both land in exactly the same state.
+    @MainActor
+    private func finishLogin(_ resp: LoginResponse, email: String, viaCode: Bool) {
+        LoginFinish.apply(resp, email: email, viaCode: viaCode, store: store)   // AccountSetupLink.swift
     }
 
     @ViewBuilder
@@ -292,12 +309,14 @@ private struct GoldSlideToEnter: View {
     @State private var lastQuarter = 0
     @State private var entered = false
 
+    // Soft gold (Oct 11, 2026): each of the QUEENS-outline stops (8A6A1E · E0A83C · FFF3B0) taken 45% of
+    // the way from a mid gold (C8973A) — a lot less contrast, so the sparkles carry the shine.
     private static let gold: [Gradient.Stop] = [
-        .init(color: Color(hex: 0x8A6A1E), location: 0),
-        .init(color: Color(hex: 0xE0A83C), location: 0.28),
-        .init(color: Color(hex: 0xFFF3B0), location: 0.5),
-        .init(color: Color(hex: 0xE0A83C), location: 0.72),
-        .init(color: Color(hex: 0x8A6A1E), location: 1)
+        .init(color: Color(hex: 0xAC832D), location: 0),
+        .init(color: Color(hex: 0xD39F3B), location: 0.28),
+        .init(color: Color(hex: 0xE1C06F), location: 0.5),
+        .init(color: Color(hex: 0xD39F3B), location: 0.72),
+        .init(color: Color(hex: 0xAC832D), location: 1)
     ]
     private let height: CGFloat = 66
     private let knob: CGFloat = 54
@@ -311,6 +330,7 @@ private struct GoldSlideToEnter: View {
                 Capsule()
                     .fill(LinearGradient(stops: Self.gold, startPoint: .topLeading, endPoint: .bottomTrailing))
                 GoldSheen(motion: motion, width: geo.size.width, height: height)
+                CartoonSparkles(motion: motion)          // under ENTER and the knob
                 Text("ENTER")
                     .font(BrandFont.welcome(19))
                     .tracking(6)
@@ -333,7 +353,7 @@ private struct GoldSlideToEnter: View {
             .frame(width: geo.size.width, height: height)
             .clipShape(Capsule())
             .overlay(Capsule().strokeBorder(Color(hex: 0x8A6A1E).opacity(light ? 0.35 : 0), lineWidth: 1))
-            .shadow(color: light ? Color(hex: 0x8A6A1E).opacity(0.28) : Color(hex: 0xE0A83C).opacity(0.32),
+            .shadow(color: light ? Color(hex: 0x8A6A1E).opacity(0.19) : Color(hex: 0xE0A83C).opacity(0.21),
                     radius: light ? 11 : 13, y: 8)
             .contentShape(Capsule())
             .onTapGesture { nudge() }
@@ -384,7 +404,7 @@ private struct GoldSlideToEnter: View {
     }
 }
 
-/// The sheen band across the gold: the only part of the slider that watches the tilt.
+/// The sheen band across the gold (dimmed to 45% with the soft gold, Oct 11, 2026).
 private struct GoldSheen: View {
     @ObservedObject var motion: MotionManager
     let width: CGFloat
@@ -392,13 +412,170 @@ private struct GoldSheen: View {
 
     var body: some View {
         let tilt = (motion.roll + motion.wave * 0.6) / 1.6          // about -1…1
-        LinearGradient(colors: [Color(hex: 0xFFFDE8).opacity(0), Color(hex: 0xFFFDE8).opacity(0.95), Color(hex: 0xFFFDE8).opacity(0)],
+        LinearGradient(colors: [Color(hex: 0xFFFDE8).opacity(0), Color(hex: 0xFFFDE8).opacity(0.43), Color(hex: 0xFFFDE8).opacity(0)],
                        startPoint: .leading, endPoint: .trailing)
             .frame(width: 70, height: height * 1.4)
             .rotationEffect(.degrees(18))
             .offset(x: width * (0.5 + 0.42 * tilt) - 35)
             .blendMode(.screen)
             .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Cartoon sparkles on the gold bar (Oct 11, 2026)
+// Flat cream four-point stars with a chunky ink outline (a few rounded pluses, some with a tiny buddy
+// star or a dot). Each pops in with a squash and a bounce, wobbles, then spins out. A new one goes in
+// the spot furthest from the others, so they stay spread along the whole bar, up to 9 at a time.
+// They only slide when you tilt the phone (no idle sway), at twice the rate of the gold's sheen,
+// wrapping round the ends. Off with Reduce Motion.
+private struct CartoonSparkles: View {
+    let motion: MotionManager                 // read each frame, never observed
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var field = SparkleField()
+
+    var body: some View {
+        if !reduceMotion {
+            TimelineView(.animation) { timeline in
+                Canvas { ctx, size in
+                    let now = timeline.date.timeIntervalSinceReferenceDate
+                    // GoldSheen travels width × 0.42 per unit of tilt; the sparkles go 2× that, tilt only.
+                    let offset = size.width * 0.42 * SparkleField.speed * CGFloat(motion.roll / 1.6)
+                    field.step(now: now, size: size)
+                    field.draw(&ctx, now: now, size: size, offset: offset)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+private final class SparkleField {
+    static let count = 9                       // "More"
+    static let speed: CGFloat = 2              // × the gold sheen's rate
+
+    private struct Spark {
+        var u: CGFloat, v: CGFloat             // 0…1 along and across the lane
+        var born: Double, life: Double
+        var r: CGFloat, rot: Double, seed: Double
+        var plus: Bool, buddy: Bool, dot: Bool
+    }
+    private var list: [Spark] = []
+    private var nextAt = 0.0
+
+    private static let ink = Color(hex: 0x3A2906)
+    private static let cream = Color(hex: 0xFFF6D0)
+    private static let paper = Color(hex: 0xFFFDF2)
+
+    private func lane(_ size: CGSize) -> CGRect {
+        CGRect(x: 10, y: 14, width: max(1, size.width - 20), height: max(1, size.height - 28))
+    }
+
+    func step(now: Double, size: CGSize) {
+        list.removeAll { now - $0.born >= $0.life }
+        guard list.count < Self.count, now >= nextAt else { return }
+        nextAt = now + Double.random(in: 0.12...0.32)
+        let l = lane(size)
+        // Best of 14 candidates: the one furthest from every sparkle already up.
+        var best: (CGFloat, CGFloat)? = nil
+        var bestD: CGFloat = -1
+        for _ in 0..<14 {
+            let u = CGFloat.random(in: 0..<1), v = CGFloat.random(in: 0...1)
+            var d = CGFloat.infinity
+            for p in list {
+                let du = min(abs(u - p.u), 1 - abs(u - p.u)) * l.width, dv = (v - p.v) * l.height
+                d = min(d, (du * du + dv * dv).squareRoot())
+            }
+            if d > bestD { bestD = d; best = (u, v) }
+        }
+        guard let b = best, bestD > l.width / (CGFloat(Self.count) * 1.5) else { return }
+        let big = Double.random(in: 0..<1) < 0.7
+        list.append(Spark(u: b.0, v: b.1, born: now, life: .random(in: 1.4...2.2),
+                          r: big ? .random(in: 8.5...12) : .random(in: 5.5...7),
+                          rot: .random(in: -0.35...0.35), seed: .random(in: 0...6),
+                          plus: Double.random(in: 0..<1) < 0.2,
+                          buddy: big && Double.random(in: 0..<1) < 0.35,
+                          dot: Double.random(in: 0..<1) < 0.3))
+    }
+
+    func draw(_ ctx: inout GraphicsContext, now: Double, size: CGSize, offset: CGFloat) {
+        let l = lane(size)
+        for p in list {
+            var px = (p.u * l.width + offset).truncatingRemainder(dividingBy: l.width)
+            if px < 0 { px += l.width }
+            let edge = min(1, px / 14, (l.width - px) / 14)          // fade at the ends, where they wrap
+            guard edge > 0 else { continue }
+            let t = (now - p.born) / p.life
+            // Pop in with a squash, hold with a wobble, spin out.
+            var sc: Double, rot = p.rot, sqX = 1.0, sqY = 1.0
+            if t < 0.22 {
+                let u = t / 0.22
+                sc = 1 + 2.6 * pow(u - 1, 3) + 1.6 * pow(u - 1, 2)
+                sqX = 1 + 0.25 * sin(u * .pi); sqY = 1 - 0.2 * sin(u * .pi)
+            } else if t < 0.72 {
+                sc = 1 + 0.06 * sin((t - 0.22) * 26)
+                rot += 0.14 * sin(now * 5 + p.seed)
+            } else {
+                let u = (t - 0.72) / 0.28
+                sc = 1 - u * u; rot += u * 1.2
+            }
+            guard sc > 0.02 else { continue }
+            var c = ctx
+            c.opacity = Double(edge)
+            c.translateBy(x: l.minX + px, y: l.minY + p.v * l.height)
+            c.rotate(by: .radians(rot))
+            c.scaleBy(x: CGFloat(sc * sqX), y: CGFloat(sc * sqY))
+            let r = p.r
+            if p.plus {
+                let path = Self.plusPath(r * 0.8)
+                c.stroke(path, with: .color(Self.ink), style: Self.inkStyle(r * 0.8))
+                c.fill(path, with: .color(Self.paper))
+            } else {
+                let body = Self.starPath(r, fat: 0.22)
+                c.stroke(body, with: .color(Self.ink), style: Self.inkStyle(r))
+                c.fill(body, with: .color(Self.cream))
+                c.fill(Self.starPath(r * 0.55, fat: 0.22), with: .color(.white))          // inner shine
+                var h = c                                                              // highlight
+                h.translateBy(x: -r * 0.18, y: -r * 0.38); h.rotate(by: .radians(-0.5))
+                h.fill(Path(ellipseIn: CGRect(x: -r * 0.1, y: -r * 0.17, width: r * 0.2, height: r * 0.34)), with: .color(.white))
+                if p.buddy {                                                           // a little companion
+                    var b = c
+                    b.translateBy(x: r * 1.05, y: -r * 0.9); b.rotate(by: .radians(0.3))
+                    let small = Self.starPath(r * 0.38, fat: 0.24)
+                    b.stroke(small, with: .color(Self.ink), style: Self.inkStyle(r * 0.38))
+                    b.fill(small, with: .color(Self.paper))
+                }
+                if p.dot {
+                    let dot = Path(ellipseIn: CGRect(x: -r * 1.35 - r * 0.16, y: r * 0.95 - r * 0.16, width: r * 0.32, height: r * 0.32))
+                    c.stroke(dot, with: .color(Self.ink), style: Self.inkStyle(r * 0.5))
+                    c.fill(dot, with: .color(Self.paper))
+                }
+            }
+        }
+    }
+
+    private static func inkStyle(_ r: CGFloat) -> StrokeStyle { StrokeStyle(lineWidth: max(1.6, r * 0.2), lineJoin: .round) }
+
+    /// A fat four-point star: tips at ±r, sides curving in toward the middle.
+    private static func starPath(_ r: CGFloat, fat: CGFloat) -> Path {
+        let k = r * fat
+        var p = Path()
+        p.move(to: CGPoint(x: 0, y: -r))
+        p.addQuadCurve(to: CGPoint(x: r, y: 0), control: CGPoint(x: k, y: -k))
+        p.addQuadCurve(to: CGPoint(x: 0, y: r), control: CGPoint(x: k, y: k))
+        p.addQuadCurve(to: CGPoint(x: -r, y: 0), control: CGPoint(x: -k, y: k))
+        p.addQuadCurve(to: CGPoint(x: 0, y: -r), control: CGPoint(x: -k, y: -k))
+        p.closeSubpath()
+        return p
+    }
+
+    /// A rounded plus sign.
+    private static func plusPath(_ r: CGFloat) -> Path {
+        let t = r * 0.42
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: -t / 2, y: -r, width: t, height: r * 2), cornerSize: CGSize(width: t / 2, height: t / 2))
+        p.addRoundedRect(in: CGRect(x: -r, y: -t / 2, width: r * 2, height: t), cornerSize: CGSize(width: t / 2, height: t / 2))
+        return p
     }
 }
 

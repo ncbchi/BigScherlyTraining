@@ -47,13 +47,20 @@ struct PadCheckInsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PadPageTop(title: "Check-ins", subtitle: subtitle) {
-                HStack(spacing: 14) {
-                    PadLab("With a keyboard:", color: Pad.faint)
-                    key("⌃J", "next"); key("⌃K", "previous"); key("⌘↵", "reply and next")
+            PadPageTop(title: "Check-ins", subtitle: subtitle, facts: barFacts) {
+                Menu {
+                    Section("With a keyboard") {
+                        Text("⌃J  next")
+                        Text("⌃K  previous")
+                        Text("⌘↵  reply and next")
+                    }
+                } label: {
+                    Image(systemName: "command").font(.system(size: 15, weight: .semibold)).foregroundColor(Pad.text)
+                        .frame(width: 44, height: 44)
+                        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Pad.line2, lineWidth: 1))
                 }
+                .accessibilityLabel("Keyboard shortcuts")
             }
-            PadRule()
             HStack(spacing: 0) {
                 queue.frame(width: 248)
                 Rectangle().fill(Pad.line).frame(width: 1)
@@ -96,6 +103,27 @@ struct PadCheckInsView: View {
 
     private func consumeNav() {
         if let id = nav.checkInId { selectedId = id; nav.checkInId = nil }
+    }
+
+    /// The bar's status line (canvas row 3.1.7): each fact jumps to that check-in.
+    private var barFacts: [PadFact] {
+        var f: [PadFact] = []
+        let w: [Entry] = waiting
+        if let o = w.first {
+            let oid: String = o.id
+            let old: Bool = Date().timeIntervalSince(o.checkIn.date) > 36 * 3600
+            f.append(PadFact(bold: "\(w.count)", tail: " to review"))
+            f.append(PadFact(lead: "oldest ", bold: o.clientName.firstName, tail: ", " + o.checkIn.date.padAgo, warn: old, run: { selectedId = oid }))
+        } else {
+            f.append(PadFact(bold: "Nothing waiting"))
+        }
+        let flagged: [Entry] = w.filter { PadCheckInReview.flaggedLine($0.checkIn) != nil }
+        if let fl = flagged.first {
+            let fid: String = fl.id
+            f.append(PadFact(bold: "\(flagged.count)", tail: " flagged", warn: true, run: { selectedId = fid }))
+        }
+        f.append(PadFact(bold: "\(answered.count)", tail: " answered this week"))
+        return f
     }
 
     private var subtitle: String {
@@ -547,7 +575,7 @@ struct PadReplyPane: View {
         }
     }
 
-    private func use(_ r: String) { text = text.isEmpty ? r : text + " " + r; focused = true }
+    private func use(_ r: String) { text = text.isEmpty ? r : text + " " + r; focused = true; PadReplyUses.used(r) }
 
     private var savedReplyRow: some View {
         HStack(spacing: 8) {

@@ -41,16 +41,15 @@ struct PadTodayView: View {
 
     var body: some View {
         let facts = PadRosterFacts.all(store)
-        return ScrollView {
+        return VStack(spacing: 0) {
+                    PadPageTop(title: Date().formatted(.dateTime.weekday(.wide).month(.wide).day()), subtitle: summary, facts: barFacts, notes: notes(facts)) {
+                        Button { PadLiveLink.shared.open() } label: { Label("Live", systemImage: "dot.radiowaves.left.and.right") }
+                            .buttonStyle(PadButtonStyle(kind: .outline))
+                        PadIconButton(systemName: "megaphone", label: "Message everyone") { broadcast() }
+                        Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
+                    }
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                PadPageTop(title: Date().formatted(.dateTime.weekday(.wide).month(.wide).day()), subtitle: summary) {
-                    Button { PadLiveLink.shared.open() } label: { Label("Live", systemImage: "dot.radiowaves.left.and.right") }
-                        .buttonStyle(PadButtonStyle(kind: .outline))
-                    Button("Message everyone") { broadcast() }.buttonStyle(PadButtonStyle(kind: .outline))
-                    Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
-                }
-                PadPageStrip(stats: strip, notes: notes(facts))
-                PadRule()
                 if sideBySide {
                     HStack(alignment: .top, spacing: 16) {
                         dayPanel.frame(width: 470)
@@ -66,6 +65,7 @@ struct PadTodayView: View {
                         .padding(20)
                 }
             }
+        }
         }
         .background(Pad.page.ignoresSafeArea())
         .refreshable { store.loadRoster(); await data.refresh(roster: store.roster) }
@@ -503,6 +503,21 @@ struct PadTodayView: View {
     }
 
     // MARK: Headline strip and noticing
+
+    /// The bar's status line (canvas row 3.1.7): today, who's lifting, what needs you, then the week.
+    private var barFacts: [PadFact] {
+        let today = todaySessions
+        let live = today.filter { $0.isLive }
+        let need: Int = needsRows.count
+        var f: [PadFact] = [PadFact(bold: "\(today.count)", tail: today.count == 1 ? " session" : " sessions")]
+        if let s = live.first {
+            let cid: String = s.clientId
+            f.append(PadFact(bold: "\(live.count)", tail: " lifting now", run: { PadLiveLink.shared.open(follow: cid) }))
+        }
+        if need > 0 { f.append(PadFact(bold: "\(need)", tail: need == 1 ? " needs you" : " need you", warn: true)) }
+        f += PadFact.from(Array(strip.suffix(2)))
+        return f
+    }
 
     private var strip: [PadStat] {
         let today = todaySessions
