@@ -74,26 +74,29 @@ struct PhotoFill: View {
     var url: URL? = nil
 
     var body: some View {
-        ZStack {
-            Brand.black
-            if let local {
-                Image(uiImage: local).resizable().scaledToFill()
-            } else {
-                AuthedAsyncImage(url: url ?? APIClient.shared.photoURL(photo.id)) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: { failed in
-                    VStack(spacing: 6) {
-                        if failed {
-                            Image(systemName: "photo").font(.system(size: 26)).foregroundColor(Brand.mute)
-                            Text(photo.category.uppercased()).font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
-                        } else {
-                            ProgressView().tint(Brand.volt)
+        // The frame is whatever it's given; the photo fills it as an overlay and is cropped.
+        // (It used to be a ZStack, which grew to the photo's own shape: a wide screenshot
+        // made its tile wider than its grid column, over the photo beside it.)
+        Brand.black
+            .overlay {
+                if let local {
+                    Image(uiImage: local).resizable().scaledToFill()
+                } else {
+                    AuthedAsyncImage(url: url ?? APIClient.shared.photoURL(photo.id)) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: { failed in
+                        VStack(spacing: 6) {
+                            if failed {
+                                Image(systemName: "photo").font(.system(size: 26)).foregroundColor(Brand.mute)
+                                Text(photo.category.uppercased()).font(BrandFont.body(10, .bold)).tracking(1).foregroundColor(Brand.mute)
+                            } else {
+                                ProgressView().tint(Brand.volt)
+                            }
                         }
                     }
                 }
             }
-        }
-        .clipped()
+            .clipped()
     }
 }
 
@@ -151,7 +154,9 @@ struct PhotoCompareCard: View {
                         .buttonStyle(.plain)
                     }
                 }
-                if let comment = a.trainerComment ?? b.trainerComment {
+                // An empty comment from the server isn't a comment (it showed as Coach: “”).
+                if let comment = [a.trainerComment, b.trainerComment].compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .first(where: { !$0.isEmpty }) {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "bubble.left.fill").font(.system(size: 12)).foregroundColor(Brand.voltText).padding(.top, 2)
                         Text("Coach: “\(comment)”").font(BrandFont.body(12, .semibold)).foregroundColor(Brand.text)

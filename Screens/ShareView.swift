@@ -222,6 +222,11 @@ struct ShareView: View {
         .onAppear {
             refreshModels()
             Task { await SharePackImages.prewarm() }
+            // From Photos ▸ hold ▸ Make a share card: that photo is the card's photo.
+            if let handed = store.photoForShareCard {
+                chosenImage = handed
+                store.photoForShareCard = nil
+            }
             // Share opens on the live camera, with every tool already over it.
             if chosenImage == nil && !cameraLive { openCamera() }
         }

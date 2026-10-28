@@ -15,10 +15,28 @@ enum AwardEngine {
     static func evaluate(workouts: [Workout],
                          supplements: [Supplement],
                          supplementLogs: [SupplementLog],
-                         personalRecords: [PersonalRecord]) -> [Award] {
+                         personalRecords: [PersonalRecord],
+                         checkIns: [CheckIn] = [],
+                         wiredUpAt: Date? = nil) -> [Award] {
         var out: [Award] = []
         let cal = Calendar.training
         let done = workouts.filter { $0.completed }.sorted { $0.date < $1.date }
+
+        // ---- First wins (Oct 26, 2026) ----
+        if let first = done.first {
+            out.append(Award(kind: .firstSession, earnedAt: first.date,
+                             stats: [AwardStat(value: "1", label: "SESSION"),
+                                     AwardStat(value: "\(first.exercises.count)", label: "EXERCISES")]))
+        }
+        if let ci = checkIns.filter({ $0.status != .draft }).min(by: { $0.date < $1.date }) {
+            out.append(Award(kind: .checkedIn, earnedAt: ci.date,
+                             stats: [AwardStat(value: "1", label: "CHECK-IN")]))
+        }
+        if let at = wiredUpAt {
+            out.append(Award(kind: .wiredUp, earnedAt: at,
+                             stats: [AwardStat(value: "✓", label: "WATCH"),
+                                     AwardStat(value: "✓", label: "HEALTH")]))
+        }
 
         // ---- Volume milestones ----
         let counts: [(AwardKind, Int)] = [

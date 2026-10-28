@@ -25,10 +25,14 @@ nonisolated struct MotionSample: Sendable {
     var h1: Double        // horizontal acceleration, m/s², axis 1
     var h2: Double        // horizontal acceleration, m/s², axis 2
     var rot: Double       // rotation rate magnitude, rad/s
+    // Everything else CoreMotion's fusion gives (2026-10-15): the Watch's attitude and how it's
+    // turning — unused by the counter so far, recorded so the next analyses can use them.
+    var gx: Double = 0, gy: Double = 0, gz: Double = 0      // gravity direction in the Watch's frame (unit)
+    var rx: Double = 0, ry: Double = 0, rz: Double = 0      // rotation rate about the Watch's axes, rad/s
 }
 
 nonisolated enum RepAnalyzer {
-    static let version = 6          // 2: true sign of vertical acceleration (1 had it upside down)
+    static let version = 7          // 2: true sign of vertical acceleration (1 had it upside down)
                                     // 3: lift order (press/deadlift pair with the lowering after), pauses
                                     //    measured from where you actually stop, not where the phase ends
                                     // 4: a press/deadlift rep counts only once it's back down
@@ -36,6 +40,10 @@ nonisolated enum RepAnalyzer {
                                     // 6: drift taken out per cycle when there's no still moment (half reps,
                                     //    a fast set straight out of a rest); a lift with a lot of wrist
                                     //    turning (hand to the head, a flick) isn't a rep — per lift
+                                    // 7: a real stop resets velocity even when the integral says otherwise:
+                                    //    after one violent move (a drop, a hard bounce, racking) the "slowed
+                                    //    down" test failed at every later stop and the rest of the set rode
+                                    //    on a stale offset (slow reps vanished; seen live 2026-10-15)
     static let sampleRate = 100.0
 
     /// Which way a rep goes first. Squats and bench lower first, then lift; a press or a deadlift
@@ -105,7 +113,11 @@ nonisolated enum RepAnalyzer {
             if ri < runs.count && i == runs[ri].0 {
                 let (rs, re) = runs[ri]
                 ri += 1
-                if abs(vint) < max(0.07, 0.25 * peak) {
+                let run = Double(re - rs) / fs
+                // v7: a stop is a stop — a big leftover velocity through 0.4 s of stillness is stale,
+                // and 1.5 s of stillness is a stop whatever the sums say. (A short quiet patch with a
+                // small velocity could still be a slow lowering, so that one keeps the old test.)
+                if abs(vint) < max(0.07, 0.25 * peak) || (run >= 0.4 && abs(vint) >= 0.5) || run >= 1.5 {
                     let L = rs - segStart
                     if L > 0 {
                         for (m, k) in (segStart..<rs).enumerated() {

@@ -5,7 +5,7 @@ import SwiftUI
 // Phone side of programs: the library, a program's full plan, assigning it to a client
 // (or yourself) from a start date, who's running what, and the automatic changes the
 // progression engine made — each with Undo. Building and editing programs lives in
-// Coach HQ on the web (desktop has the room for blocks × days × sets).
+// Coach HQ on the web and on the iPad (Oct 15, 2026: PadProgramEditor), where blocks × days × sets fit.
 // Synchronized folder: no target step needed.
 
 // MARK: API models
@@ -145,7 +145,7 @@ struct CoachProgramsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 DSScreenHeader(eyebrow: "Plan the work", title: "Programs",
-                               subtitle: "Assign one and it fills the calendar; progression runs itself. Build and edit programs in Coach HQ on the web.")
+                               subtitle: "Assign one and it fills the calendar; progression runs itself. Build and edit programs on the iPad or in Coach HQ on the web.")
 
                 if loading && programs.isEmpty {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity).padding(.top, 20)
@@ -162,7 +162,7 @@ struct CoachProgramsView: View {
                         }
                     }
                 } else if !loading {
-                    Text("No programs yet — build your first in Coach HQ on the web.")
+                    Text("No programs yet. Build your first on the iPad or in Coach HQ on the web.")
                         .font(BrandFont.body(14)).foregroundColor(Brand.mute)
                 }
 
@@ -250,7 +250,7 @@ struct CoachProgramDetailView: View {
                 } else {
                     ProgressView().tint(Brand.volt).frame(maxWidth: .infinity)
                 }
-                Text("Edit this program in Coach HQ on the web. Edits apply to new assignments; anyone running it keeps their copy.")
+                Text("Edit this program on the iPad or in Coach HQ on the web. Edits apply to new assignments; anyone running it keeps their copy.")
                     .font(BrandFont.body(11)).foregroundColor(Brand.mute)
             }
             .padding(20)
@@ -497,7 +497,7 @@ struct ClientProgramCard: View {
                 Spacer()
                 Menu {
                     ForEach(programs) { p in Button(p.name) { assignFor = p } }
-                    if programs.isEmpty { Text("Build programs in Coach HQ on the web") }
+                    if programs.isEmpty { Text("Build programs on the iPad or in Coach HQ") }
                 } label: {
                     Text(current == nil ? "Assign a program" : "Switch").font(BrandFont.body(12, .bold)).foregroundColor(Brand.voltText)
                 }

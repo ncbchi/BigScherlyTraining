@@ -17,20 +17,38 @@ struct DashboardView: View {
     @State private var showMonth = false
     @State private var showActivity = false
     @State private var openDoneGroups: Set<String> = []
+    @ObservedObject private var tour = QuickStartTour.shared       // quick start tour: scrolls its target into view
+    @ObservedObject private var base = BaselineStore.shared          // new user Home (Oct 26, 2026): starting point, coach welcome
+    @ObservedObject private var startHere = StartHereState.shared
+    @ObservedObject private var live = LiveSessionController.shared  // saved-for-later workouts (Oct 27, 2026)
 
     private let cal = Calendar.training
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 greeting.staggeredAppear(0)
-                hero.staggeredAppear(1)
-                thisWeek.staggeredAppear(2)
-                dosesCard.staggeredAppear(3)
+                // New user Home (Oct 26, 2026): the day-one cards each retire on their own (NewUserHome.swift).
+                if DayOne.showsCoachWelcome(store) { CoachWelcomeCard().staggeredAppear(1) }
+                hero.tourTarget("home.hero").id("home.hero").staggeredAppear(1)
+                if startHere.shows(store) { StartHereCard().staggeredAppear(2) }
+                thisWeek.tourTarget("home.week").id("home.week").staggeredAppear(2)
+                dosesCard.tourTarget("home.doses").id("home.doses").staggeredAppear(3)
+                if DayOne.showsStartingPoint(store) { StartingPointCard().staggeredAppear(4) }
+                if DayOne.showsFirstWins(store) { FirstWinsCard().staggeredAppear(4) }
                 coachCard.staggeredAppear(4)
                 prCard.staggeredAppear(5)
+                if DayOne.showsExample(store) { ExampleNumbersCard().staggeredAppear(5) }
             }
-            .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
+            .padding(.top, 52).padding(.horizontal, 20)
+            // The quick start card sits over the bottom of Home: leave room so nothing (Start here) hides under it.
+            .padding(.bottom, tour.showsCard && !store.isTrainer && store.isLive ? 250 : 30)
+        }
+        .onChange(of: tour.homeScroll) { _, s in
+            guard let s else { return }
+            withAnimation(QuickStartTour.glide) { proxy.scrollTo(s.id, anchor: .center) }
+        }
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
@@ -47,6 +65,36 @@ struct DashboardView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showActivity) { ActivityLogSheet(day: renderDay) }
+        .sheet(isPresented: $startHere.showStartingPoint) {
+            StartingPointSheet().environmentObject(store).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $startHere.showCheckIn) { NewCheckInForm().environmentObject(store) }
+        .sheet(isPresented: $startHere.showList) {
+            StartHereList().environmentObject(store)
+                .padding(20).padding(.top, 8)
+                .background(Brand.bg.ignoresSafeArea())
+                .sheetFitsContent()
+                .presentationDragIndicator(.visible)
+        }
+        .onAppear { dayOneRefresh() }
+        .onChange(of: base.loaded) { _, _ in dayOneRefresh() }
+        .onChange(of: startHere.showCheckIn) { _, open in
+            if !open { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { firstWinsCheck() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in dayOneRefresh() }
+    }
+
+    /// Start here's Watch and Health rows (nothing to observe), Wired Up, and a first check-in's award.
+    private func dayOneRefresh() {
+        guard DayOne.eligible(store) else { return }
+        startHere.refresh(store)
+        firstWinsCheck()
+    }
+
+    private func firstWinsCheck() {
+        guard DayOne.eligible(store), store.activeTab == .dashboard else { return }
+        let kinds = Set(store.awards.map { $0.kind })
+        if !store.checkIns.isEmpty && !kinds.contains(.checkedIn) { store.refreshAwards() }
     }
 
     // MARK: Greeting
@@ -55,10 +103,11 @@ struct DashboardView: View {
         let h = cal.component(.hour, from: Date())
         let part = h < 12 ? "GOOD MORNING" : (h < 17 ? "GOOD AFTERNOON" : "GOOD EVENING")
         let first = store.client.name.split(separator: " ").first.map(String.init) ?? store.client.name
+        let welcome = DayOne.showsWelcomeGreeting(store)     // until the first workout is done
         return VStack(alignment: .leading, spacing: 6) {
-            Eyebrow(text: part)
+            Eyebrow(text: welcome ? "WELCOME TO BIG SCHERLY" : part)
             Text(first).font(BrandFont.display(48)).foregroundColor(Brand.text).lineLimit(1).minimumScaleFactor(0.6)
-            Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
+            Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()) + (welcome ? " · Day \(DayOne.dayNumber(store))" : ""))
                 .font(BrandFont.body(14)).foregroundColor(Brand.mute)
         }
     }
@@ -66,7 +115,9 @@ struct DashboardView: View {
     // MARK: Hero — today's (or the next) workout
 
     private var heroWorkout: Workout? {
-        store.workouts.first { !$0.completed && cal.isDateInToday($0.date) } ?? store.upcomingWorkouts.first
+        // A workout saved for later (or paused) comes first: Resume workout (Oct 27, 2026).
+        if let w = store.workouts.first(where: { !$0.completed && live.pauses[$0.id] != nil && inProgress($0) }) { return w }
+        return store.workouts.first { !$0.completed && $0.skipped != true && cal.isDateInToday($0.date) } ?? store.upcomingWorkouts.first
     }
     private var doneToday: Workout? {
         store.workouts.first { $0.completed && cal.isDateInToday($0.date) }
@@ -77,21 +128,39 @@ struct DashboardView: View {
         if let w = heroWorkout {
             let isToday = cal.isDateInToday(w.date)
             let sets = w.exercises.reduce(0) { $0 + $1.sets.count }
+            let saved = live.pauses[w.id] != nil && inProgress(w)
+            let logged = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
+            let day = isToday ? "TODAY" : w.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased()
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text(isToday ? "TODAY" : "NEXT · \(w.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()).uppercased())")
+                    Text(saved ? "SAVED FOR LATER · \(day)" : (isToday ? "TODAY" : "NEXT · \(day)"))
                         .font(BrandFont.body(11, .heavy)).tracking(1.5).foregroundColor(Brand.onVolt)
                     Spacer()
-                    if WatchBridge.shared.isWatchReady {
+                    if saved {
+                        DSChip(text: "Paused", icon: "pause.fill", color: Brand.black)
+                    } else if DayOne.eligible(store) && !DayOne.anyCompleted(store) {
+                        DSChip(text: "First workout", color: Brand.black)
+                    } else if WatchBridge.shared.isWatchReady {
                         DSChip(text: "Watch ready", icon: "applewatch", color: Brand.black)
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text(w.title).font(BrandFont.display(34)).foregroundColor(Brand.onVolt)
                         .lineLimit(2).minimumScaleFactor(0.7)
-                    Text("\(w.exercises.count) exercise\(w.exercises.count == 1 ? "" : "s") · \(sets) sets · about \(estimatedMinutes(w)) min")
+                    Text(saved ? "\(logged) of \(sets) sets · \(minutesSoFar(w)) min so far"
+                         : "\(w.exercises.count) exercise\(w.exercises.count == 1 ? "" : "s") · \(sets) sets · about \(estimatedMinutes(w)) min")
                         .font(BrandFont.body(13, .semibold)).foregroundColor(Brand.onVolt.opacity(0.7))
                 }
+                if saved {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Brand.onVolt.opacity(0.12))
+                            Capsule().fill(Brand.onVolt).frame(width: g.size.width * CGFloat(logged) / CGFloat(max(1, sets)))
+                        }
+                    }
+                    .frame(height: 6)
+                    .accessibilityHidden(true)
+                } else {
                 VStack(spacing: 8) {
                     ForEach(w.exercises) { ex in
                         HStack(spacing: 8) {
@@ -111,17 +180,20 @@ struct DashboardView: View {
                 }
                 .padding(12)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Brand.onVolt.opacity(0.08)))
+                }
 
                 HStack(spacing: 10) {
                     Button {
+                        if saved { live.resumeOnOpen = w.id }     // straight back in, running
                         store.openSession(w.id)
                     } label: {
-                        Label(isToday ? (inProgress(w) ? "Resume workout" : "Start workout") : "Preview workout",
-                              systemImage: isToday ? "play.fill" : "eye.fill")
+                        Label(saved ? "Resume workout" : (isToday ? (inProgress(w) ? "Resume workout" : "Start workout") : "Preview workout"),
+                              systemImage: saved || isToday ? "play.fill" : "eye.fill")
                     }
                     .buttonStyle(DSButtonStyle(kind: .dark))
+                    .tourTarget("home.start")
 
-                    if isToday && WatchBridge.shared.isWatchReady {
+                    if isToday && !saved && WatchBridge.shared.isWatchReady {
                         Button {
                             store.activeWorkoutId = w.id
                             watchStarting = true
@@ -147,6 +219,8 @@ struct DashboardView: View {
                 Button("Open Stats") { store.select(.history) }.buttonStyle(DSButtonStyle(kind: .secondary))
             }
             .card(padding: 18)
+        } else if DayOne.showsGhostHero(store) {
+            GhostHeroCard()          // never had a workout: where the first one will land
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Nothing scheduled").font(BrandFont.display(28)).foregroundColor(Brand.text)
@@ -163,6 +237,15 @@ struct DashboardView: View {
 
     private func inProgress(_ w: Workout) -> Bool {
         w.exercises.contains { $0.sets.contains { $0.loggedReps != nil } }
+    }
+
+    /// A saved workout's time on the clock so far (paused time doesn't count).
+    private func minutesSoFar(_ w: Workout) -> Int {
+        switch live.clock(w) {
+        case .paused(let t): return Int(t / 60)
+        case .running(let since): return Int(Date().timeIntervalSince(since) / 60)
+        case .notStarted: return 0
+        }
     }
 
     /// Rough session length: ~45 s per set plus prescribed rest, rounded to 5 min.
@@ -203,6 +286,7 @@ struct DashboardView: View {
         let remaining = total - done.count
         let isThisWeek = cal.isSameTrainingWeek(Date(), selectedDay)
         let todayOpen = isThisWeek && inWeek.contains { !$0.completed && cal.isDateInToday($0.date) }
+        let openWeek = inWeek.isEmpty && DayOne.showsOpenWeek(store)     // new client, nothing planned yet
 
         let line: String = {
             if total == 0 { return "Nothing scheduled this week." }
@@ -216,13 +300,20 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 12) {
             DSSectionHeader(title: isThisWeek ? "THIS WEEK" : "WEEK OF",
                             subtitle: "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))")
-            Text(line).font(BrandFont.body(15, .semibold)).foregroundColor(Brand.text)
-                .fixedSize(horizontal: false, vertical: true)
+            if !openWeek {
+                Text(line).font(BrandFont.body(15, .semibold)).foregroundColor(Brand.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(spacing: 6) {
                 ForEach(Array(days.enumerated()), id: \.offset) { i, day in
-                    dayTile(i, day)
+                    dayTile(i, day, open: openWeek)
                 }
+            }
+            if openWeek {
+                Text("Your week fills in as your coach plans it. Dashed days are open.")
+                    .font(BrandFont.body(13)).foregroundColor(Brand.mute)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Button { showMonth = true } label: {
@@ -253,8 +344,9 @@ struct DashboardView: View {
         .card(padding: 16)
     }
 
-    private func dayTile(_ i: Int, _ day: Date) -> some View {
+    private func dayTile(_ i: Int, _ day: Date, open: Bool = false) -> some View {
         let w = workout(on: day)
+        let dashed = open && w == nil
         let trained = w?.completed ?? false
         let planned = w != nil && !trained
         let on = cal.isDate(day, inSameDayAs: selectedDay)
@@ -270,7 +362,7 @@ struct DashboardView: View {
                             .foregroundColor(on ? Brand.onVolt : Brand.volt)
                     } else if planned {
                         Circle().fill(on ? Brand.onVolt : Brand.volt).frame(width: 6, height: 6)
-                    } else {
+                    } else if !dashed {
                         Circle().stroke(on ? Brand.onVolt : Brand.mute, lineWidth: 1).frame(width: 6, height: 6).opacity(0.7)
                     }
                 }
@@ -279,10 +371,13 @@ struct DashboardView: View {
             .foregroundColor(on ? Brand.onVolt : (w == nil ? Brand.mute : Brand.text))
             .frame(maxWidth: .infinity).frame(height: 68)
             .background(RoundedRectangle(cornerRadius: 12).fill(on ? Brand.volt : Brand.black))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? Brand.voltLine : Brand.line, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? Brand.voltLine : Brand.line, lineWidth: 1).opacity(dashed && !on ? 0 : 1))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color(hex: 0x8E8E93), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+                .opacity(dashed && !on ? 1 : 0))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(day.formatted(date: .complete, time: .omitted))\(trained ? ", workout done" : (planned ? ", workout planned" : ", rest day"))")
+        .accessibilityLabel("\(day.formatted(date: .complete, time: .omitted))\(trained ? ", workout done" : (planned ? ", workout planned" : (dashed ? ", open" : ", rest day")))")
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
@@ -527,31 +622,48 @@ struct DashboardView: View {
             .sorted { ($0.unread > 0 ? 1 : 0, $0.lastActivity) > ($1.unread > 0 ? 1 : 0, $1.lastActivity) }
             .first
         if !store.isTrainer, let t = thread, let m = t.messages.last(where: { $0.fromTrainer }) {
+            coachMessage(topic: t.topic, text: m.text, at: m.timestamp, unread: unread, threadId: t.id)
+        } else if !store.isTrainer, store.isLive, let l = base.welcome?.latest {
+            // Live chats load without their messages (opening a thread marks it read), so the server's
+            // newest coach message stands in (server 2.7.3, GET /me/welcome).
+            coachMessage(topic: l.topic, text: l.kind == "voice" ? "Voice note" : l.text, at: l.at, unread: unread, threadId: l.threadId)
+        }
+    }
+
+    private func coachMessage(topic: String, text: String, at: Date, unread: Int, threadId: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            DSSectionHeader(title: "FROM YOUR COACH")
             VStack(alignment: .leading, spacing: 12) {
-                DSSectionHeader(title: "FROM YOUR COACH")
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 10) {
-                        Text("BS").font(BrandFont.display(18)).foregroundColor(Brand.onVolt)
-                            .frame(width: 40, height: 40).background(Circle().fill(Brand.volt))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Coach · \(t.topic)").font(BrandFont.body(13, .bold)).foregroundColor(Brand.text).lineLimit(1)
-                            Text(m.timestamp.formatted(.relative(presentation: .named)).capitalized)
-                                .font(BrandFont.body(11)).foregroundColor(Brand.mute)
-                        }
-                        Spacer()
-                        if unread > 0 { DSChip(text: "\(unread) new", color: Brand.volt, filled: true) }
+                HStack(spacing: 10) {
+                    Text("BS").font(BrandFont.display(18)).foregroundColor(Brand.onVolt)
+                        .frame(width: 40, height: 40).background(Circle().fill(Brand.volt))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Coach · \(topic)").font(BrandFont.body(13, .bold)).foregroundColor(Brand.text).lineLimit(1)
+                        Text(at.formatted(.relative(presentation: .named)).capitalized)
+                            .font(BrandFont.body(11)).foregroundColor(Brand.mute)
                     }
-                    Text("“\(m.text)”").font(BrandFont.body(14, .medium)).foregroundColor(Brand.text)
-                        .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 10) {
-                        Button { store.select(.chat) } label: { Label("Reply", systemImage: "bubble.left.fill") }
-                            .buttonStyle(DSButtonStyle(kind: .primary))
-                        Button { store.select(.chat) } label: { Label("Record video", systemImage: "video.fill") }
-                            .buttonStyle(DSButtonStyle(kind: .secondary))
-                    }
+                    Spacer()
+                    if unread > 0 { DSChip(text: "\(unread) new", color: Brand.volt, filled: true) }
                 }
-                .card(padding: 16)
+                Text("“\(text)”").font(BrandFont.body(14, .medium)).foregroundColor(Brand.text)
+                    .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button { openThread(threadId, video: false) } label: { Label("Reply", systemImage: "bubble.left.fill") }
+                        .buttonStyle(DSButtonStyle(kind: .primary))
+                    Button { openThread(threadId, video: true) } label: { Label("Record video", systemImage: "video.fill") }
+                        .buttonStyle(DSButtonStyle(kind: .secondary))
+                }
             }
+            .card(padding: 16)
+        }
+    }
+
+    /// Reply / Record video open that conversation (Chat used to open on its list).
+    private func openThread(_ id: String, video: Bool) {
+        if store.chats.contains(where: { $0.id == id }) {
+            ChatOpener.shared.open(id, video: video, store: store)
+        } else {
+            store.select(.chat)
         }
     }
 

@@ -45,10 +45,19 @@ struct WorkoutSessionView: View {
                             LiveLinkBanner()             // the coach's iPad: allow it, its cues, live status
                         }
                         // Phase 3: the live card — status bar over a full metric window.
+                        // Oct 27, 2026: opened to look → the look-first card; paused → the paused card.
                         VStack(spacing: 10) {
-                            LiveCard(workout: w) { editNext(w, proxy) }
-                            LiveSetCard(workout: w) { editNext(w, proxy) }      // next set · rest · lifting · log
+                            if live.isPaused(w.id) {
+                                PausedCard(workout: w) { saveForLater(w) }
+                            } else if !hasStarted(w) {
+                                LookFirstCard(workout: w)
+                                LiveSetCard(workout: w) { editNext(w, proxy) }
+                            } else {
+                                LiveCard(workout: w) { editNext(w, proxy) }
+                                LiveSetCard(workout: w) { editNext(w, proxy) }      // next set · rest · lifting · log
+                            }
                         }
+                        .animation(.spring(response: 0.42, dampingFraction: 0.85), value: live.isPaused(w.id))
                         .id("liveCard")
                         .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).maxY < 70 } action: { hidden in
                             withAnimation(.easeOut(duration: 0.2)) { cardHidden = hidden }
@@ -63,7 +72,7 @@ struct WorkoutSessionView: View {
                                 onLog: { st, reps, weight, rpe in log(w, ex, st, reps, weight, rpe) })
                         }
                         WorkoutNotesCard(workout: w)
-                        finishButton(w)
+                        if anyLogged(w) { finishButton(w) }      // nothing logged yet: ✕ at the top closes it
                     }
                     .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 30)
                 }
@@ -104,7 +113,12 @@ struct WorkoutSessionView: View {
                         .accessibilityLabel("Minimise workout")
                     }
                     ToolbarItem(placement: .principal) {
-                        Text("WORKOUT IN PROGRESS").font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.mute)
+                        Text(!hasStarted(w) && !anyLogged(w) ? "NOT STARTED" : (live.isPaused(w.id) ? "PAUSED" : "WORKOUT IN PROGRESS"))
+                            .font(BrandFont.body(11, .bold)).tracking(1.5).foregroundColor(Brand.mute)
+                    }
+                    // Oct 27, 2026: nothing logged → ✕ closes it untouched. Started → Pause (or Resume) and Finish.
+                    ToolbarItem(placement: hand == "left" ? .topBarTrailing : .topBarLeading) {
+                        sessionActions(w)
                     }
                 }
                 .toolbarBackground(Brand.bg, for: .navigationBar)
@@ -167,10 +181,13 @@ struct WorkoutSessionView: View {
         // surface isn't readable.
         .overlay {
             if confirmFinish, let w = workout {
+                let logged = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
                 FinishConfirmCard(
                     left: w.exercises.flatMap { $0.sets }.filter { $0.loggedReps == nil }.count,
+                    logged: logged,
                     keepGoing: { withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { confirmFinish = false } },
-                    finishAnyway: { confirmFinish = false; finish(w) })
+                    finishAnyway: { confirmFinish = false; finish(w) },
+                    saveForLater: logged > 0 ? { confirmFinish = false; saveForLater(w) } : nil)
                     .transition(.opacity.combined(with: .scale(scale: 0.94)))
             }
         }
@@ -182,7 +199,7 @@ struct WorkoutSessionView: View {
     private func titleRow(_ w: Workout) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(w.title).font(BrandFont.display(30)).foregroundColor(Brand.text).lineLimit(2).minimumScaleFactor(0.7)
-            if !live.watchConnected { watchRow }
+            if !live.watchConnected && hasStarted(w) && !live.isPaused(w.id) { watchRow }
         }
     }
 
@@ -278,10 +295,19 @@ struct WorkoutSessionView: View {
 
     private func finish(_ w: Workout) {
         live.end()                                   // closes the Lock Screen Live Activity
-        if let wi = store.workouts.firstIndex(where: { $0.id == w.id }),
-           !store.workouts[wi].exercises.flatMap({ $0.sets }).contains(where: { $0.loggedReps == nil }) {
-            store.workouts[wi].completed = true
-            store.refreshAwards()
+        live.clearPause(w.id)
+        if let wi = store.workouts.firstIndex(where: { $0.id == w.id }) {
+            let sets = store.workouts[wi].exercises.flatMap { $0.sets }
+            if !sets.contains(where: { $0.loggedReps == nil }) {
+                store.workouts[wi].completed = true
+                store.refreshAwards()
+            } else if sets.contains(where: { $0.loggedReps != nil }) {
+                // Finish anyway with sets left (Oct 23, 2026): it's done with what was logged — on the
+                // server too, so it doesn't come back as "In progress" after the next reload.
+                store.workouts[wi].completed = true
+                store.refreshAwards()
+                WorkoutActions.shared.syncDone(w.id)
+            }
         }
         store.activeWorkoutId = nil
         if let onClose { onClose() } else { dismiss() }
@@ -290,14 +316,73 @@ struct WorkoutSessionView: View {
     private func minimise() {
         if let onMinimize { onMinimize() } else { dismiss() }
     }
+
+    // MARK: Look first · Pause · Save for later (Oct 27, 2026)
+
+    private func anyLogged(_ w: Workout) -> Bool { w.exercises.contains { $0.sets.contains { $0.loggedReps != nil } } }
+
+    /// Something's running: a set logged, or Start set pressed (the live session left look-only).
+    private func hasStarted(_ w: Workout) -> Bool {
+        anyLogged(w) || (live.workoutId == w.id && !live.looking)
+    }
+
+    @ViewBuilder
+    private func sessionActions(_ w: Workout) -> some View {
+        if !anyLogged(w) {
+            Button { closeUnstarted(w) } label: {
+                Image(systemName: "xmark").font(.system(size: 15, weight: .bold)).foregroundColor(Brand.text)
+            }
+            .accessibilityLabel("Close without starting")
+        } else {
+            let paused = live.isPaused(w.id)
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) { paused ? live.resume() : live.pause() }
+                } label: {
+                    Image(systemName: paused ? "play.fill" : "pause.fill").font(.system(size: 14, weight: .bold)).foregroundColor(Brand.text)
+                        .frame(width: 30, height: 30).contentShape(Rectangle())
+                }
+                .accessibilityLabel(paused ? "Resume workout" : "Pause workout")
+                Button { requestFinish(w) } label: {
+                    Text("Finish").font(BrandFont.body(14, .heavy)).foregroundColor(Brand.onVolt)
+                        .padding(.horizontal, 14).frame(height: 30)
+                        .background(Capsule().fill(Brand.volt))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Finish workout")
+            }
+        }
+    }
+
+    private func requestFinish(_ w: Workout) {
+        let left = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps == nil }.count
+        if left == 0 { finish(w) } else { withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { confirmFinish = true } }
+    }
+
+    /// ✕: opened by mistake, nothing logged — closes untouched (anything Start set woke up closes too).
+    private func closeUnstarted(_ w: Workout) {
+        live.closeUnstarted(w.id)
+        store.activeWorkoutId = nil
+        if let onClose { onClose() } else { dismiss() }
+    }
+
+    /// Paused with every logged set kept, and closed. It waits on Home and the Workouts tab.
+    private func saveForLater(_ w: Workout) {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        live.saveForLater(w.id)                      // closes the floating card itself
+        if onClose == nil { dismiss() }
+    }
 }
 
 // MARK: - Finish confirmation (centred card)
 
 private struct FinishConfirmCard: View {
     let left: Int
+    var logged: Int = 0
     let keepGoing: () -> Void
     let finishAnyway: () -> Void
+    /// Oct 27, 2026: with sets logged, Save for later comes first.
+    var saveForLater: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
@@ -308,13 +393,31 @@ private struct FinishConfirmCard: View {
                 Text("\(left) set\(left == 1 ? " is" : "s are") still unlogged.")
                     .font(BrandFont.body(15)).foregroundColor(Brand.text.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button("Keep going") { keepGoing() }
-                        .buttonStyle(DSButtonStyle(kind: .secondary))
-                    Button("Finish anyway") { finishAnyway() }
-                        .buttonStyle(DSButtonStyle(kind: .primary))
+                if let saveForLater {
+                    VStack(spacing: 8) {
+                        Button { saveForLater() } label: { Label("Save for later", systemImage: "bookmark") }
+                            .buttonStyle(DSButtonStyle(kind: .primary))
+                        Button("Finish anyway") { finishAnyway() }
+                            .buttonStyle(DSButtonStyle(kind: .secondary))
+                        Button { keepGoing() } label: {
+                            Text("Keep going").font(BrandFont.body(15, .bold)).foregroundColor(Brand.mute)
+                                .frame(maxWidth: .infinity).frame(height: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 4)
+                    Text("Save for later keeps your \(logged) set\(logged == 1 ? "" : "s") and pauses it. Resume it from Home or Workouts.")
+                        .font(BrandFont.body(12)).foregroundColor(Brand.mute)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(spacing: 10) {
+                        Button("Keep going") { keepGoing() }
+                            .buttonStyle(DSButtonStyle(kind: .secondary))
+                        Button("Finish anyway") { finishAnyway() }
+                            .buttonStyle(DSButtonStyle(kind: .primary))
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1176,8 +1279,8 @@ struct LiveStatusBar: View {
         let _ = live.revision
         let all = workout.exercises.flatMap { $0.sets }
         HStack(spacing: 6) {
-            Circle().fill(live.watchConnected ? Brand.danger : Brand.mute.opacity(0.5)).frame(width: 7, height: 7)
-            Text(live.sessionStart(workout), style: .timer)
+            Circle().fill(live.watchConnected && !live.isPaused(workout.id) ? Brand.danger : Brand.mute.opacity(0.5)).frame(width: 7, height: 7)
+            SessionClockText(workout: workout)
                 .font(BrandFont.body(12, .heavy)).monospacedDigit().foregroundColor(Brand.text)
             Text("· \(all.filter { $0.loggedReps != nil }.count)/\(all.count) sets").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
             Spacer(minLength: 4)
@@ -1469,6 +1572,9 @@ extension AnyTransition {
 struct LiveCard: View {
     let workout: Workout
     var onEdit: () -> Void = {}
+    /// The quick start tour's practice workout (Oct 15, 2026): sample data in, nothing out. The
+    /// window count and metrics live in the tour, so your own bst_live_* settings are never written.
+    var demo: TourLiveDemo? = nil
 
     @EnvironmentObject var store: AppStore
     @ObservedObject private var live = LiveSessionController.shared
@@ -1487,6 +1593,7 @@ struct LiveCard: View {
 
     /// One metric per window, all different (a metric open in one window isn't offered in another).
     private var metrics: [LiveMetric] {
+        if let d = demo { return Array(d.metrics.prefix(Self.maxWindows)) }
         var m: [LiveMetric] = []
         for raw in metricsRaw.split(separator: ",") {
             if let x = LiveMetric(rawValue: String(raw)), !m.contains(x) { m.append(x) }
@@ -1494,11 +1601,15 @@ struct LiveCard: View {
         for x in LiveMetric.allCases where m.count < Self.maxWindows && !m.contains(x) { m.append(x) }
         return Array(m.prefix(Self.maxWindows))
     }
-    private var windows: Int { min(max(windowCount, 1), Self.maxWindows) }
-    private var lifting: Bool { live.stage == .lifting && !live.setAwaitingLog }
+    private var windows: Int { min(max(demo?.windows ?? windowCount, 1), Self.maxWindows) }
+    private var lifting: Bool { demo == nil && live.stage == .lifting && !live.setAwaitingLog }
+
+    private func setWindowCount(_ n: Int) {
+        if let d = demo { d.setWindows(n) } else { windowCount = n }
+    }
 
     /// After a set, coach notes take over the top window — unless another window already shows them.
-    private var notesTakeover: Bool { autoNotes && !metrics.prefix(windows).contains(.notes) }
+    private var notesTakeover: Bool { (demo?.notesTakeover ?? autoNotes) && !metrics.prefix(windows).contains(.notes) }
     private func shown(_ i: Int) -> LiveMetric { i == 0 && notesTakeover ? .notes : metrics[i] }
 
     /// A window's choices: every metric not open in another window.
@@ -1510,7 +1621,7 @@ struct LiveCard: View {
     private func setMetric(_ i: Int, _ m: LiveMetric) {
         var all = metrics
         if let j = all.firstIndex(of: m), j != i { all.swapAt(i, j) } else { all[i] = m }
-        metricsRaw = all.map(\.rawValue).joined(separator: ",")
+        if let d = demo { d.setMetrics(all) } else { metricsRaw = all.map(\.rawValue).joined(separator: ",") }
         if i == 0 { autoNotes = false }
     }
 
@@ -1526,10 +1637,14 @@ struct LiveCard: View {
         let _ = live.revision
         // Built once per redraw and shared by every window — it rescans the workout for
         // motion data and builds the coach notes, which is too much to do four times over.
-        let ctx = context
+        let ctx = demo?.ctx ?? context
         VStack(spacing: 0) {
-            LiveStatusBar(workout: workout)
-            LinkDiagnosticsStrip()                                   // DIAGNOSTIC (temporary)
+            if let d = demo {
+                TourStatusBar(demo: d).tourTarget("live.status")
+            } else {
+                LiveStatusBar(workout: workout)
+                LinkDiagnosticsStrip()                               // DIAGNOSTIC (temporary)
+            }
             Rectangle().fill(Brand.line).frame(height: 1)
             ZStack(alignment: .topTrailing) {
                 // One list of windows (Oct 11, 2026), so changing the count animates: the first window
@@ -1543,6 +1658,7 @@ struct LiveCard: View {
                                 .frame(height: i == 0 ? (windows == 1 ? Self.windowHeight : Self.half - 1) : Self.half)
                             dotsRow(i)
                         }
+                        .tourTarget("live.win0", demo != nil && i == 0)
                         .transition(.asymmetric(
                             insertion: .windowReveal.animation(.spring(response: 0.42, dampingFraction: 0.82)
                                                                 .delay(0.07 * Double(max(0, i - 1)))),
@@ -1567,11 +1683,12 @@ struct LiveCard: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(Brand.line, lineWidth: 1))
         .shadow(color: Brand.shadow, radius: 9, x: 0, y: 3)
+        .tourTarget("live.card", demo != nil)
         // A set finished (the Watch saw it end, or you logged it): show its coach notes.
-        .onChange(of: LiveCardData.lastLogged(workout)?.1.id) { _, new in if new != nil { autoNotes = true } }
-        .onChange(of: live.setAwaitingLog) { _, waiting in if waiting { autoNotes = true } }
+        .onChange(of: LiveCardData.lastLogged(workout)?.1.id) { _, new in if demo == nil, new != nil { autoNotes = true } }
+        .onChange(of: live.setAwaitingLog) { _, waiting in if demo == nil, waiting { autoNotes = true } }
         // The next set started: back to the metric you picked.
-        .onChange(of: lifting) { _, now in if now { autoNotes = false } }
+        .onChange(of: lifting) { _, now in if demo == nil, now { autoNotes = false } }
     }
 
     private var divider: some View {
@@ -1606,7 +1723,7 @@ struct LiveCard: View {
         VStack(spacing: 0) {
             Button {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    windowCount = windows < Self.maxWindows ? windows + 1 : 1
+                    setWindowCount(windows < Self.maxWindows ? windows + 1 : 1)
                 }
                 UISelectionFeedbackGenerator().selectionChanged()
             } label: {
@@ -1621,7 +1738,7 @@ struct LiveCard: View {
             .accessibilityLabel(windows == Self.maxWindows ? "Show one window" : "Show another window")
             ForEach(0..<Self.maxWindows, id: \.self) { k in
                 Button {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { windowCount = k + 1 }
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { setWindowCount(k + 1) }
                     UISelectionFeedbackGenerator().selectionChanged()
                 } label: {
                     Group {
@@ -1636,6 +1753,7 @@ struct LiveCard: View {
                 .accessibilityAddTraits(k + 1 == windows ? .isSelected : [])
             }
         }
+        .tourTarget("live.side", demo != nil)
     }
 
     // MARK: A window (swipe left or right to change its metric)
@@ -1661,14 +1779,16 @@ struct LiveCard: View {
         case .notes: NotesMetric(ctx: ctx, compact: compact)
         case .heartRate:
             TimelineView(.periodic(from: .now, by: 5)) { _ in       // keeps moving between Watch readings
-                HeartMetric(samples: live.heartSamples, now: live.currentHeartRate, maxHR: live.heartMax, compact: compact)
+                HeartMetric(samples: demo?.heart ?? live.heartSamples, now: demo.map { Optional($0.hrNow) } ?? live.currentHeartRate,
+                            maxHR: demo == nil ? live.heartMax : 190, compact: compact)
             }
         case .speed: SpeedMetric(ctx: ctx, compact: compact)
         case .tempo: TempoMetric(ctx: ctx, compact: compact)
         case .pause: PauseMetric(ctx: ctx, compact: compact)
         case .depth: DepthMetric(ctx: ctx, compact: compact)
         case .trend: TrendMetric(ctx: ctx, workouts: store.workouts, compact: compact)
-        case .session: SessionMetric(workout: workout, samples: live.heartSamples, start: live.sessionStart(workout), compact: compact)
+        case .session: SessionMetric(workout: workout, samples: demo?.heart ?? live.heartSamples,
+                                     start: demo?.start ?? live.sessionStart(workout), compact: compact)
         case .sets: SetsMetric(ctx: ctx, workout: workout, compact: compact)
         }
     }
@@ -2644,7 +2764,7 @@ struct DockTab: View {
         case .lifting:
             if let since = live.liftingSince { Text(since, style: .timer) } else { Text("0:00") }
         default:
-            Text(live.sessionStart(workout), style: .timer)
+            SessionClockText(workout: workout)
         }
     }
 }

@@ -116,7 +116,7 @@ struct PadLibraryHome: View {
         } else if let most = lib.programs.max(by: { $0.activeAssignments < $1.activeAssignments }), most.activeAssignments > 0 {
             say = b(most.name) + t(" has the most people on it. Results show after a couple of weeks.")
         } else {
-            say = t("Build programs in Coach HQ on the web; their results show here.")
+            say = t("Build programs in Library ▸ New ▸ Program; their results show here.")
         }
         let ranked: [Int] = lib.programs.compactMap { lib.programResults[$0.id]?.avgStrength }.sorted(by: >).map { Int(max(1, $0 * 10)) }
         return card(.programs, num: "\(lib.programs.count)", sub: "\(running) on one now", say: say) {

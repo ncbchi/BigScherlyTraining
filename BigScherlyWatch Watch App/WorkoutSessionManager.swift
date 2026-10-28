@@ -15,6 +15,8 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
     @Published private(set) var startDate: Date? = nil
     @Published private(set) var heartRate: Int? = nil
     @Published private(set) var lastError: String? = nil
+    /// The phone paused the workout (Oct 27, 2026): Health stops counting, motion stops recording.
+    @Published private(set) var isPaused = false
     /// A demo session (the phone's Demo Mode): thrown away at the end, never saved to Health.
     var discardOnEnd = false
 
@@ -63,6 +65,7 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
             isRunning = true
             MotionRecorder.shared.start()
             WatchState.sendLive(["sessionActive": true])
+            startLeftoverGuard()
         } catch {
             session = nil
             builder = nil
@@ -88,11 +91,41 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
         reset()
     }
 
-    /// Called after a crash/relaunch mid-session (see WatchAppDelegate).
+    /// The phone's Pause: the session pauses (Apple Health leaves the paused time out of the workout).
+    func pause() {
+        guard isRunning, !isPaused, let s = session else { return }
+        s.pause()
+        isPaused = true
+        MotionRecorder.shared.stop()
+    }
+
+    /// The phone's Resume.
+    func resume() {
+        guard isRunning, isPaused, let s = session else { return }
+        s.resume()
+        isPaused = false
+        MotionRecorder.shared.start()
+    }
+
+    /// Called after a crash/relaunch mid-session (see WatchAppDelegate). watchOS relaunches the app
+    /// on its own to hand back a session that was still running — so check with the phone straight
+    /// away, and let the leftover guard end it if nothing is using it (Oct 16, 2026).
     func recover() {
         store.recoverActiveWorkoutSession { recovered, _ in
             guard let recovered else { return }
-            Task { @MainActor in WorkoutSessionManager.shared.adopt(recovered) }
+            Task { @MainActor in
+                let m = WorkoutSessionManager.shared
+                m.adopt(recovered)
+                WatchState.shared.requestCard()              // a live workout on the phone sends its card back
+                // Handed back by watchOS with nothing asking for it (Oct 16, 11 AM: it came on by itself
+                // again): a real workout's card comes back within seconds — if nothing has claimed the
+                // session after 30 s, end it now (nothing saved) instead of buzzing for 10 minutes.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard m.isRunning, m.session === recovered, !m.inUse, !m.ending else { return }
+                print("[Session] recovered session unused after 30 s — ending it")
+                m.discardOnEnd = true
+                await m.end()
+            }
         }
     }
 
@@ -107,12 +140,68 @@ final class WorkoutSessionManager: NSObject, ObservableObject {
         startDate = s.startDate ?? Date()
         isRunning = true
         MotionRecorder.shared.start()
+        startLeftoverGuard()
+        // Recovered long past any workout (left running overnight): end it now, nothing saved.
+        if Date().timeIntervalSince(startDate ?? Date()) > Self.hardCap {
+            print("[Session] recovered a session from \(Int(Date().timeIntervalSince(startDate ?? Date()) / 3600)) h ago — ending it")
+            discardOnEnd = true
+            Task { await end() }
+        }
+    }
+
+    // MARK: Leftover sessions (Oct 16, 2026)
+    // A session nothing is using — no workout card from the phone, no setup, no recording — kept the
+    // motion recorder running, so everyday arm movement buzzed the wrist as "reps", and watchOS kept
+    // relaunching the app to hand it back. Checked once a minute while a session runs: unused for
+    // 10 minutes it ends (thrown away, not saved to Health); past 4¼ hours it ends whatever (the
+    // phone's own cap is 4 hours, so a real workout is over by then).
+    private static let unusedLimit: TimeInterval = 10 * 60
+    private static let hardCap: TimeInterval = 4.25 * 3600
+    private var unusedSince: Date?
+    private var leftoverTask: Task<Void, Never>?
+
+    /// A workout card from the phone, a setup, or a debug/gym recording is using the session.
+    var inUse: Bool {
+        isPaused || WatchState.shared.card != nil || WatchState.shared.setup != nil || WatchDebugRecorder.shared.arm != nil
+    }
+
+    private func startLeftoverGuard() {
+        leftoverTask?.cancel()
+        unusedSince = nil
+        leftoverTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                await self.checkLeftover()
+            }
+        }
+    }
+
+    private func checkLeftover() async {
+        guard isRunning, !ending else { return }
+        if let s = startDate, Date().timeIntervalSince(s) > Self.hardCap {
+            print("[Session] running over 4¼ h — ending it")
+            if !inUse { discardOnEnd = true }
+            await end()
+            return
+        }
+        if inUse { unusedSince = nil; return }
+        WatchState.shared.requestCard()                 // the phone may have a workout we haven't heard about
+        let since = unusedSince ?? Date()
+        unusedSince = since
+        guard Date().timeIntervalSince(since) >= Self.unusedLimit else { return }
+        print("[Session] no workout, setup or recording for 10 min — ending the leftover session")
+        discardOnEnd = true
+        await end()
     }
 
     private func reset() {
+        leftoverTask?.cancel(); leftoverTask = nil
+        unusedSince = nil
         ending = false
         WatchState.sendLive(["sessionActive": false])
         discardOnEnd = false
+        isPaused = false
         session = nil
         builder = nil
         isRunning = false

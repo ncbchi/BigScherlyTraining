@@ -19,6 +19,8 @@ struct Workout: Identifiable, Codable {
     var date: Date
     var exercises: [Exercise]
     var completed: Bool = false
+    /// Skipped from the Workouts tab (server 2.7.2). Optional so saved data and older servers still decode.
+    var skipped: Bool? = nil
 
     var exerciseSummary: String {
         exercises.map { $0.name }.joined(separator: " · ")
@@ -161,6 +163,7 @@ struct ProgressPhoto: Identifiable, Codable {
     var imageName: String           // asset name in prototype; URL/key in prod
     var category: String            // e.g. "Front", "Side", "Back"
     var trainerComment: String?
+    var favorite: Bool? = nil       // server 2.7.5; nil = not a favorite
 }
 
 // MARK: Chat

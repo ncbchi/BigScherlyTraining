@@ -47,6 +47,7 @@ struct StatsDetailView: View {
                                    bodyweightLb: bodyweightLb,
                                    womensDOTS: dotsCategory.isEmpty ? nil : dotsCategory == "womens")
             .filter { $0.hasData }
+            .map { addStartingPoint($0) }
         let panel = panels.first { $0.id == metricId } ?? panels.first
 
         ScrollView {
@@ -87,7 +88,8 @@ struct StatsDetailView: View {
                             }
                         }
                     } else {
-                        ChartCard(panel: panel, domain: timeDomain(sessions), rawSelection: $rawSelection,
+                        ChartCard(panel: panel, domain: timeDomain(sessions, extra: panel.series.first { $0.isStartingPoint }?.points.first?.date),
+                                  rawSelection: $rawSelection,
                                   pinned: $pinnedDate, highlight: nil)
                     }
                     if let line = headline(panel) {
@@ -358,10 +360,29 @@ struct StatsDetailView: View {
         .card(padding: 14)
     }
 
-    private func timeDomain(_ sessions: [StatsSession]) -> ClosedRange<Date> {
+    /// Your own est. 1RM charts get the starting point as a hollow first dot (Oct 26, 2026).
+    private func addStartingPoint(_ p: StatPanel) -> StatPanel {
+        guard source == nil, !store.isTrainer, let b = BaselineStore.shared.baseline else { return p }
+        if let ws = window.start, b.at < ws { return p }
+        let names: [String]
+        switch subject {
+        case .exercise(let name) where p.id == "strength": names = [name]
+        case .sbd where p.id == "e1rm": names = StartLift.allCases.map { $0.rawValue }
+        default: return p
+        }
+        let pts = names.compactMap { n in b.lift(n).map { StatPoint(date: b.at, value: StatsUnits.weight($0.e1RM)) } }
+        guard !pts.isEmpty else { return p }
+        var q = p
+        q.series.append(StatSeries(name: StatSeries.startingPointPrefix + " · " + b.at.formatted(.dateTime.month(.abbreviated).day()),
+                                   color: Brand.text, style: .points, points: pts))
+        return q
+    }
+
+    private func timeDomain(_ sessions: [StatsSession], extra: Date? = nil) -> ClosedRange<Date> {
         let end = Date().addingTimeInterval(2 * 86400)
         var start = window.start ?? sessions.first?.date ?? end.addingTimeInterval(-28 * 86400)
         if window == .all, let first = sessions.first?.date { start = first }
+        if let extra { start = min(start, extra) }      // the starting point, when it's older than the first session
         start = start.addingTimeInterval(-2 * 86400)
         return start...max(end, start.addingTimeInterval(86400))
     }
@@ -465,10 +486,21 @@ struct ChartCard: View {
                             .cornerRadius(3)
                     }
                 }
-                ForEach(panel.series.filter { $0.style == .points }) { s in
+                ForEach(panel.series.filter { $0.style == .points && !$0.isStartingPoint }) { s in
                     ForEach(s.points) { p in
                         PointMark(x: .value("Date", p.date), y: .value(s.name, p.value))
                             .foregroundStyle(Brand.readableLine(s.color)).symbolSize(26)
+                    }
+                }
+                // The starting point: a hollow dot.
+                ForEach(panel.series.filter { $0.isStartingPoint }) { s in
+                    ForEach(s.points) { p in
+                        PointMark(x: .value("Date", p.date), y: .value(s.name, p.value))
+                            .symbol {
+                                Circle().strokeBorder(Brand.text, lineWidth: 2)
+                                    .background(Circle().fill(Brand.bg))
+                                    .frame(width: 11, height: 11)
+                            }
                     }
                 }
                 ForEach(panel.series.filter { $0.style != .bar && $0.style != .points }) { s in
@@ -551,7 +583,9 @@ struct ChartCard: View {
     private func legendSwatch(_ s: StatSeries) -> some View {
         switch s.style {
         case .bar: RoundedRectangle(cornerRadius: 2).fill(s.color).frame(width: 10, height: 10)
-        case .points: Circle().fill(s.color).frame(width: 8, height: 8)
+        case .points:
+            if s.isStartingPoint { Circle().stroke(s.color, lineWidth: 1.5).frame(width: 8, height: 8) }
+            else { Circle().fill(s.color).frame(width: 8, height: 8) }
         case .dashed:
             HStack(spacing: 2) { ForEach(0..<3, id: \.self) { _ in Capsule().fill(s.color).frame(width: 4, height: 2) } }
         case .line: Capsule().fill(s.color).frame(width: 14, height: 3)

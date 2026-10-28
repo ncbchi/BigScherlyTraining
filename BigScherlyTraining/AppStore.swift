@@ -88,7 +88,7 @@ final class AppStore: ObservableObject {
 
     // Derived
     var upcomingWorkouts: [Workout] {
-        workouts.filter { !$0.completed }.sorted { $0.date < $1.date }
+        workouts.filter { !$0.completed && $0.skipped != true }.sorted { $0.date < $1.date }
     }
     var pastWorkouts: [Workout] {
         workouts.filter { $0.completed }.sorted { $0.date > $1.date }
@@ -396,6 +396,7 @@ final class AppStore: ObservableObject {
         supplements = MockData.supplements
         supplementStacks = MockData.supplementStacks
         supplementLogs = MockData.supplementLogs
+        BaselineStore.shared.reset()   // the demo has no starting point
         refreshPRs()
         refreshAwards(announce: false)
         syncToWatch()   // push demo state to the Watch too
@@ -488,6 +489,8 @@ final class AppStore: ObservableObject {
                 // Build the trophy case from the real logged sets we just pulled.
                 self.refreshPRs()
                 self.refreshAwards(announce: false)
+                // New user Home (Oct 26, 2026): the starting point and the coach's welcome.
+                BaselineStore.shared.refresh(self)
             }
             // v1.1: restore notes/motion/plan from the server if this phone lacks them,
             // queue anything only on this phone, then send the outbox.
@@ -532,7 +535,8 @@ final class AppStore: ObservableObject {
     /// Recompute the trophy case from scratch (after loading, or after logging).
     func refreshPRs() {
         personalRecords = ProgressEngine.allPRs(workouts: workouts,
-                                                trainerTagged: trainerTaggedLifts)
+                                                trainerTagged: trainerTaggedLifts,
+                                                baseline: isTrainer ? [:] : BaselineStore.shared.prior)
         lastPRForShare = personalRecords.max(by: { $0.date < $1.date })
     }
 
@@ -541,7 +545,8 @@ final class AppStore: ObservableObject {
     func checkForPRs(in workout: Workout) {
         let fresh = ProgressEngine.newPRs(in: workout, allWorkouts: workouts,
                                           existing: personalRecords,
-                                          trainerTagged: trainerTaggedLifts)
+                                          trainerTagged: trainerTaggedLifts,
+                                          baseline: isTrainer ? [:] : BaselineStore.shared.prior)
         if !fresh.isEmpty {
             personalRecords.append(contentsOf: fresh)
             // Celebrate the single best one, not one banner per lift.
@@ -618,6 +623,8 @@ final class AppStore: ObservableObject {
     @Published var awards: [Award] = []
     @Published var awardToCelebrate: Award?     // drives the full-screen celebration
     @Published var awardToShare: Award?         // carried into the Share tab
+    @Published var photoForShareCard: UIImage?  // Photos ▸ hold ▸ Make a share card: the card's photo
+    @Published var menuButtonTucked = false     // Photos tucks the menu button away while scrolling down
 
     /// Awards celebrated already, so we never replay one. Persisted.
     @AppStorage("celebratedAwards") private var celebratedRaw = ""
@@ -633,7 +640,9 @@ final class AppStore: ObservableObject {
         let found = AwardEngine.evaluate(workouts: workouts,
                                          supplements: supplements,
                                          supplementLogs: supplementLogs,
-                                         personalRecords: personalRecords)
+                                         personalRecords: personalRecords,
+                                         checkIns: checkIns,
+                                         wiredUpAt: WiredUp.earnedAt(client.id))
         let newly = found.filter { !celebrated.contains($0.id) }
         awards = found
 
@@ -813,6 +822,8 @@ final class AppStore: ObservableObject {
         CoachData.shared.reset()        // coach: cached client data
         LiveSessionController.shared.endAll()   // close any workout Live Activity
         CongratsLog.shared.reset()
+        BaselineStore.shared.reset()    // new user Home: their starting point and welcome
+        CoachBaselines.shared.reset()
     }
 
     func clearAnnouncement(_ id: String) {
@@ -881,7 +892,8 @@ final class AppStore: ObservableObject {
     func openSession(_ id: String) {
         // Past its end (2½ hours after it started — say, a workout from last week with a set logged):
         // it's saved as finished instead of reopening.
-        if let w = workouts.first(where: { $0.id == id }), LiveSessionController.shared.timedOut(w) {
+        if let w = workouts.first(where: { $0.id == id }), !LiveSessionController.shared.isPaused(id),
+           LiveSessionController.shared.timedOut(w) {
             LiveSessionController.shared.closeTimedOut(w)
             return
         }

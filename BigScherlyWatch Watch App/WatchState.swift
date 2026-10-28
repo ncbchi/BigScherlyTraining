@@ -621,7 +621,7 @@ final class WatchState: NSObject, ObservableObject {
     /// sound cue — is a live stream: best-effort, a missed sample doesn't matter.
     nonisolated private static let eventKeys: Set<String> =
         ["cardAction", "setupGo", "setupStillDone", "setupStillFailed", "setupExit", "setupReps",
-         "setStarted", "detectedSet", "sessionActive", "motionCapture", "dbgGo", "dbgStopped", "dbgDone", "dbgChunk"]
+         "setStarted", "detectedSet", "sessionActive", "motionCapture", "dbgGo", "dbgStopped", "dbgDone", "dbgChunk", "dbgMark"]
 
     nonisolated static func sendLive(_ msg: [String: Any]) {
         guard WCSession.default.activationState == .activated else { return }
@@ -952,8 +952,16 @@ extension WatchState: WCSessionDelegate {
         }
         if message["cardEnd"] as? Bool == true {
             let finished = message["endSession"] as? Bool == true
-            Task { @MainActor in self.endCard(finished: finished) }
+            // ✕ on a workout that never really started (Oct 27, 2026): nothing goes to Apple Health.
+            let discard = message["discard"] as? Bool == true
+            Task { @MainActor in
+                if discard, WorkoutSessionManager.shared.isRunning { WorkoutSessionManager.shared.discardOnEnd = true }
+                self.endCard(finished: finished)
+            }
         }
+        // Pause / Resume on the phone (Oct 27, 2026): the workout session pauses with it.
+        if message["sessionPause"] as? Bool == true { Task { @MainActor in WorkoutSessionManager.shared.pause() } }
+        if message["sessionResume"] as? Bool == true { Task { @MainActor in WorkoutSessionManager.shared.resume() } }
         // The Watch setup (first time), from the phone.
         if let d = message["setup"] as? [String: Any] {
             let step = d.compactMapValues { v -> String? in
@@ -985,6 +993,15 @@ extension WatchState: WCSessionDelegate {
             }
         }
         if message["dbgEnd"] as? Bool == true { Task { @MainActor in WatchDebugRecorder.shared.ended() } }
+        // Gym session: the phone's coach says what to do now.
+        if let d = message["dbgCue"] as? [String: Any] {
+            let cue = WatchDebugRecorder.Cue(
+                phase: d["phase"] as? String ?? "", block: d["block"] as? String ?? "",
+                id: d["id"] as? String ?? "", name: d["name"] as? String ?? "", say: d["say"] as? String ?? "",
+                until: (d["until"] as? Double).map { Date(timeIntervalSince1970: $0) },
+                n: d["n"] as? Int ?? 0, of: d["of"] as? Int ?? 0, last: d["last"] as? String ?? "")
+            Task { @MainActor in WatchDebugRecorder.shared.cued(cue) }
+        }
     }
 
     // A finished workout queued while the Watch was away.
@@ -1007,7 +1024,7 @@ private extension UInt32 {
 /// Which build of the Watch app this is — shown on Home and reported to the phone, so a Watch
 /// that missed an update is obvious instead of a mystery. Bump with each Watch delivery.
 enum WatchBuild {
-    static let tag = "2026-10-08.3"
+    static let tag = "2026-10-27.1"
 }
 
 // MARK: - The live link

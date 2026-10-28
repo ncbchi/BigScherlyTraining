@@ -78,10 +78,12 @@ struct APIWorkout: Decodable {
     let originalDate: Date?
     // Programs (Oct 8, 2026): "Strength Base · 3-Day · Base · Wk 4" on program sessions.
     let programLabel: String?
+    // Server 2.7.2: skipped from the Workouts tab (nil on older servers).
+    let skipped: Bool?
 
     func toModel() -> Workout {
         Workout(id: id, title: title, date: scheduledDate,
-                exercises: exercises.map { $0.toModel() }, completed: completed)
+                exercises: exercises.map { $0.toModel() }, completed: completed, skipped: skipped)
     }
 }
 
@@ -91,6 +93,7 @@ struct APIWorkoutSummary: Decodable {
     let scheduledDate: Date
     let completed: Bool
     let exerciseSummary: String
+    let skipped: Bool?
 }
 
 struct APIMacroDay: Decodable {
@@ -145,9 +148,11 @@ struct APIPhoto: Decodable, Identifiable {
     let date: Date
     let category: String
     let trainerComment: String?
+    let favorite: Bool?             // server 2.7.5
     func toModel() -> ProgressPhoto {
         // imageName holds the photo id; the app fetches the image via /photos/{id}
-        ProgressPhoto(id: id, date: date, imageName: id, category: category, trainerComment: trainerComment)
+        ProgressPhoto(id: id, date: date, imageName: id, category: category, trainerComment: trainerComment,
+                      favorite: favorite)
     }
 }
 

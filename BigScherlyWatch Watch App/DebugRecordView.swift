@@ -9,6 +9,9 @@ import Combine
 // by the same analyser as a workout. Tap again for another recording; Done ends it.
 // LIVE session: no tapping at all — once the phone starts it, the Watch records continuously and
 // sends what it has every 15 seconds (raw motion + its rep count), so Claude can watch nearly live.
+// In a live session a tap means "this part is done" (the phone's gym coach moves on); Done ends it.
+// Gym session: the phone sends each cue here — the Watch buzzes and shows the part, Go, the rest
+// countdown (3-2-1 taps) and what's next.
 //
 // Lives in the Watch app folder (added automatically).
 
@@ -29,6 +32,17 @@ final class WatchDebugRecorder: ObservableObject {
     @Published private(set) var countdownEnds: Date?
     @Published private(set) var recStart: Date?
     @Published private(set) var note: String?
+    @Published private(set) var marks = 0                // live: parts tapped done
+    // Gym session cue from the phone
+    struct Cue: Equatable {
+        var phase: String                                // wait · frame · go · rest · done
+        var block: String, id: String, name: String, say: String
+        var until: Date?                                 // the rest ends
+        var n: Int, of: Int                              // part n of `of` (0 = free training)
+        var last: String                                 // "Camera saw 5" (during the rest)
+    }
+    @Published private(set) var cue: Cue?
+    private var cueTask: Task<Void, Never>?
 
     private var task: Task<Void, Never>?
     private var solo = false
@@ -65,7 +79,36 @@ final class WatchDebugRecorder: ObservableObject {
         if a.live { go() }                                // live: no tap — it starts on its own
     }
 
+    /// The phone's coach moved on: show it, and buzz so you know without looking.
+    func cued(_ c: Cue) {
+        guard c != cue else { return }
+        let changed = cue?.phase != c.phase || cue?.id != c.id
+        cue = c
+        cueTask?.cancel(); cueTask = nil
+        guard changed else { return }
+        let device = WKInterfaceDevice.current()
+        switch c.phase {
+        case "go": WatchBuzz.go()
+        case "rest":
+            device.play(.notification)
+            if let until = c.until {
+                cueTask = Task {
+                    for left in [3, 2, 1] {
+                        let wait = until.timeIntervalSinceNow - Double(left)
+                        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                        guard !Task.isCancelled, self.cue == c else { return }
+                        WatchBuzz.countdown(left)
+                    }
+                }
+            }
+        case "done": device.play(.success)
+        default: WatchBuzz.tap()
+        }
+    }
+
     func ended() {
+        cueTask?.cancel(); cueTask = nil
+        cue = nil
         task?.cancel(); task = nil
         liveTask?.cancel(); liveTask = nil
         if phase == "recording" {
@@ -91,9 +134,17 @@ final class WatchDebugRecorder: ObservableObject {
         switch phase {
         case "ready": go()
         case "recording":
-            if arm?.live == true { done() } else { stop() }   // live: tapping ends the session
+            if arm?.live == true { mark() } else { stop() }   // live: tapping marks a part done (Done ends it)
         default: break
         }
+    }
+
+    /// Live: this part (or set) is done — the phone logs the moment and moves on.
+    func mark() {
+        guard let a = arm, a.live, phase == "recording" else { return }
+        marks += 1
+        WKInterfaceDevice.current().play(.success)
+        WatchState.sendLive(["dbgMark": Date().timeIntervalSince1970, "dbgSession": a.session, "dbgMarkN": marks])
     }
 
     /// Done on the Watch: the phone closes its side too.
@@ -143,7 +194,7 @@ final class WatchDebugRecorder: ObservableObject {
             }
             self.recStart = Date()
             self.count = 0; self.finishedSets = 0; self.tapped = 0
-            self.finishedReps = []; self.currentReps = []; self.seq = 0
+            self.finishedReps = []; self.currentReps = []; self.seq = 0; self.marks = 0
             self.phase = "recording"
             MotionRecorder.shared.beginCapture()
             WatchBuzz.go()
@@ -178,7 +229,8 @@ final class WatchDebugRecorder: ObservableObject {
         let repsData = (try? JSONEncoder().encode(reps)) ?? Data()
         MotionRecorder.shared.drainCapture { samples in
             let packed = MotionCapturePack.pack(samples)
-            WatchState.sendLive(["dbgChunk": packed.data, "dbgSession": session, "dbgSeq": n,
+            WatchState.sendLive(["dbgChunk": packed.data, "dbgAtt": MotionCapturePack.packAttitude(samples),
+                                 "dbgSession": session, "dbgSeq": n,
                                  "dbgStart": packed.startT, "dbgHz": MotionCapturePack.outRate,
                                  "dbgRaw": samples.count, "dbgReps": repsData, "dbgLift": lift,
                                  "dbgWrist": wrist, "dbgBuild": build, "dbgAnalyzer": RepAnalyzer.version,
@@ -256,9 +308,13 @@ struct DebugRecordOverlay: View {
                 Color.black.ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 7) {
-                        VStack(spacing: 1) {
-                            Text(a.live ? "DEBUG · LIVE" : "DEBUG · RECORD").font(.system(size: 8.5, weight: .heavy)).tracking(1.2).foregroundColor(mute)
-                            Text(a.title).font(.system(size: 16, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7)
+                        if let c = rec.cue {
+                            TimelineView(.periodic(from: .now, by: 0.5)) { ctx in cueView(c, ctx.date) }
+                        } else {
+                            VStack(spacing: 1) {
+                                Text(a.live ? "DEBUG · LIVE" : "DEBUG · RECORD").font(.system(size: 8.5, weight: .heavy)).tracking(1.2).foregroundColor(mute)
+                                Text(a.title).font(.system(size: 16, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7)
+                            }
                         }
                         TimelineView(.periodic(from: .now, by: 0.1)) { ctx in tile(ctx.date) }
                             .onTapGesture { rec.tap() }
@@ -279,11 +335,46 @@ struct DebugRecordOverlay: View {
         }
     }
 
+    /// Gym session: what to do now, big enough to read mid-set.
+    @ViewBuilder
+    private func cueView(_ c: WatchDebugRecorder.Cue, _ now: Date) -> some View {
+        VStack(spacing: 3) {
+            Text(cueLabel(c, now)).font(.system(size: 13, weight: .heavy)).tracking(1.0)
+                .foregroundColor(c.phase == "go" ? state.accentColor : .white)
+            if !c.name.isEmpty, c.phase == "go" || c.phase == "rest" {
+                Text(c.name).font(.system(size: 20, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.6)
+            }
+            if !c.say.isEmpty {
+                Text(c.say).font(.system(size: 12, weight: .semibold)).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if c.phase == "rest", !c.last.isEmpty {
+                Text(c.last).font(.system(size: 10, weight: .bold)).foregroundColor(mute)
+            }
+            Text(c.of > 0 ? "\(c.block.uppercased()) · \(min(c.n, c.of)) OF \(c.of)" : c.block.uppercased())
+                .font(.system(size: 8, weight: .heavy)).tracking(1.0).foregroundColor(mute)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func cueLabel(_ c: WatchDebugRecorder.Cue, _ now: Date) -> String {
+        switch c.phase {
+        case "wait": return "STARTING…"
+        case "frame": return "GET IN VIEW"
+        case "go": return c.id.isEmpty ? "GO" : "GO · \(c.id)"
+        case "rest":
+            let left = max(0, Int((c.until ?? now).timeIntervalSince(now).rounded(.up)))
+            return "REST \(left) · NEXT"
+        case "done": return "DONE"
+        default: return ""
+        }
+    }
+
     private var hint: String {
         switch rec.phase {
         case "ready": return "Tap to record. Do any reps, then tap to stop."
         case "countdown": return "Get into position…"
-        case "recording": return rec.arm?.live == true ? "Live — Claude sees it every 15 s. Tap to end the session." : "Recording — tap to stop"
+        case "recording": return rec.arm?.live == true ? "Live — tap when you finish a part. Done ends the session." : "Recording — tap to stop"
         default: return "Sending to the phone…"
         }
     }
@@ -309,7 +400,8 @@ struct DebugRecordOverlay: View {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
                     Text("\(rec.count)").font(.system(size: 32, weight: .heavy, design: .rounded))
                 }
-                Text(String(format: rec.arm?.live == true ? "LIVE · %d:%02d · TAP TO END" : "REPS · %d:%02d · TAP TO STOP", secs / 60, secs % 60))
+                Text(rec.arm?.live == true ? String(format: "LIVE · %d:%02d · PARTS %d · TAP = DONE", secs / 60, secs % 60, rec.marks)
+                                           : String(format: "REPS · %d:%02d · TAP TO STOP", secs / 60, secs % 60))
                     .font(.system(size: 7.5, weight: .heavy)).tracking(0.8).opacity(0.7).lineLimit(1)
             })
         default:

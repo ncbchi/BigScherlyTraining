@@ -160,6 +160,24 @@ final class MacroPlanStore: ObservableObject {
         ServerSync.shared.mark(.day(dayKey(to)))
     }
 
+    /// Workouts tab ▸ swipe ▸ Move (Oct 23, 2026): one workout to another day. The server allows a
+    /// week either side of its planned date, not into the past. Training-day overrides are left alone.
+    func moveWorkout(_ id: String, to newDay: Date, store: AppStore) {
+        guard let i = store.workouts.firstIndex(where: { $0.id == id }), !store.workouts[i].completed else { return }
+        let w = store.workouts[i]
+        let tod = cal.dateComponents([.hour, .minute], from: w.date)
+        let newDate = cal.date(bySettingHour: tod.hour ?? 9, minute: tod.minute ?? 0, second: 0, of: newDay) ?? newDay
+        let original = moves[w.id]?.original ?? w.date
+        moves[w.id] = WorkoutMove(original: original, moved: newDate)
+        store.workouts[i].date = newDate
+        save()
+        store.sendActiveWorkoutToWatch()
+        ServerSync.shared.mark(.move(workoutId: id))
+    }
+
+    /// The date a workout was planned for, before any move on this phone.
+    func originalDate(of w: Workout) -> Date { moves[w.id]?.original ?? w.date }
+
     /// Re-apply the client's moves after workouts reload from the server — unless the
     /// coach has since rescheduled that workout themselves.
     func applyMoves(to workouts: [Workout]) -> [Workout] {

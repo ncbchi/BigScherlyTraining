@@ -589,6 +589,7 @@ enum PadLibrarySheet: Identifiable {
     case defaultFormEditor
     case newForm
     case programDetail(APIProgramSummary)
+    case programEditor(String?)          // nil = a new program (Oct 15, 2026)
     case importRows([[String: String]])
 
     var id: String {
@@ -602,6 +603,7 @@ enum PadLibrarySheet: Identifiable {
         case .defaultFormEditor: return "fd"
         case .newForm: return "fn"
         case .programDetail(let p): return "pd" + p.id
+        case .programEditor(let id): return "pe" + (id ?? "new")
         case .importRows(let r): return "im\(r.count)"
         }
     }
@@ -714,6 +716,7 @@ struct PadLibraryView: View {
     private var newMenu: some View {
         Menu {
             Button { sheet = .exerciseEditor(nil) } label: { Label("Exercise", systemImage: "dumbbell") }
+            Button { sheet = .programEditor(nil) } label: { Label("Program", systemImage: "list.bullet.rectangle") }
             Button { sheet = .newForm } label: { Label("Check-in form", systemImage: "doc.text") }
             Button { lib.open(.messages); PadLibraryMessagesNew.shared.reply = true } label: { Label("Saved reply", systemImage: "text.bubble") }
             Button { lib.open(.messages); PadLibraryMessagesNew.shared.starter = true } label: { Label("Note for next time starter", systemImage: "note.text") }
@@ -767,6 +770,8 @@ struct PadLibraryView: View {
             CheckInFormEditor(newForm: true)
         case .programDetail(let p):
             NavigationStack { CoachProgramDetailView(summary: p) { Task { await lib.reloadPrograms() } } }
+        case .programEditor(let id):
+            PadProgramEditor(programId: id) { _ in Task { await lib.reloadPrograms() } }
         case .importRows(let rows):
             PadLibraryImportSheet(rows: rows)
         }

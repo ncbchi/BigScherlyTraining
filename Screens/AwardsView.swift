@@ -54,6 +54,7 @@ struct AwardsView: View {
     }
 
     private static let groups: [(String, [AwardKind])] = [
+        ("FIRST WINS", [.firstSession, .checkedIn, .wiredUp]),
         ("CONSISTENCY", [.perfectWeek, .perfectMonth, .streak4, .streak12, .comeback, .doseStreak30]),
         ("VOLUME", [.workouts10, .workouts25, .workouts50, .workouts100, .workouts250, .millionPounds]),
         ("STRENGTH", [.firstPR, .upAcrossTheBoard, .tripleCrown, .thousandPoundClub]),

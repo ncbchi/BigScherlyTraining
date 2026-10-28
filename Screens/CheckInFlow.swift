@@ -523,22 +523,17 @@ struct CheckInCelebrationView: View {
     var body: some View {
         ZStack {
             Brand.bg.ignoresSafeArea()
-            ConfettiView().opacity(appear ? 1 : 0)
+            // The full storm, in your accent (Celebration.swift, Oct 28, 2026).
+            CelebrationConfetti(pieces: 140, loop: true).ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 22) {
                     // Hero
-                    ZStack {
-                        Circle().fill(Brand.volt.opacity(0.15))
-                            .frame(width: 130, height: 130)
-                            .scaleEffect(appear ? 1 : 0.4)
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 68, weight: .bold))
-                            .foregroundColor(Brand.voltText)
-                            .scaleEffect(appear ? 1 : 0.3)
-                            .rotationEffect(.degrees(appear ? 0 : -30))
+                    // Glowing accent badge: springs in, rings pulse, rays turn, success buzz.
+                    CelebrationBadge(size: 110, box: 220) {
+                        Image(systemName: "checkmark.seal.fill").font(.system(size: 54, weight: .bold))
                     }
-                    .padding(.top, 40)
+                    .padding(.top, 20)
 
                     VStack(spacing: 6) {
                         Text("CHECK-IN COMPLETE")

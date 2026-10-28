@@ -1262,6 +1262,7 @@ struct PadClientOverview: View {
                     chatTile
                     awardTile
                 }
+                PadStartingPointTile(clientId: facts.id)     // the client's starting point, if they entered one (Oct 26, 2026)
                 if let extra { extra }
             }
             .padding(.horizontal, 20).padding(.vertical, 16)

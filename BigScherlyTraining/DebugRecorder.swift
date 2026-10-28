@@ -10,6 +10,8 @@ import Combine
 // LIVE session: the Watch records continuously and sends a chunk every 15 s; the phone adds the
 // camera's joints (and the plate) and rewrites one "LIVE …" file in the auto-save folder each time,
 // so Claude can follow the session nearly live from the Mac.
+// GYM session (GymSession.swift): the same recording, guided by the phone, with nothing written to
+// iCloud until the end — then ONE "GYM …" file at the Watch's full 50 Hz.
 //
 // Lives in the app folder (added automatically).
 
@@ -55,6 +57,10 @@ final class PhoneDebugRecorder: ObservableObject {
     @Published private(set) var liveSaved: Date?
     @Published private(set) var liveNote: String?
     private var liveClosing: Task<Void, Never>?
+    // Gym session: the block being run, and where its file went
+    @Published private(set) var gym: GymBlock?
+    @Published private(set) var gymFile: String?
+    @Published private(set) var gymLocalCopy: URL?
 
     private init() {}
 
@@ -83,7 +89,7 @@ final class PhoneDebugRecorder: ObservableObject {
     }
 
     /// Start a live session: the Watch records on its own (no tapping) and a chunk lands every 15 s.
-    func goLive() {
+    func goLive(gym block: GymBlock? = nil) {
         if live != nil {
             if armed { return }                             // already running
             closeLive()                                     // the last one was still closing: close it now
@@ -93,10 +99,13 @@ final class PhoneDebugRecorder: ObservableObject {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd HHmmss"
         live = LiveSession(id: f.string(from: Date()))
+        live?.title = block?.title
+        gym = block
+        if block != nil { gymFile = nil; gymLocalCopy = nil }
         liveSaved = nil
         liveNote = MotionCaptureStore.shared.folderName == nil ? "Choose a folder under Auto-save so Claude can see it" : nil
         liveClosing?.cancel(); liveClosing = nil
-        MacLink.shared.start()                              // find the Mac now, not at the first chunk
+        if block == nil { MacLink.shared.start() }          // find the Mac now, not at the first chunk (not in the gym)
         arm()
         // The camera logs from now — not only once the Watch's Go arrives.
         if MotionCaptureStore.cameraTracking { DepthCamera.shared.startLiveLog() }
@@ -154,7 +163,8 @@ final class PhoneDebugRecorder: ObservableObject {
         guard seq > s.lastSeq else { return }                // a resend
         s.lastSeq = seq
         if !data.isEmpty {
-            s.chunks.append(.init(start: m["dbgStart"] as? Double ?? 0, hz: m["dbgHz"] as? Double ?? 50, data: data))
+            s.chunks.append(.init(start: m["dbgStart"] as? Double ?? 0, hz: m["dbgHz"] as? Double ?? 50, data: data,
+                                  att: m["dbgAtt"] as? Data ?? Data()))
         }
         if let rd = m["dbgReps"] as? Data, let reps = try? JSONDecoder().decode([RepMotion].self, from: rd) { s.reps = reps }
         s.lift = m["dbgLift"] as? String ?? s.lift
@@ -165,7 +175,23 @@ final class PhoneDebugRecorder: ObservableObject {
         if (m["dbgFinal"] as? Int ?? 0) == 1 { closeLive() }
     }
 
+    /// Tapped on the Watch during a live session: a part (or set) is done.
+    func watchMarked(t: Double, session: String?) {
+        guard let s = live, session == nil || session == s.id else { return }
+        s.marks.append(t)
+        if gym != nil { GymCoach.shared.watchMarked(t: t) }
+    }
+
     private func writeLive(_ s: LiveSession) {
+        if gym != nil {
+            // Gym: nothing to iCloud yet — a private checkpoint every minute, in case the app dies.
+            if s.chunks.count % 4 == 0 {
+                let text = s.text(poses: DepthCamera.shared.livePoses, plates: DepthCamera.shared.livePlates, fullRate: true)
+                let url = Self.checkpointURL(s.id)
+                DispatchQueue.global(qos: .utility).async { try? Data(text.utf8).write(to: url, options: .atomic) }
+            }
+            return
+        }
         let text = s.text(poses: DepthCamera.shared.livePoses, plates: DepthCamera.shared.livePlates)
         MacLink.shared.send(name: "LIVE \(s.id).txt", text: text)     // Wi-Fi to the Mac: about a second
         if MotionCaptureStore.shared.writeFile(named: "LIVE \(s.id).txt", text: text) {
@@ -178,10 +204,66 @@ final class PhoneDebugRecorder: ObservableObject {
 
     private func closeLive() {
         liveClosing?.cancel(); liveClosing = nil
-        if let s = live { s.ended = true; writeLive(s) }
+        if let s = live {
+            s.ended = true
+            if gym != nil { saveGym(s) } else { writeLive(s) }
+        }
+        gym = nil
         DepthCamera.shared.stopLiveLog()
         if !armed, !SetupEngine.shared.active { DepthCamera.shared.stop() }
         live = nil
+    }
+
+    // MARK: Gym file — written once, at the end
+
+    private func saveGym(_ s: LiveSession) {
+        let text = s.text(poses: DepthCamera.shared.livePoses, plates: DepthCamera.shared.livePlates, fullRate: true)
+        let name = "GYM \(s.id) \(s.title ?? "session").txt"
+        // A copy on the phone too (Share it from the card if there's no Auto-save folder).
+        let local = Self.gymFolder().appendingPathComponent(name)
+        try? Data(text.utf8).write(to: local, options: .atomic)
+        gymLocalCopy = local
+        try? FileManager.default.removeItem(at: Self.checkpointURL(s.id))
+        let kb = text.utf8.count / 1024
+        if MotionCaptureStore.shared.writeFile(named: name, text: text) {
+            gymFile = "Saved “\(name)” to Auto-save (\(kb) KB). Tell Claude it's there."
+        } else {
+            gymFile = "No Auto-save folder chosen — “\(name)” is on the phone. Share it below."
+        }
+    }
+
+    private static func gymFolder() -> URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("GymSessions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func checkpointURL(_ id: String) -> URL {
+        gymFolder().appendingPathComponent("checkpoint \(id).txt")
+    }
+
+    /// A gym session the app didn't get to finish (it was closed or crashed): send its last
+    /// checkpoint to Auto-save, marked recovered.
+    func recoverCheckpoints() {
+        guard live == nil else { return }
+        let dir = Self.gymFolder()
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        for f in files where f.hasPrefix("checkpoint ") {
+            let url = dir.appendingPathComponent(f)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let id = String(f.dropFirst("checkpoint ".count).dropLast(".txt".count))
+            let name = "GYM \(id) (recovered).txt"
+            let local = dir.appendingPathComponent(name)
+            try? Data(text.utf8).write(to: local, options: .atomic)
+            gymLocalCopy = local
+            if MotionCaptureStore.shared.writeFile(named: name, text: text) {
+                gymFile = "Recovered an unfinished session: “\(name)” is in Auto-save."
+            } else {
+                gymFile = "Recovered an unfinished session: “\(name)” is on the phone. Share it below."
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     // MARK: Share all
@@ -209,7 +291,7 @@ final class PhoneDebugRecorder: ObservableObject {
 /// A live session as it builds up: the Watch's chunks, its latest rep list, and how to write it all out.
 @MainActor
 final class LiveSession {
-    struct Chunk { var start: Double; var hz: Double; var data: Data }
+    struct Chunk { var start: Double; var hz: Double; var data: Data; var att: Data = Data() }
     let id: String
     let started = Date()
     var chunks: [Chunk] = []
@@ -217,12 +299,17 @@ final class LiveSession {
     var lastSeq = 0
     var lift = "any", wrist = "left", build = "?", analyzer = 0
     var ended = false
+    // Gym session
+    var title: String?
+    var parts: [GymPartLog] = []
+    var marks: [Double] = []                         // Watch taps (its clock, s since 1970)
 
     init(id: String) { self.id = id }
 
     /// One file, rewritten every chunk. Times are seconds from t0 (the first Watch sample); camera
     /// heights are Vision units (0…1 of the frame, up positive) ×1000, -1 = not seen.
-    func text(poses: [LivePose], plates: [LivePlate]) -> String {
+    /// `fullRate`: the Watch's 50 Hz as sent (gym files) instead of pairs averaged to 25 Hz.
+    func text(poses: [LivePose], plates: [LivePlate], fullRate: Bool = false) -> String {
         let t0 = chunks.first?.start ?? started.timeIntervalSince1970
         var out: [String] = []
         let iso = ISO8601DateFormatter()
@@ -232,6 +319,16 @@ final class LiveSession {
         out.append(String(format: "t0=%.3f (s since 1970) | chunks=%d | watch reps=%d | camera pose frames=%d plate frames=%d | ruler=%@",
                           t0, chunks.count, reps.count, poses.count, plates.count, ruler))
         out.append(cam.liveCheck)
+        if let title {
+            out.append("gym block: \(title) | parts logged=\(parts.count) | watch taps=\(marks.count) | still-end=\(Int(GymCoach.stillSeconds)) s rest=\(Int(GymCoach.restSeconds)) s")
+            out.append("parts (s from t0; go/end on the phone's clock, Watch taps on the Watch's): n,id,name,expected,go,end,endedBy,cameraReps,inFramePct,redone")
+            for p in parts {
+                out.append([String(p.n), p.id, p.name, String(p.expected), String(format: "%.2f", p.go - t0),
+                            String(format: "%.2f", p.end - t0), p.endedBy, String(p.cameraReps), String(p.inFramePct),
+                            p.redone ? "redone" : ""].joined(separator: ","))
+            }
+            out.append("watch taps (s from t0): " + marks.map { String(format: "%.2f", $0 - t0) }.joined(separator: ","))
+        }
         out.append("watch reps (live analyser, s from t0): n,start,end,ecc,bottomPause,con,topPause,travelCm,meanV,peakV")
         for (i, r) in reps.enumerated() {
             func f(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "-" }
@@ -247,17 +344,53 @@ final class LiveSession {
         for p in plates where p.t >= t0 - 5 {
             out.append(String(format: "%.2f,%d,%d,%d", p.t - t0, p.y, p.h, p.c))
         }
-        out.append("watch samples fs=25 unit=0.01 (s from t0): t,av,h1,h2,rot (av up+ m/s², h1/h2 m/s², rot rad/s)")
+        let hz = Int(chunks.first?.hz ?? 50)
+        out.append("watch samples fs=\(fullRate ? hz : hz / 2) unit=0.01 (s from t0): t,av,h1,h2,rot (av up+ m/s², h1/h2 m/s², rot rad/s)")
         for c in chunks {
             let count = c.data.count / 8                      // Int16 × 4 channels
             c.data.withUnsafeBytes { raw in
                 let v = raw.bindMemory(to: Int16.self)
+                if fullRate {
+                    for k in 0..<count {
+                        var cols: [String] = []
+                        for ch in 0..<4 { cols.append(String(Int((Double(v[k * 4 + ch]) / 10.0).rounded()))) }
+                        out.append(String(format: "%.3f,", c.start + Double(k) / c.hz - t0) + cols.joined(separator: ","))
+                    }
+                    return
+                }
                 var k = 0
                 while k * 2 + 1 < count {
                     var cols: [String] = []
                     for ch in 0..<4 {
                         let a = Int(v[(k * 2) * 4 + ch]), b = Int(v[(k * 2 + 1) * 4 + ch])
                         cols.append(String(Int((Double(a + b) / 20.0).rounded())))
+                    }
+                    let t = c.start + (Double(k * 2) + 1) / c.hz - t0
+                    out.append(String(format: "%.2f,", t) + cols.joined(separator: ","))
+                    k += 1
+                }
+            }
+        }
+        // Attitude (same 25 Hz rows as the samples): gravity direction and rotation rate per axis.
+        out.append("watch attitude fs=\(fullRate ? hz : hz / 2) (s from t0): t,gx,gy,gz (×1000, unit vector),rx,ry,rz (×100 rad/s)")
+        for c in chunks where !c.att.isEmpty {
+            let count = c.att.count / 12                     // Int16 × 6 channels
+            c.att.withUnsafeBytes { raw in
+                let v = raw.bindMemory(to: Int16.self)
+                if fullRate {
+                    for k in 0..<count {
+                        var cols: [String] = []
+                        for ch in 0..<6 { cols.append(String(Int((Double(v[k * 6 + ch]) / 10.0).rounded()))) }
+                        out.append(String(format: "%.3f,", c.start + Double(k) / c.hz - t0) + cols.joined(separator: ","))
+                    }
+                    return
+                }
+                var k = 0
+                while k * 2 + 1 < count {
+                    var cols: [String] = []
+                    for ch in 0..<6 {
+                        let a = Int(v[(k * 2) * 6 + ch]), b = Int(v[(k * 2 + 1) * 6 + ch])
+                        cols.append(String(Int((Double(a + b) / 20.0).rounded())))   // ×10000 and ×1000 in, pairs summed
                     }
                     let t = c.start + (Double(k * 2) + 1) / c.hz - t0
                     out.append(String(format: "%.2f,", t) + cols.joined(separator: ","))
@@ -287,6 +420,14 @@ struct DebugRecordPanel: View {
     @State private var marking = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            GymSessionCard()
+                .onAppear { rec.recoverCheckpoints() }
+            recordCard
+        }
+    }
+
+    private var recordCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Record").font(BrandFont.body(16, .heavy)).foregroundColor(Brand.text)
@@ -351,7 +492,9 @@ struct DebugRecordPanel: View {
 
     /// Live session: Claude follows along from the Mac, a chunk every 15 seconds.
     @ViewBuilder private var liveControls: some View {
-        if let s = rec.live {
+        if rec.gym != nil {
+            EmptyView()                                     // the gym card runs it
+        } else if let s = rec.live {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 8, height: 8)

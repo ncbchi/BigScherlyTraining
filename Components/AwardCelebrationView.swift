@@ -3,6 +3,8 @@ import SwiftUI
 // MARK: - Award celebration
 // A full-screen moment, not a banner. Badge springs in with an overshoot, rings pulse,
 // rays turn slowly, confetti falls. Honours Reduce Motion (no confetti/rays, simple fade).
+// Oct 28, 2026: your accent and light / dark mode (was always yellow on dark). The badge
+// and confetti are shared with New PR and Check-in complete (Celebration.swift).
 
 struct AwardCelebrationView: View {
     @EnvironmentObject var store: AppStore
@@ -11,86 +13,35 @@ struct AwardCelebrationView: View {
 
     let award: Award
 
-    @State private var badgeIn = false
     @State private var contentIn = false
-    @State private var ringPulse = false
-    @State private var rayAngle: Double = 0
 
     var body: some View {
         ZStack {
-            BrandDark.bg.ignoresSafeArea()
+            Brand.bg.ignoresSafeArea()
 
-            if !reduceMotion {
-                ConfettiLayer()
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
+            CelebrationConfetti(pieces: 160, loop: true)
+                .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Spacer(minLength: 20)
 
-                // Badge + rays + pulsing rings
-                ZStack {
-                    // Ambient glow
-                    Circle()
-                        .fill(BrandDark.volt)
-                        .frame(width: 230, height: 230)
-                        .blur(radius: 70)
-                        .opacity(0.28)
-
-                    if !reduceMotion {
-                        // Expanding shockwave rings (the celebratory pulse)
-                        ForEach(0..<2, id: \.self) { i in
-                            Circle()
-                                .stroke(BrandDark.volt, lineWidth: 2)
-                                .frame(width: 120, height: 120)
-                                .scaleEffect(ringPulse ? 2.0 : 0.7)
-                                .opacity(ringPulse ? 0 : 0.55)
-                                .animation(
-                                    .easeOut(duration: 2.4)
-                                        .repeatForever(autoreverses: false)
-                                        .delay(Double(i) * 1.2),
-                                    value: ringPulse)
-                        }
-
-                        // Slowly turning sunburst
-                        RaysView()
-                            .stroke(BrandDark.volt.opacity(0.35), lineWidth: 2.5)
-                            .frame(width: 250, height: 250)
-                            .rotationEffect(.degrees(rayAngle))
-
-                        // Static concentric rings for depth
-                        ForEach(0..<3, id: \.self) { i in
-                            Circle()
-                                .stroke(BrandDark.volt.opacity(0.16 - Double(i) * 0.045), lineWidth: 1.5)
-                                .frame(width: 150 + CGFloat(i) * 46, height: 150 + CGFloat(i) * 46)
-                        }
-                    }
-
-                    Circle()
-                        .fill(BrandDark.volt)
-                        .frame(width: 128, height: 128)
-                        .overlay(
-                            Image(systemName: award.icon)
-                                .font(.system(size: 56, weight: .bold))
-                                .foregroundColor(BrandDark.black)
-                        )
-                        .shadow(color: BrandDark.volt.opacity(0.5), radius: 24)
-                        .scaleEffect(badgeIn ? 1 : 0.01)
-                        .rotationEffect(.degrees(badgeIn ? 0 : -25))
+                CelebrationBadge(size: 128, box: 260) {
+                    Image(systemName: award.icon).font(.system(size: 56, weight: .bold))
                 }
                 .frame(height: 260)
 
                 Text("AWARD UNLOCKED · \(award.kind.cheer.uppercased())")
                     .font(BrandFont.body(11, .bold)).tracking(3)
-                    .foregroundColor(BrandDark.volt)
+                    .foregroundColor(Brand.voltText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
                     .padding(.bottom, 10)
                     .opacity(contentIn ? 1 : 0)
                     .offset(y: contentIn ? 0 : 16)
 
                 Text(award.title)
                     .font(BrandFont.display(44))
-                    .foregroundColor(.white)
+                    .foregroundColor(Brand.text)
                     .multilineTextAlignment(.center)
                     .lineLimit(2).minimumScaleFactor(0.6)
                     .padding(.horizontal, 24)
@@ -99,7 +50,7 @@ struct AwardCelebrationView: View {
 
                 Text(award.blurb)
                     .font(BrandFont.body(14))
-                    .foregroundColor(BrandDark.mute)
+                    .foregroundColor(Brand.mute)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 36)
                     .padding(.top, 8)
@@ -108,20 +59,20 @@ struct AwardCelebrationView: View {
 
                 // Proof — the concrete numbers behind the award, as bold cards.
                 HStack(spacing: 10) {
-                    ForEach(Array(award.stats.enumerated()), id: \.element.id) { i, s in
+                    ForEach(Array(award.stats.enumerated()), id: \.element.id) { _, s in
                         VStack(spacing: 4) {
                             Text(s.value)
-                                .font(BrandFont.display(28)).foregroundColor(BrandDark.volt)
+                                .font(BrandFont.display(28)).foregroundColor(Brand.voltText)
                                 .minimumScaleFactor(0.5).lineLimit(1)
                             Text(s.label)
                                 .font(BrandFont.body(9, .bold)).tracking(1.3)
-                                .foregroundColor(BrandDark.mute)
+                                .foregroundColor(Brand.mute)
                                 .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 16)
-                        .background(BrandDark.black)
+                        .background(Brand.card)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(BrandDark.line, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Brand.line, lineWidth: 1))
                     }
                 }
                 .padding(.horizontal, 30)
@@ -140,36 +91,20 @@ struct AwardCelebrationView: View {
                             store.activeTab = .share
                             dismiss()
                         } label: {
-                            HStack {
-                                Image(systemName: "camera.fill")
-                                Text("Show it off").font(BrandFont.body(15, .bold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(BrandDark.volt)
-                            .clipShape(Capsule())
-                            .foregroundColor(BrandDark.black)
+                            primaryLabel("Show it off", icon: "camera.fill")
                         }
                     } else {
                         Button {
                             store.activeTab = .awards
                             dismiss()
                         } label: {
-                            HStack {
-                                Image(systemName: "trophy.fill")
-                                Text("View awards").font(BrandFont.body(15, .bold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(BrandDark.volt)
-                            .clipShape(Capsule())
-                            .foregroundColor(BrandDark.black)
+                            primaryLabel("View awards", icon: "trophy.fill")
                         }
                     }
 
                     Button("Not now") { dismiss() }
                         .font(BrandFont.body(14))
-                        .foregroundColor(BrandDark.mute)
+                        .foregroundColor(Brand.mute)
                 }
                 .padding(.horizontal, 30)
                 .padding(.bottom, 24)
@@ -177,92 +112,20 @@ struct AwardCelebrationView: View {
             }
         }
         .onAppear {
-            if reduceMotion {
-                badgeIn = true; contentIn = true
-                return
-            }
-            // Overshoot-and-settle: the pop is most of why this feels good.
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.5)) { badgeIn = true }
+            if reduceMotion { contentIn = true; return }
             withAnimation(.easeOut(duration: 0.5).delay(0.35)) { contentIn = true }
-            ringPulse = true
-            withAnimation(.linear(duration: 22).repeatForever(autoreverses: false)) {
-                rayAngle = 360
-            }
-            // Haptic timed to the badge landing.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            }
-        }
-    }
-}
-
-// Sunburst behind the badge.
-private struct RaysView: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        let c = CGPoint(x: rect.midX, y: rect.midY)
-        let inner = rect.width * 0.30
-        let outer = rect.width * 0.50
-        for i in 0..<12 {
-            let a = Double(i) * (.pi * 2 / 12)
-            p.move(to: CGPoint(x: c.x + cos(a) * inner, y: c.y + sin(a) * inner))
-            p.addLine(to: CGPoint(x: c.x + cos(a) * outer, y: c.y + sin(a) * outer))
-        }
-        return p
-    }
-}
-
-// Falling confetti — plenty of it.
-private struct ConfettiLayer: View {
-    // A proper storm. Rectangles are cheap to draw, so this stays smooth on device.
-    private let pieces = 160
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                ForEach(0..<pieces, id: \.self) { i in
-                    ConfettiPiece(index: i, size: geo.size)
-                }
-            }
-        }
-    }
-}
-
-private struct ConfettiPiece: View {
-    let index: Int
-    let size: CGSize
-    @State private var fall = false
-
-    // Deterministic per-piece values so nothing re-randomises on redraw.
-    private var seed: Double { Double((index &* 2654435761) % 1000) / 1000 }
-    private var seed2: Double { Double((index &* 40503) % 997) / 997 }
-    private var x: CGFloat { CGFloat(seed) * size.width }
-    private var delay: Double { seed2 * 1.6 }
-    private var duration: Double { 2.0 + seed * 1.6 }
-    private var drift: CGFloat { CGFloat(seed2 - 0.5) * 90 }
-    private var w: CGFloat { 5 + CGFloat(seed2) * 4 }
-    private var h: CGFloat { 9 + CGFloat(seed) * 7 }
-    private var color: Color {
-        switch index % 3 {
-        case 0:  return BrandDark.volt
-        case 1:  return .white
-        default: return BrandDark.volt.opacity(0.75)
         }
     }
 
-    var body: some View {
-        Rectangle()
-            .fill(color)
-            .frame(width: w, height: h)
-            .position(x: fall ? x + drift : x, y: fall ? size.height + 60 : -60)
-            .rotationEffect(.degrees(fall ? 540 + seed * 360 : 0))
-            .opacity(fall ? 0 : 1)
-            .onAppear {
-                withAnimation(.easeIn(duration: duration)
-                    .repeatForever(autoreverses: false)
-                    .delay(delay)) {
-                        fall = true
-                    }
-            }
+    private func primaryLabel(_ text: String, icon: String) -> some View {
+        HStack {
+            Image(systemName: icon)
+            Text(text).font(BrandFont.body(15, .bold))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .background(Brand.volt)
+        .clipShape(Capsule())
+        .foregroundColor(Brand.onVolt)
     }
 }

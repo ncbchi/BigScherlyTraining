@@ -125,6 +125,7 @@ struct MainShell: View {
     // Edge swipe back: how far the current screen has been pulled, and how wide it is.
     @State private var backDrag: CGFloat = 0
     @State private var shellWidth: CGFloat = 390
+    @ObservedObject private var tour = QuickStartTour.shared      // quick start tour (Oct 15, 2026)
 
     private var leftHanded: Bool { hand == "left" }
     /// Back lives on the leading edge for a right-handed grip, the trailing edge for a left-handed one.
@@ -212,8 +213,9 @@ struct MainShell: View {
             // tools live there (the menu still opens with the edge swipe).
             if store.activeTab != .share && store.activeTab != .coachShare {
                 FloatingMenuButton()
+                    .tourTarget("menu.button")
                     .padding(.trailing, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 36)       // lower, easier to reach one-handed
             }
 
             NavTray()
@@ -230,6 +232,19 @@ struct MainShell: View {
                 NewAnnouncementSheet(items: pendingAnnouncements) { dismissAnnouncements() }
                     .zIndex(30)
             }
+
+            // Quick start tour: Home's card (and the note after Skip), the practice workout, and
+            // the dimming with its spotlight and tip on top of everything.
+            TourHomeCardHost()
+                .zIndex(35)
+            if tour.isActive && tour.screen != .home {
+                TourPracticeView()
+                    .transition(.move(edge: .bottom))
+                    .zIndex(40)
+            }
+            TourOverlay()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .zIndex(50)
         }
         // The workout card: its own presentation, like it always was — so it stays
         // smooth whatever is underneath. Minimising dismisses it to the dock above.
@@ -349,7 +364,7 @@ struct MainShell: View {
 
     private func presentNewAnnouncements() {
         // Never interrupt a workout or a celebration.
-        guard !showAnnouncement, store.activeWorkoutId == nil, store.sessionWorkoutId == nil,
+        guard !showAnnouncement, !tour.isActive, store.activeWorkoutId == nil, store.sessionWorkoutId == nil,
               store.awardToCelebrate == nil, store.prToCelebrate == nil else { return }
         let seen = AnnouncementSeen.ids
         let cutoff = Date().addingTimeInterval(-AnnouncementSeen.freshFor)

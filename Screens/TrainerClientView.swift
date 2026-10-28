@@ -4,7 +4,7 @@ import AVKit
 
 // MARK: - Coach's view of one client
 // Read + respond: check-ins, conversations, their photos and awards, your private notes.
-// Detailed data review (Stats, Watch data, macros) lives in the web console.
+// Macros (Oct 15, 2026): their targets and setting new ones, as on the iPad (CoachClientMacros.swift).
 
 struct TrainerClientView: View {
     @EnvironmentObject var store: AppStore
@@ -12,7 +12,7 @@ struct TrainerClientView: View {
     let client: RosterItem
 
     enum Section: String, CaseIterable, Identifiable {
-        case checkins = "Check-Ins", workouts = "Workouts", chat = "Chat", progress = "Progress",
+        case checkins = "Check-Ins", workouts = "Workouts", macros = "Macros", chat = "Chat", progress = "Progress",
              photos = "Photos", awards = "Awards", supplements = "Supplements", notes = "Notes"
         var id: String { rawValue }
     }
@@ -48,6 +48,7 @@ struct TrainerClientView: View {
                         DSStatTile(value: "\(client.missedWorkouts)", label: "MISSED", color: client.missedWorkouts > 0 ? .orange : Brand.text)
                         DSStatTile(value: client.daysSinceTrained > 90 ? "—" : "\(client.daysSinceTrained)d", label: "SINCE TRAINED", color: Brand.text)
                     }
+                    CoachStartingPointStrip(clientId: client.id)   // their day-one numbers, when they entered them (Oct 26, 2026)
                 }
                 .padding(.horizontal, 20).padding(.bottom, 12)
 
@@ -60,6 +61,7 @@ struct TrainerClientView: View {
                     switch section {
                     case .checkins: TrainerCheckInsView(clientId: client.id, clientName: client.name)
                     case .workouts: TrainerWorkoutsView(clientId: client.id, clientName: client.name)
+                    case .macros:   CoachClientMacrosView(client: client)   // targets, trends, new targets (Oct 15, 2026)
                     case .chat:     CoachClientThreads(client: client)
                     case .progress: TrainerProgressView(clientId: client.id)
                     case .photos:   TrainerPhotosView(clientId: client.id)

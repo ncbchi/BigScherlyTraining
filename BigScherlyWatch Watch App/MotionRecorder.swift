@@ -154,7 +154,7 @@ final class MotionRecorder: ObservableObject {
         liveRepCount = count
         liveLastVelocity = velocities.last
         if count >= 1 { onLiveReps?(reps) }
-        if buzz { slowRepBuzz() }
+        if buzz, WorkoutSessionManager.shared.inUse { slowRepBuzz() }   // never for a session nothing is using
     }
 
     /// The slow-rep buzz, in the pattern chosen on the phone.
@@ -378,6 +378,11 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
 
     func start(buzzEnabled: Bool, buzzThresholdPct: Double) -> Bool {
         guard manager.isDeviceMotionAvailable else { return false }
+        #if targetEnvironment(simulator)
+        // The Simulator has no motion sensor but still says it does; starting updates there crashed on
+        // CoreMotion's own thread (insertObject:atIndex: nil, Oct 15, 2026). Sensor data is off there.
+        return false
+        #else
         manager.deviceMotionUpdateInterval = 1.0 / RepAnalyzer.sampleRate
         queue.addOperation { [self] in
             self.buffer.removeAll(keepingCapacity: true)
@@ -392,6 +397,7 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
             self.ingest(motion)
         }
         return true
+        #endif
     }
 
     func stop() {
@@ -434,7 +440,8 @@ nonisolated final class MotionProcessor: @unchecked Sendable {
         let rot = (rr.x * rr.x + rr.y * rr.y + rr.z * rr.z).squareRoot()
         let t = m.timestamp + bootOffset
         if probe != nil { probe?.append((av: av, rot: rot, nz: nz)) }
-        let sample = MotionSample(t: t, av: av, h1: h1, h2: h2, rot: rot)
+        let sample = MotionSample(t: t, av: av, h1: h1, h2: h2, rot: rot,
+                                  gx: nx, gy: ny, gz: nz, rx: rr.x, ry: rr.y, rz: rr.z)
         buffer.append(sample)
         if capture != nil, capture!.count < captureLimit { capture!.append(sample) }
 

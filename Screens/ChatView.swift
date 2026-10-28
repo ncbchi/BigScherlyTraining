@@ -10,6 +10,8 @@ struct ChatListView: View {
     @State private var selected: ChatThread?
     @State private var filter: ChatCategory? = nil
     @State private var showNew = false
+    @ObservedObject private var opener = ChatOpener.shared     // Home's Reply / Record video (Oct 26, 2026)
+    @State private var openWithVideo = false
 
     var filtered: [ChatThread] {
         let base = store.chats.sorted { $0.lastActivity > $1.lastActivity }
@@ -38,7 +40,7 @@ struct ChatListView: View {
                            likely: "All", itemWidth: 116, accessibilityName: "Show conversations")
 
                 ForEach(filtered) { t in
-                    Button { selected = t } label: { threadRow(t) }
+                    Button { openWithVideo = false; selected = t } label: { threadRow(t) }
                         .buttonStyle(PressableStyle())
                 }
 
@@ -52,8 +54,19 @@ struct ChatListView: View {
         }
         .background(Brand.bg.ignoresSafeArea())
         .dsTopFade()
-        .sheet(item: $selected) { t in ChatThreadView(thread: t).environmentObject(store) }
+        .sheet(item: $selected) { t in ChatThreadView(thread: t, startWithVideo: openWithVideo).environmentObject(store) }
         .sheet(isPresented: $showNew) { NewChatSheet().environmentObject(store) }
+        .onAppear { takeOpenRequest() }
+        .onChange(of: opener.request) { _, _ in takeOpenRequest() }
+    }
+
+    /// Home asked for a particular conversation: open it once the screen is up.
+    private func takeOpenRequest() {
+        guard let r = opener.request else { return }
+        opener.request = nil
+        guard let t = store.chats.first(where: { $0.id == r.threadId }) else { return }
+        openWithVideo = r.video
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { selected = t }
     }
 
     func chip(_ label: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
@@ -113,7 +126,10 @@ struct ChatThreadView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
     @State var thread: ChatThread
+    /// Opened from Home's Record video: the video picker comes up straight away.
+    var startWithVideo: Bool = false
     @State private var draft = ""
+    @State private var showVideoPicker = false
 
     // Video attachments
     @State private var pickedItem: PhotosPickerItem?
@@ -217,6 +233,10 @@ struct ChatThreadView: View {
             .onChange(of: pickedItem) { _, item in
                 guard let item else { return }
                 Task { await handlePickedVideo(item) }
+            }
+            .photosPicker(isPresented: $showVideoPicker, selection: $pickedItem, matching: .videos, photoLibrary: .shared())
+            .onAppear {
+                if startWithVideo { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showVideoPicker = true } }
             }
             .sheet(item: $playing) { p in
                 VideoPlayer(player: AVPlayer(url: p.url)).ignoresSafeArea()
@@ -429,13 +449,20 @@ struct NewChatSheet: View {
                 }
                 VoltButton(title: "Start Chat") {
                     let trimmed = topic.trimmingCharacters(in: .whitespaces)
-                    let thread = ChatThread(id: UUID().uuidString,
-                                            topic: trimmed.isEmpty ? "New Conversation" : trimmed,
-                                            category: category,
-                                            messages: [],
-                                            lastActivity: Date())
-                    store.chats.insert(thread, at: 0)
-                    dismiss()
+                    let title = trimmed.isEmpty ? "New Conversation" : trimmed
+                    let cat = category
+                    // Oct 26, 2026: the thread is created on the server first (POST /chats). Before, it only
+                    // existed on the phone, so messages sent in it never reached the coach.
+                    Task {
+                        var id = UUID().uuidString
+                        if store.isLive, let made = try? await APIClient.shared.createChat(topic: title, category: cat.rawValue) {
+                            id = made
+                        }
+                        await MainActor.run {
+                            store.chats.insert(ChatThread(id: id, topic: title, category: cat, messages: [], lastActivity: Date()), at: 0)
+                            dismiss()
+                        }
+                    }
                 }
                 Spacer()
             }

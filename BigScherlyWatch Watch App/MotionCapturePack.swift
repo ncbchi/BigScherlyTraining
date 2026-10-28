@@ -26,4 +26,21 @@ nonisolated enum MotionCapturePack {
         let data = out.withUnsafeBufferPointer { Data(buffer: $0) }
         return (data, first.t)
     }
+
+    /// The attitude channels at the same 50 Hz: gravity direction ×10000 (unit vector) and rotation
+    /// rate about each axis ×1000 (rad/s), Int16, interleaved gx, gy, gz, rx, ry, rz.
+    static func packAttitude(_ s: [MotionSample]) -> Data {
+        var out = [Int16]()
+        out.reserveCapacity(s.count / 2 * 6)
+        func g(_ v: Double) -> Int16 { Int16(max(-1, min(1, v)) * 10000) }
+        func r(_ v: Double) -> Int16 { Int16(max(-32.7, min(32.7, v)) * 1000) }
+        var i = 0
+        while i + 1 < s.count {
+            let a = s[i], b = s[i + 1]
+            out.append(g((a.gx + b.gx) / 2)); out.append(g((a.gy + b.gy) / 2)); out.append(g((a.gz + b.gz) / 2))
+            out.append(r((a.rx + b.rx) / 2)); out.append(r((a.ry + b.ry) / 2)); out.append(r((a.rz + b.rz) / 2))
+            i += 2
+        }
+        return out.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
 }

@@ -399,8 +399,8 @@ final class APIClient {
     }
     // Announcements — one post to all clients (replaces the old per-client broadcast).
     /// publishAt nil = post now. A future time keeps it hidden (and unpushed) until then.
-    func createAnnouncement(title: String, body: String, publishAt: Date? = nil) async throws {
-        var payload: [String: Any] = ["title": title, "body": body]
+    func createAnnouncement(title: String, body: String, publishAt: Date? = nil, push: Bool = true) async throws {
+        var payload: [String: Any] = ["title": title, "body": body, "push": push]
         if let publishAt { payload["publishAt"] = ISO8601DateFormatter().string(from: publishAt) }
         _ = try await request("/admin/announcements", method: "POST",
             body: try JSONSerialization.data(withJSONObject: payload))

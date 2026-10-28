@@ -22,6 +22,15 @@ final class LiveSessionController: ObservableObject {
     @Published private(set) var workoutId: String? = nil
     /// Bumped on every change, so the in-app live card redraws with the Lock Screen card.
     @Published private(set) var revision = 0
+    /// Opened just to look (Oct 27, 2026): nothing has started — no clock, no Watch, no Lock Screen
+    /// card — until a set is logged or started. ✕ closes it untouched.
+    @Published private(set) var looking = false
+    /// Paused and saved-for-later workouts, by workout id (kept across launches). Paused time doesn't
+    /// count toward the 2½ hours; a workout left paused 12 hours saves itself for later.
+    @Published private(set) var pauses: [String: PauseRec] = LiveSessionController.loadPauses()
+    static let pausedAutoSave: TimeInterval = 12 * 3600
+    /// Home's Resume workout: open it running, not on the Paused card.
+    var resumeOnOpen: String? = nil
 
     private weak var store: AppStore?
     private var activity: Activity<WorkoutActivityAttributes>?
@@ -241,17 +250,19 @@ final class LiveSessionController: ObservableObject {
         defer { mark("done") }
         LocalReminders.cancelWorkout(id)                 // started: no "today's workout" nudge
         UserDefaults.standard.removeObject(forKey: closedKey)
-        // Open the Watch straight into its workout session: it stays on your wrist (every raise
-        // brings the card back), taps for rest, and the phone keeps quiet. Once per workout.
-        if watchLaunchedFor != id, !isDemo || Self.demoStartsWatch,
-           WatchBridge.shared.watchAppAvailable, !WatchBridge.shared.watchSessionLive {
-            watchLaunchedFor = id
-            WatchBridge.shared.startWatchWorkout { _ in }
-            mark("watch app launch requested")
-        }
         guard let w = store?.workouts.first(where: { $0.id == id }), !w.completed else { return }
         // Past its end (2½ hours after it started, however long ago): it's over, not reopened.
-        if timedOut(w) { closeTimedOut(w); return }
+        // A paused or saved workout never ends this way: it opens paused.
+        if pauses[id]?.pausedAt == nil, timedOut(w) { closeTimedOut(w); return }
+        // Paused (or saved for later), opened again: it's open now, still paused. The time so far stays
+        // off the clock, and the 12-hour save-for-later wait starts again from now.
+        if var r = pauses[id], let p = r.pausedAt, r.saved || workoutId != id {
+            r.total += max(0, Date().timeIntervalSince(p))
+            r.pausedAt = Date()
+            r.saved = false
+            pauses[id] = r
+            savePauses()
+        }
         touch()
         if workoutId != id {
             workoutId = id
@@ -269,6 +280,39 @@ final class LiveSessionController: ObservableObject {
             Task { await a.end(nil, dismissalPolicy: .immediate) }   // another workout's, or one iOS has ended
             activity = nil
             activityToken = nil
+        }
+        // Paused: the screen shows Paused with Resume. Nothing runs (card, Watch, clock) until then.
+        if pauses[id]?.pausedAt != nil {
+            if resumeOnOpen == id {
+                resumeOnOpen = nil
+                resume()                                // begins it again, running
+                return
+            }
+            looking = false
+            push(now: true)
+            scheduleTimeout()                           // 12 hours paused: saved for later
+            mark("paused")
+            return
+        }
+        // Look first (Oct 27, 2026): opening a workout starts nothing. The first logged set (or Start set)
+        // starts it: the clock, the Watch, the Lock Screen card, the coach's live link.
+        let started = w.exercises.contains { $0.sets.contains { $0.loggedReps != nil } }
+            || setStart != nil || logNeeded || restEnd != nil
+        guard started else {
+            looking = true
+            push(now: true)
+            mark("look only")
+            return
+        }
+        looking = false
+        // Open the Watch straight into its workout session: it stays on your wrist (every raise
+        // brings the card back), taps for rest, and the phone keeps quiet. Once per workout — and
+        // only for a workout that's really started (Oct 16: it used to launch before these checks).
+        if watchLaunchedFor != id, !isDemo || Self.demoStartsWatch,
+           WatchBridge.shared.watchAppAvailable, !WatchBridge.shared.watchSessionLive {
+            watchLaunchedFor = id
+            WatchBridge.shared.startWatchWorkout { _ in }
+            mark("watch app launch requested")
         }
         // Settings ▸ Lock Screen card (on unless turned off). Off: no card, but the session
         // itself (rest timer, saving across restarts) carries on as normal.
@@ -335,6 +379,8 @@ final class LiveSessionController: ObservableObject {
         activity = nil
         activityToken = nil
         workoutId = nil
+        looking = false
+        setStart = nil; logNeeded = false
         LiveLink.shared.stop()                           // the coach's iPad: session over
         clearDone()
         watchLaunchedFor = nil
@@ -376,6 +422,7 @@ final class LiveSessionController: ObservableObject {
             pushTask?.cancel(); pushTask = nil
             activity = nil; activityToken = nil
             workoutId = nil
+            looking = false
             clearDone()
             watchLaunchedFor = nil
             WatchBridge.shared.sendCardEnd(endSession: true)       // the Watch ends its session too
@@ -433,8 +480,10 @@ final class LiveSessionController: ObservableObject {
         watchLaunchedFor = nil
         WatchBridge.shared.sendCardEnd(endSession: true)
         activity = nil; workoutId = nil; activityToken = nil
+        looking = false
         restEnd = nil; restStart = nil
         UserDefaults.standard.removeObject(forKey: savedKey)
+        pauses = [:]; savePauses()                      // logout: the next person never sees them
         Task { for a in Activity<WorkoutActivityAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) } }
     }
 
@@ -500,6 +549,8 @@ final class LiveSessionController: ObservableObject {
               let si = store.workouts[wi].exercises[ei].sets.firstIndex(where: { $0.id == setId }) else { return false }
         let before = Self.current(store.workouts[wi])?.id
         let wasLogged = store.workouts[wi].exercises[ei].sets[si].loggedReps != nil
+        // Logging a new set while paused picks the workout back up first.
+        if !wasLogged, wid == workoutId, pauses[wid]?.pausedAt != nil { resume() }
         store.workouts[wi].exercises[ei].sets[si].loggedReps = reps
         store.workouts[wi].exercises[ei].sets[si].loggedWeight = weight
         store.workouts[wi].exercises[ei].sets[si].rpe = rpe
@@ -540,6 +591,8 @@ final class LiveSessionController: ObservableObject {
             if !thenRest {
                 // The next set is already under way: no rest.
             } else if Self.current(store.workouts[wi]) != nil && autoRest { startRest(rest) } else { endRest() }
+            // The first logged set starts a workout that was only being looked at.
+            if looking, wid == workoutId { begin(workoutId: wid) }
         }
         push(now: true)
         return Self.current(store.workouts[wi])?.id != before
@@ -549,7 +602,9 @@ final class LiveSessionController: ObservableObject {
 
     /// Start set (button on the card, or the Watch's first rep).
     func startSet() {
-        guard workoutId != nil, stage != .done, setStart == nil || logNeeded else { return }
+        guard let wid = workoutId, stage != .done, setStart == nil || logNeeded else { return }
+        if pauses[wid]?.pausedAt != nil { resume() }   // Start set while paused: carry on
+
         // The last set was never logged: log it as it was filled in, then start this one.
         if logNeeded {
             commitDone(thenRest: false)
@@ -563,7 +618,8 @@ final class LiveSessionController: ObservableObject {
         logNeeded = false
         afterSet = false                            // back to the view you were on
         touch()
-        if activity == nil { startCardMidWorkout() } // Start the card ▸ First set, or it was ended for being idle
+        if looking { begin(workoutId: wid) }        // look-only until now: the Watch and the card start
+        else if activity == nil { startCardMidWorkout() } // Start the card ▸ First set, or it was ended for being idle
         SetVideoRecorder.shared.setStarted()        // set videos on: film this set
         scheduleStageRefresh()
         push(now: true)
@@ -725,10 +781,15 @@ final class LiveSessionController: ObservableObject {
     /// When this workout closes: 2½ hours after it started, pushed back to 15 quiet minutes after the
     /// last set you logged or the end of a rest that's running — but never past 4 hours.
     private func timeoutDue(_ w: Workout) -> Date {
-        // The workout that's open uses its open time too; any other starts at its first logged set.
+        // Saved for later: it waits for you. Paused: it saves itself for later after 12 hours.
+        if let r = pauses[w.id] {
+            if r.saved { return .distantFuture }
+            if let p = r.pausedAt { return p.addingTimeInterval(Self.pausedAutoSave) }
+        }
+        // It starts at its first logged set (Oct 27, 2026: opening it doesn't), less any time paused.
         let logged = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }
-        let start = w.id == workoutId ? sessionStart(w) : (logged.min() ?? .distantFuture)
-        guard start != .distantFuture else { return .distantFuture }
+        guard let first = logged.min() else { return .distantFuture }
+        let start = first.addingTimeInterval(pauses[w.id]?.total ?? 0)
         var due = start.addingTimeInterval(Self.autoEndAfter)
         if let last = logged.max() { due = max(due, last.addingTimeInterval(Self.autoEndQuiet)) }
         if w.id == workoutId, let r = restEnd, r > Date() { due = max(due, r.addingTimeInterval(Self.autoEndQuiet)) }
@@ -752,6 +813,15 @@ final class LiveSessionController: ObservableObject {
     func closeTimedOut(_ w: Workout) {
         guard let store else { return }
         let wid = w.id
+        // Paused 12 hours: saved for later, never finished for you.
+        if pauses[wid]?.pausedAt != nil, pauses[wid]?.saved != true {
+            saveForLater(wid)
+            let c = UNMutableNotificationContent()
+            c.title = "Workout saved for later"
+            c.body = "\(w.title) was paused 12 hours. It's waiting on Home: tap Resume workout to carry on."
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bst.workout.saved.\(wid)", content: c, trigger: nil))
+            return
+        }
         let start = timeoutStart(w)
         print(String(format: "[Live] auto-end · %@ · started %.1f h ago", w.title, Date().timeIntervalSince(start) / 3600))
         if workoutId == wid { end(dismissal: .immediate) }
@@ -759,7 +829,9 @@ final class LiveSessionController: ObservableObject {
         if logged, let i = store.workouts.firstIndex(where: { $0.id == wid }) {
             store.workouts[i].completed = true
             store.refreshAwards()
+            WorkoutActions.shared.syncDone(wid)              // server 2.7.2: stays finished after a reload
         }
+        clearPause(wid)
         if store.activeWorkoutId == wid { store.activeWorkoutId = nil }
         if store.sessionWorkoutId == wid { store.closeSession() }
         UIApplication.shared.isIdleTimerDisabled = false
@@ -772,8 +844,131 @@ final class LiveSessionController: ObservableObject {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bst.workout.autoend.\(wid)", content: c, trigger: nil))
     }
 
-    private func timeoutStart(_ w: Workout) -> Date {
-        w.id == workoutId ? sessionStart(w) : (w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min() ?? Date())
+    private func timeoutStart(_ w: Workout) -> Date { sessionStart(w) }
+
+    // MARK: Pause · Save for later (Oct 27, 2026)
+
+    /// Pause: the clock, the rest timer and the Watch's workout pause; the Lock Screen card goes until Resume.
+    /// A set you were in the middle of is dropped; one waiting to be logged stays waiting.
+    func pause() {
+        guard let store, let wid = workoutId, let w = store.workouts.first(where: { $0.id == wid }), !w.completed,
+              w.exercises.contains(where: { $0.sets.contains { $0.loggedReps != nil } }),
+              pauses[wid]?.pausedAt == nil else { return }
+        var r = pauses[wid] ?? PauseRec()
+        r.pausedAt = Date()
+        r.saved = false
+        r.restLeft = resting ? Int((restEnd ?? Date()).timeIntervalSinceNow.rounded(.up)) : nil
+        pauses[wid] = r
+        savePauses()
+        UserDefaults.standard.set(wid, forKey: closedKeepKey)   // app closed while paused: it's kept, not "swiped away"
+        SetVideoRecorder.shared.stopAll()
+        cancelAutoLog()
+        if !logNeeded { setStart = nil }
+        restEnd = nil; restStart = nil
+        cancelRestAlerts()
+        WatchBridge.shared.sendEvent(["sessionPause": true])   // the Watch pauses its workout
+        WatchBridge.shared.sendCardEnd(endSession: false)       // and its card goes until Resume
+        endCardKeepingWorkout()                                 // the Lock Screen card too
+        UIApplication.shared.isIdleTimerDisabled = false
+        scheduleTimeout()
+        persist()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        push(now: true)
+    }
+
+    /// Resume: the paused time comes off the clock, and everything picks up where it was.
+    func resume() {
+        guard let wid = workoutId, var r = pauses[wid], let p = r.pausedAt else { return }
+        r.total += max(0, Date().timeIntervalSince(p))
+        r.pausedAt = nil
+        r.saved = false
+        let left = r.restLeft
+        r.restLeft = nil
+        pauses[wid] = r
+        savePauses()
+        WatchBridge.shared.sendEvent(["sessionResume": true])
+        if !WatchBridge.shared.watchSessionLive { watchLaunchedFor = nil }   // it ended while paused: start a new one
+        UIApplication.shared.isIdleTimerDisabled = UserDefaults.standard.object(forKey: "bst_keep_awake") as? Bool ?? true
+        touch()
+        begin(workoutId: wid)
+        if let left, left > 2 { startRest(left) }
+        if logNeeded { scheduleAutoLog() }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        push(now: true)
+    }
+
+    /// Save for later: paused, with every logged set kept, and closed. It waits on Home and the
+    /// Workouts tab (Resume workout). The Watch's workout so far goes to Apple Health.
+    func saveForLater(_ wid: String) {
+        guard let store, let w = store.workouts.first(where: { $0.id == wid }), !w.completed else { return }
+        var r = pauses[wid] ?? PauseRec()
+        if r.pausedAt == nil { r.pausedAt = Date() }
+        r.saved = true
+        r.restLeft = nil
+        pauses[wid] = r
+        savePauses()
+        if workoutId == wid { end(dismissal: .immediate) }
+        if store.activeWorkoutId == wid { store.activeWorkoutId = nil }
+        if store.sessionWorkoutId == wid { store.closeSession() }
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    /// Workouts tab ▸ Reopen: a finished workout back in progress, saved for later (paused), so you
+    /// resume when you're ready. The time since its last set doesn't count.
+    func markSavedForLater(_ wid: String, pausedSince: Date) {
+        var r = pauses[wid] ?? PauseRec()
+        r.pausedAt = pausedSince
+        r.saved = true
+        r.restLeft = nil
+        pauses[wid] = r
+        savePauses()
+    }
+
+    /// ✕ on a workout you only opened to look at (nothing logged): closes it untouched. If Start set
+    /// had already woken the Watch and the card, they close and nothing is saved to Health.
+    func closeUnstarted(_ wid: String) {
+        guard workoutId == wid else { return }
+        if activity != nil || watchLaunchedFor == wid || WatchBridge.shared.watchSessionLive {
+            WatchBridge.shared.sendEvent(["cardEnd": true, "endSession": true, "discard": true])
+            end(dismissal: .immediate)
+        } else {
+            SetVideoRecorder.shared.stopAll()
+            workoutId = nil
+            looking = false
+            setStart = nil; logNeeded = false
+            clearDone()
+            UserDefaults.standard.removeObject(forKey: savedKey)
+            revision &+= 1
+        }
+    }
+
+    func isPaused(_ wid: String) -> Bool { pauses[wid]?.pausedAt != nil }
+    func isSavedForLater(_ wid: String) -> Bool { pauses[wid]?.saved == true }
+
+    /// Finished, reset or gone: forget its pause.
+    func clearPause(_ wid: String) {
+        guard pauses[wid] != nil else { return }
+        pauses[wid] = nil
+        savePauses()
+    }
+
+    /// The clock for a workout: not started (nothing logged), running since a date (paused time
+    /// already taken off), or paused at an elapsed time.
+    func clock(_ w: Workout) -> SessionClock {
+        guard w.exercises.contains(where: { $0.sets.contains { $0.loggedReps != nil } }) else { return .notStarted }
+        let start = sessionStart(w)
+        if let p = pauses[w.id]?.pausedAt { return .paused(max(0, p.timeIntervalSince(start))) }
+        return .running(start)
+    }
+
+    private static let pausesKey = "bst_pauses"
+    nonisolated private static func loadPauses() -> [String: PauseRec] {
+        guard let d = UserDefaults.standard.data(forKey: pausesKey),
+              let m = try? JSONDecoder().decode([String: PauseRec].self, from: d) else { return [:] }
+        return m
+    }
+    private func savePauses() {
+        if let d = try? JSONEncoder().encode(pauses) { UserDefaults.standard.set(d, forKey: Self.pausesKey) }
     }
 
     // MARK: Settings changed mid-workout
@@ -1201,7 +1396,7 @@ final class LiveSessionController: ObservableObject {
     private var cardTask: Task<Void, Never>?
 
     private func scheduleCardToWatch(now: Bool) {
-        guard workoutId != nil else { return }
+        guard let wid = workoutId, !looking, pauses[wid]?.pausedAt == nil else { return }
         cardTask?.cancel()
         cardTask = Task { [weak self] in
             if !now { try? await Task.sleep(nanoseconds: 400_000_000) }
@@ -1231,7 +1426,8 @@ final class LiveSessionController: ObservableObject {
     }
 
     private func watchCardParts() -> (Data, [String: Any])? {
-        guard workoutId != nil, let s = makeState(), let data = try? JSONEncoder().encode(s) else { return nil }
+        guard let wid = workoutId, !looking, pauses[wid]?.pausedAt == nil,
+              let s = makeState(), let data = try? JSONEncoder().encode(s) else { return nil }
         var extras: [String: Any] = ["cardDemo": isDemo, "cardStep": displayStep,
                                      "cardWarn": NotifPrefs.shared.s.restWarning]
         if let note = coachNoteForWatch() { extras["cardNote"] = note }
@@ -1723,10 +1919,12 @@ final class LiveSessionController: ObservableObject {
     var watchConnected: Bool { isDemo ? workoutId != nil : WatchBridge.shared.watchSessionLive }
     var heartMax: Int { maxHR }
     var currentHeartRate: Int? { liveHR() }
-    /// When the workout clock started: the first logged set, or when the workout was opened.
+    /// When the workout clock started: the first logged set (Oct 27, 2026: opening a workout doesn't
+    /// start it — before a set is logged, the set you started), moved on by any time spent paused.
     func sessionStart(_ w: Workout) -> Date {
         let first = w.exercises.flatMap { $0.sets }.compactMap { $0.loggedAt }.min()
-        return min(first ?? openedAt, openedAt)
+            ?? (w.id == workoutId ? setStart : nil) ?? Date()
+        return first.addingTimeInterval(pauses[w.id]?.total ?? 0)
     }
     /// The last logged set in this workout that has Watch data.
     func lastSetMotion(_ w: Workout) -> (Exercise, ExerciseSet, Int, SetMotion)? { lastMotion(w) }
@@ -1802,3 +2000,20 @@ private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
+
+// MARK: - Pause record (Oct 27, 2026)
+
+/// A paused or saved-for-later workout. `total`: seconds already spent paused (off the clock).
+nonisolated struct PauseRec: Codable, Equatable {
+    var pausedAt: Date? = nil
+    var total: Double = 0
+    var saved = false
+    var restLeft: Int? = nil
+}
+
+/// What the workout clock shows.
+nonisolated enum SessionClock: Equatable {
+    case notStarted
+    case running(Date)
+    case paused(TimeInterval)
+}

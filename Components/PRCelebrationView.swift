@@ -4,41 +4,53 @@ import SwiftUI
 // Shown when a logged set earns a personal record that clears the throttle in
 // ProgressEngine (main lift, meaningful gain, once per lift per week, not a typo).
 // It offers — never forces — a photo share, and can be dismissed.
+// Oct 28, 2026: the full treatment (confetti, glowing badge, success buzz) in your accent
+// and light / dark mode, like Award unlocked (Celebration.swift).
 
 struct PRCelebrationView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let pr: PersonalRecord
 
+    @State private var contentIn = false
+
     var body: some View {
-        VStack(spacing: 18) {
-            Capsule().fill(BrandDark.line).frame(width: 40, height: 5).padding(.top, 10)
+        VStack(spacing: 12) {
+            Capsule().fill(Brand.line).frame(width: 40, height: 5).padding(.top, 10)
 
-            Image(systemName: "trophy.fill")
-                .font(.system(size: 44))
-                .foregroundColor(BrandDark.volt)
-                .padding(.top, 6)
+            CelebrationBadge(size: 96, box: 200) {
+                Image(systemName: "trophy.fill").font(.system(size: 42, weight: .bold))
+            }
 
-            Text(pr.isFirstEver ? "First Record" : "New PR")
-                .font(BrandFont.display(38))
-                .foregroundColor(.white)
+            VStack(spacing: 10) {
+                Text(pr.isFirstEver ? "FIRST RECORD ON THE BOOKS" : "NEW PERSONAL RECORD")
+                    .font(BrandFont.body(11, .bold)).tracking(3)
+                    .foregroundColor(Brand.voltText)
 
-            Text(pr.exercise.uppercased())
-                .font(BrandFont.body(12, .bold)).tracking(1.5)
-                .foregroundColor(BrandDark.volt)
+                Text(pr.isFirstEver ? "First Record" : "New PR")
+                    .font(BrandFont.display(40))
+                    .foregroundColor(Brand.text)
 
-            Text("\(pr.reps) × \(Int(pr.weight)) lb")
-                .font(BrandFont.display(46))
-                .foregroundColor(BrandDark.volt)
+                Text(pr.exercise.uppercased())
+                    .font(BrandFont.body(12, .bold)).tracking(1.5)
+                    .foregroundColor(Brand.voltText)
 
-            VStack(spacing: 4) {
-                Text("\(Int(pr.estimatedOneRepMax)) lb estimated 1RM")
-                    .font(BrandFont.body(14)).foregroundColor(.white)
-                if !pr.isFirstEver {
-                    Text("+\(Int(pr.gain)) lb on your previous best")
-                        .font(BrandFont.body(13, .bold)).foregroundColor(BrandDark.volt)
+                Text("\(pr.reps) × \(Int(pr.weight)) lb")
+                    .font(BrandFont.display(46))
+                    .foregroundColor(Brand.voltText)
+
+                VStack(spacing: 4) {
+                    Text("\(Int(pr.estimatedOneRepMax)) lb estimated 1RM")
+                        .font(BrandFont.body(14)).foregroundColor(Brand.text)
+                    if !pr.isFirstEver {
+                        Text("+\(Int(pr.gain)) lb on your previous best")
+                            .font(BrandFont.body(13, .bold)).foregroundColor(Brand.voltText)
+                    }
                 }
             }
+            .opacity(contentIn ? 1 : 0)
+            .offset(y: contentIn ? 0 : 14)
 
             Spacer(minLength: 8)
 
@@ -54,19 +66,28 @@ struct PRCelebrationView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
-                    .background(BrandDark.volt)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .foregroundColor(BrandDark.black)
+                    .background(Brand.volt)
+                    .clipShape(Capsule())
+                    .foregroundColor(Brand.onVolt)
                 }
 
                 Button("Not now") { dismiss() }
                     .font(BrandFont.body(14))
-                    .foregroundColor(BrandDark.mute)
+                    .foregroundColor(Brand.mute)
                     .padding(.bottom, 8)
             }
+            .opacity(contentIn ? 1 : 0)
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(BrandDark.bg)
+        .background {
+            // Confetti behind everything, falling through the whole card.
+            CelebrationConfetti(pieces: 80, loop: true).clipped()
+        }
+        .background(Brand.bg)
+        .onAppear {
+            if reduceMotion { contentIn = true; return }
+            withAnimation(.easeOut(duration: 0.45).delay(0.3)) { contentIn = true }
+        }
     }
 }

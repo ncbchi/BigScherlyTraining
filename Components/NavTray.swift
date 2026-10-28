@@ -13,23 +13,29 @@ struct FloatingMenuButton: View {
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 5) {
                     ForEach(0..<3) { _ in
-                        Capsule().fill(Brand.voltText).frame(width: 26, height: 3)
+                        Capsule().fill(Brand.onVolt).frame(width: 24, height: 3)
                     }
                 }
-                .padding(10)
-                // Solid backing with a hairline edge: content scrolling under the button
-                // is cleanly covered, not smeared through a translucent square.
-                .background(RoundedRectangle(cornerRadius: 10).fill(Brand.bg))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.line, lineWidth: 1))
+                .frame(width: 60, height: 60)    // bigger than the other round buttons: it matters most
+                // Filled with the accent you picked (Settings ▸ Appearance), bars in the colour
+                // that reads on it. Solid, so content scrolling under it is cleanly covered.
+                .background(Circle().fill(Brand.volt).shadow(color: Color.black.opacity(0.18), radius: 9, x: 0, y: 4))
+                .contentShape(Circle())
 
+                // Unread: a dot in the text colour (an accent dot would vanish on the accent).
                 if store.unreadMessages > 0 || !store.liveAnnouncements.isEmpty {
-                    Circle().fill(Brand.volt).frame(width: 9, height: 9)
+                    Circle().fill(Brand.text).frame(width: 12, height: 12)
                         .overlay(Circle().stroke(Brand.bg, lineWidth: 2))
-                        .offset(x: 3, y: -3)
+                        .offset(x: -4, y: 4)
                 }
             }
         }
         .accessibilityLabel("Menu")
+        // Photos tucks it away while you scroll down, back as soon as you scroll up.
+        .opacity(store.menuButtonTucked && !store.showTray ? 0 : 1)
+        .offset(y: store.menuButtonTucked && !store.showTray ? -40 : 0)
+        .allowsHitTesting(!store.menuButtonTucked || store.showTray)
+        .animation(.easeInOut(duration: 0.22), value: store.menuButtonTucked)
     }
 }
 

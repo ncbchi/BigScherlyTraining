@@ -139,8 +139,9 @@ extension APIClient {
     }
 
     /// An announcement to some clients only (server 2.3.0). `clientIds` nil = everyone.
-    func createAnnouncement(title: String, body: String, publishAt: Date?, clientIds: [String]?, audienceLabel: String?) async throws {
-        var payload: [String: Any] = ["title": title, "body": body]
+    /// `push` false (server 2.7.1): it shows on their Home without a notification. Older servers ignore it and push.
+    func createAnnouncement(title: String, body: String, publishAt: Date?, clientIds: [String]?, audienceLabel: String?, push: Bool = true) async throws {
+        var payload: [String: Any] = ["title": title, "body": body, "push": push]
         if let publishAt { payload["publishAt"] = ISO8601DateFormatter().string(from: publishAt) }
         if let clientIds { payload["clientIds"] = clientIds }
         if let audienceLabel { payload["audienceLabel"] = audienceLabel }

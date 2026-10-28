@@ -2,7 +2,8 @@ import SwiftUI
 import Charts
 
 // MARK: - Workouts list
-// Completed sits above (scroll up to reach it); the screen lands on Upcoming.
+// Completed sits above (scroll up to reach it); the screen lands on the plan. Both are grouped by
+// week (Oct 23, 2026 — see WorkoutWeeks.swift); swipe a planned workout for Move · Skip · Mark done.
 // Today's workout is highlighted. Open a planned workout → the live session
 // screen; open a completed one → its summary with Apple Health vitals.
 struct WorkoutsView: View {
@@ -16,9 +17,40 @@ struct WorkoutsView: View {
     // once a day rather than every time this tab is opened. Survives app restarts.
     @AppStorage("lastPreWorkoutPromptDay") private var lastPreWorkoutPromptDay = ""
 
+    // By week (Oct 23, 2026): which weeks and days are open, the swiped row, the sheets.
+    @State private var openWeeks: Set<Date> = []
+    @State private var openDays: Set<Date> = []
+    @State private var openDoneWeeks: Set<Date> = []
+    @State private var openDoneDays: Set<Date> = []
+    @State private var swipeOpen: String?
+    @State private var markingDone: Workout?
+    @State private var moving: Workout?
+    @State private var resetting: Workout?          // a finished workout ▸ Reset (asks first)
+    @State private var copying: Workout?            // ▸ Copy to another day
+    @State private var notFinishedOnly = false
+    @State private var didSetDefaults = false
+    @ObservedObject private var actions = WorkoutActions.shared
+
+    private let cal = Calendar.training
+
     static func dayKey(_ d: Date) -> String {
         let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
         return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
+    // MARK: Lists
+
+    private var order: [String: Int] {
+        Dictionary(store.workouts.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+    /// Finished or skipped: the Completed section.
+    private var doneList: [Workout] { store.workouts.filter { $0.completed || $0.skipped == true } }
+    /// Still to do (past ones not finished included): the plan.
+    private var planList: [Workout] { store.upcomingWorkouts }
+    private var overdue: [Workout] { planList.filter { $0.date < cal.startOfDay(for: Date()) } }
+    private var doneWeeks: [TrainingWeekGroup] { WorkoutWeeks.group(doneList, order: order) }
+    private var planWeeks: [TrainingWeekGroup] {
+        WorkoutWeeks.group(notFinishedOnly ? overdue : planList, order: order)
     }
 
     var body: some View {
@@ -26,29 +58,31 @@ struct WorkoutsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: "COMPLETED", subtitle: "\(store.pastWorkouts.count) sessions")
-                    ForEach(store.pastWorkouts.reversed()) { w in completedRow(w) }
-                    if store.pastWorkouts.isEmpty {
+                    if doneList.isEmpty {
                         Text("No completed workouts yet.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
                             .padding(.vertical, 10)
                     }
+                    weekList(doneWeeks, done: true)
 
                     // This is where the screen lands.
                     DSScreenHeader(eyebrow: "Training", title: "Workouts")
                         .padding(.top, 28)
                         .id("upcoming")
+                    Text(planSummary).font(BrandFont.body(13.5)).foregroundColor(Brand.mute)
+                        .padding(.top, -6)
                     // A coach programs himself, same builder he uses for clients.
                     if store.isTrainer, store.selfClientId != nil {
                         Button { building = true } label: { Label("Plan a workout", systemImage: "plus") }
                             .buttonStyle(DSButtonStyle(kind: .secondary))
                     }
-                    DSSectionHeader(title: "UPCOMING", subtitle: store.upcomingWorkouts.isEmpty ? nil : "\(store.upcomingWorkouts.count) planned")
-                    ForEach(store.upcomingWorkouts) { w in upcomingRow(w) }
-                    if store.upcomingWorkouts.isEmpty {
+                    if !overdue.isEmpty { filterChips }
+                    weekList(planWeeks, done: false)
+                    if planList.isEmpty {
                         Text("Nothing scheduled yet — check back soon.").font(BrandFont.body(13)).foregroundColor(Brand.mute)
                             .padding(.vertical, 10)
                     }
                 }
-                .padding(.top, 52).padding(.horizontal, 20).padding(.bottom, 30)
+                .padding(.top, 52).padding(.horizontal, 16).padding(.bottom, 90)
             }
             .background(Brand.bg.ignoresSafeArea())
             .dsTopFade()
@@ -58,6 +92,7 @@ struct WorkoutsView: View {
                 }
             }
             .onAppear {
+                setDefaults()
                 DispatchQueue.main.async {
                     withAnimation(.none) { proxy.scrollTo("upcoming", anchor: .top) }
                 }
@@ -75,7 +110,26 @@ struct WorkoutsView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) { WorkoutActionToast() }
         .sheet(item: $selected) { w in WorkoutDetailView(workout: w) }
+        .sheet(item: $markingDone) { w in
+            MarkDoneSheet(workout: w) { asPlanned in
+                if asPlanned { actions.markDoneAsPlanned(w.id) } else { actions.markDone(w.id) }
+            }
+            .sheetFitsContent()
+        }
+        .sheet(item: $moving) { w in
+            MoveWorkoutSheet(workout: w) { day in actions.move(w.id, to: day) }
+                .sheetFitsContent()
+        }
+        .sheet(item: $resetting) { w in
+            ResetWorkoutSheet(workout: w) { actions.resetWorkout(w.id) }
+                .sheetFitsContent()
+        }
+        .sheet(item: $copying) { w in
+            CopyWorkoutSheet(workout: w) { day in actions.copyWorkout(w.id, to: day) }
+                .sheetFitsContent()
+        }
         .sheet(isPresented: $showPreWorkoutPrompt) {
             PreWorkoutSupplementPrompt(supplements: preWorkoutDue)
         }
@@ -84,73 +138,181 @@ struct WorkoutsView: View {
                              set: { store.prToCelebrate = $0 })) { pr in PRCelebrationView(pr: pr).sheetFitsContent() }
     }
 
-    // MARK: Rows
-
-    private func upcomingRow(_ w: Workout) -> some View {
-        let cal = Calendar.current
-        let isToday = cal.isDateInToday(w.date)
-        let sets = w.exercises.reduce(0) { $0 + $1.sets.count }
-        let logged = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
-        return Button { store.openSession(w.id) } label: {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(spacing: 0) {
-                    Text(w.date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
-                        .font(BrandFont.body(10, .heavy)).tracking(1)
-                    Text("\(cal.component(.day, from: w.date))").font(BrandFont.display(28))
-                }
-                .foregroundColor(isToday ? Brand.onVolt : Brand.text)
-                .frame(width: 54, height: 62)
-                .background(RoundedRectangle(cornerRadius: 14).fill(isToday ? Brand.volt : Brand.text.opacity(0.06)))
-
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        if isToday { DSChip(text: "Today", color: Brand.volt, filled: true) }
-                        if logged > 0 { DSChip(text: "In progress · \(logged)/\(sets)", icon: "play.fill") }
-                    }
-                    Text(w.title).font(BrandFont.display(22)).foregroundColor(Brand.text).multilineTextAlignment(.leading)
-                    Text(w.exerciseSummary).font(BrandFont.body(12)).foregroundColor(Brand.mute)
-                        .lineLimit(2).multilineTextAlignment(.leading)
-                    Text("\(w.exercises.count) exercises · \(sets) sets").font(BrandFont.body(11, .semibold)).foregroundColor(Brand.mute)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(Brand.mute)
-                    .padding(.top, 4)
-            }
-            .padding(14)
-            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(isToday ? Brand.voltLine.opacity(0.6) : Brand.line, lineWidth: isToday ? 1.5 : 1))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressableStyle())
+    private var planSummary: String {
+        let n = planList.count
+        return "\(n) planned" + (overdue.isEmpty ? "" : " · \(overdue.count) not finished from earlier")
     }
 
-    private func completedRow(_ w: Workout) -> some View {
-        let cal = Calendar.current
-        let volume = w.exercises.flatMap { $0.sets }.compactMap { s -> Double? in
-            guard let r = s.loggedReps, let wt = s.loggedWeight else { return nil }
-            return Double(r) * wt
-        }.reduce(0, +)
-        let sets = w.exercises.flatMap { $0.sets }.filter { $0.loggedReps != nil }.count
-        let prs = store.personalRecords.filter { cal.isDate($0.date, inSameDayAs: w.date) }.count
-        return Button { selected = w } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundColor(Brand.onVolt)
-                    .frame(width: 28, height: 28).background(Circle().fill(Brand.volt))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(w.title).font(BrandFont.body(14, .bold)).foregroundColor(Brand.text).lineLimit(1)
-                    Text("\(w.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())) · \(sets) sets · \(StatsUnits.weightText(volume))")
-                        .font(BrandFont.body(11)).foregroundColor(Brand.mute).lineLimit(1)
-                }
-                Spacer()
-                if prs > 0 { DSChip(text: prs == 1 ? "PR" : "\(prs) PRs", icon: "trophy.fill") }
-                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundColor(Brand.mute)
-            }
-            .padding(12)
-            .background(Brand.black).clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, lineWidth: 1))
-            .contentShape(Rectangle())
+    private var filterChips: some View {
+        HStack(spacing: 8) {
+            chip("All", on: !notFinishedOnly) { notFinishedOnly = false }
+            chip("Not finished · \(overdue.count)", on: notFinishedOnly) { notFinishedOnly = true }
         }
-        .buttonStyle(PressableStyle())
+    }
+
+    private func chip(_ t: String, on: Bool, _ tap: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(WorkoutActions.spring) { tap() }
+            UISelectionFeedbackGenerator().selectionChanged()
+        } label: {
+            Text(t).font(BrandFont.body(13, .bold))
+                .foregroundColor(on ? Brand.onVolt : Brand.text)
+                .padding(.horizontal, 13).frame(height: 32)
+                .background(Capsule().fill(on ? Brand.volt : Brand.card))
+                .overlay(Capsule().stroke(on ? Color.clear : Brand.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Weeks and days
+
+    @ViewBuilder
+    private func weekList(_ weeks: [TrainingWeekGroup], done: Bool) -> some View {
+        ForEach(Array(weeks.enumerated()), id: \.element.id) { i, wk in
+            if i == 0 || WorkoutWeeks.monthLabel(weeks[i - 1].start) != WorkoutWeeks.monthLabel(wk.start) {
+                monthDivider(WorkoutWeeks.monthLabel(wk.start))
+            }
+            weekCard(wk, done: done)
+        }
+    }
+
+    private func monthDivider(_ t: String) -> some View {
+        HStack(spacing: 10) {
+            Text(t).font(BrandFont.body(11, .heavy)).tracking(1.6).foregroundColor(Brand.mute)
+            Rectangle().fill(Brand.line).frame(height: 1)
+        }
+        .padding(.top, 6).padding(.horizontal, 2)
+    }
+
+    private func weekCard(_ wk: TrainingWeekGroup, done: Bool) -> some View {
+        let all = store.workouts.filter { cal.isSameTrainingWeek($0.date, wk.start) }
+        let isOpen = done ? openDoneWeeks.contains(wk.start) : openWeeks.contains(wk.start)
+        let thisWeek = WorkoutWeeks.isThisWeek(wk.start)
+        let today = cal.startOfDay(for: Date())
+        let leftOver = wk.workouts.filter { $0.date < today }.count
+        let badge: String? = (!done && !thisWeek && leftOver > 0) ? "\(leftOver) not finished" : nil
+        return WorkoutWeekCard(week: wk, allInWeek: done ? wk.workouts : all, open: isOpen, badge: badge,
+                               subtitle: done ? doneSubtitle(wk) : planSubtitle(wk, all: all),
+                               toggle: { toggleWeek(wk.start, done: done) }) {
+            ForEach(Array(wk.days.enumerated()), id: \.element.id) { j, d in
+                if j > 0 { Rectangle().fill(Brand.line).frame(height: 1).padding(.leading, 76) }
+                dayRow(d, done: done)
+            }
+        }
+    }
+
+    private func planSubtitle(_ wk: TrainingWeekGroup, all: [Workout]) -> String {
+        let doneN = all.filter { $0.completed }.count
+        let days = Set(all.map { cal.startOfDay(for: $0.date) }).count
+        if WorkoutWeeks.isThisWeek(wk.start) {
+            return "\(doneN) of \(all.count) done · today is \(Date().formatted(.dateTime.weekday(.wide)))"
+        }
+        if doneN == 0 && wk.start > Date() {
+            return "\(all.count) workout\(all.count == 1 ? "" : "s") · \(days) day\(days == 1 ? "" : "s")"
+        }
+        return "\(doneN) of \(all.count) done"
+    }
+
+    private func doneSubtitle(_ wk: TrainingWeekGroup) -> String {
+        let finished = wk.workouts.filter { $0.completed }
+        let skipped = wk.workouts.count - finished.count
+        let volume = finished.flatMap { $0.exercises.flatMap { $0.sets } }.compactMap { s -> Double? in
+            guard let r = s.loggedReps, let w = s.loggedWeight else { return nil }
+            return Double(r) * w
+        }.reduce(0, +)
+        var parts = ["\(finished.count) done"]
+        if skipped > 0 { parts.append("\(skipped) skipped") }
+        if volume > 0 { parts.append(StatsUnits.weightText(volume)) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func dayRow(_ d: TrainingDayGroup, done: Bool) -> some View {
+        let allThatDay = done ? d.workouts : store.workouts.filter { cal.isDate($0.date, inSameDayAs: d.day) }
+        let isOpen = done ? openDoneDays.contains(d.day) : openDays.contains(d.day)
+        return WorkoutDayRow(day: d, allThatDay: allThatDay, open: isOpen, toggle: { toggleDay(d.day, done: done) }) {
+            ForEach(Array(d.workouts.enumerated()), id: \.element.id) { k, w in
+                if k > 0 { Rectangle().fill(Brand.line).frame(height: 1).padding(.leading, 52) }
+                if done {
+                    doneSwipeRow(w)
+                } else {
+                    swipeRow(w)
+                }
+            }
+        }
+    }
+
+    private func swipeRow(_ w: Workout) -> some View {
+        SwipeRevealRow(id: w.id, openId: $swipeOpen, actions: [
+            SwipeAction(id: "move", title: "Move", icon: "calendar", fill: Brand.card, ink: Brand.voltText, stroke: Brand.voltLine) { moving = w },
+            SwipeAction(id: "skip", title: "Skip", icon: "forward.fill", fill: Brand.card, ink: Brand.voltText, stroke: Brand.voltLine) { actions.skip(w.id) },
+            SwipeAction(id: "done", title: "Mark done", icon: "checkmark", fill: Brand.volt, ink: Brand.onVolt) { requestDone(w) }
+        ], onTap: { store.openSession(w.id) }) {
+            PlannedWorkoutRow(workout: w)
+        }
+    }
+
+    /// A finished (or skipped) workout, swiped left (Oct 27, 2026): Reopen · Reset · Copy to another day.
+    private func doneSwipeRow(_ w: Workout) -> some View {
+        var acts = [SwipeAction(id: "reopen", title: "Reopen", icon: "arrow.uturn.backward", fill: Brand.volt, ink: Brand.onVolt) {
+            actions.reopenFinished(w.id)
+        }]
+        if w.completed {
+            acts.append(SwipeAction(id: "reset", title: "Reset", icon: "arrow.counterclockwise",
+                                    fill: Brand.card, ink: Brand.danger, stroke: Brand.danger) { resetting = w })
+        }
+        acts.append(SwipeAction(id: "copy", title: "Copy to another day", icon: "doc.on.doc",
+                                fill: Brand.card, ink: Brand.voltText, stroke: Brand.voltLine) { copying = w })
+        return SwipeRevealRow(id: "done-" + w.id, openId: $swipeOpen, actions: acts,
+                              onTap: { if w.completed { selected = w } }) {
+            DoneWorkoutRow(workout: w, prs: prCount(w))
+        }
+    }
+
+    /// Unlogged sets: ask how to finish it. Everything logged: straight to done.
+    private func requestDone(_ w: Workout) {
+        let unlogged = w.exercises.flatMap { $0.sets }.contains { $0.loggedReps == nil }
+        if unlogged { markingDone = w } else { actions.markDone(w.id) }
+    }
+
+    private func prCount(_ w: Workout) -> Int {
+        store.personalRecords.filter { cal.isDate($0.date, inSameDayAs: w.date) }.count
+    }
+
+    private func toggleWeek(_ start: Date, done: Bool) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(WorkoutActions.spring) {
+            if done {
+                if openDoneWeeks.contains(start) { openDoneWeeks.remove(start) } else { openDoneWeeks.insert(start) }
+            } else {
+                if openWeeks.contains(start) { openWeeks.remove(start) } else { openWeeks.insert(start) }
+            }
+            swipeOpen = nil
+        }
+    }
+
+    private func toggleDay(_ day: Date, done: Bool) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(WorkoutActions.spring) {
+            if done {
+                if openDoneDays.contains(day) { openDoneDays.remove(day) } else { openDoneDays.insert(day) }
+            } else {
+                if openDays.contains(day) { openDays.remove(day) } else { openDays.insert(day) }
+            }
+            swipeOpen = nil
+        }
+    }
+
+    /// First visit: this week open (or the next week with something planned), on today's day
+    /// (or the next day with a workout, else the last one before today).
+    private func setDefaults() {
+        guard !didSetDefaults else { return }
+        didSetDefaults = true
+        let weeks = WorkoutWeeks.group(planList, order: order)
+        let thisWeek = cal.trainingWeekStart(Date())
+        guard let wk = weeks.first(where: { $0.start == thisWeek }) ?? weeks.first(where: { $0.start > thisWeek }) else { return }
+        openWeeks.insert(wk.start)
+        let today = cal.startOfDay(for: Date())
+        if let d = wk.days.first(where: { $0.day >= today }) ?? wk.days.last { openDays.insert(d.day) }
     }
 }
 

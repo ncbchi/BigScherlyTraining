@@ -5,8 +5,8 @@ import Combine
 //
 // A board of programs with who's on each and how far along they are, a "which programs work"
 // table across everyone who has run them (sessions done, PRs a month, effort drift), and the
-// automatic increases the progression engine made this week, each with Undo. Building and editing
-// a program stays on the web, where blocks × days × sets fit; here you assign, check and fix.
+// automatic increases the progression engine made this week, each with Undo. Oct 15, 2026: programs are
+// built and edited here too (New program, Edit, Duplicate, Delete · PadProgramEditor.swift).
 // Synchronized folder: no target step needed.
 
 struct PadProgramsView: View {
@@ -20,6 +20,14 @@ struct PadProgramsView: View {
     @State private var stats: [String: ProgramStats] = [:]      // by program id
     @State private var open: APIProgramSummary?
     @State private var assign: AssignTarget?
+    @State private var editing: EditTarget?
+    @State private var deleting: APIProgramSummary?
+
+    /// The editor: an existing program, or a new one (id nil).
+    struct EditTarget: Identifiable {
+        let programId: String?
+        var id: String { programId ?? "new" }
+    }
 
     struct AssignTarget: Identifiable {
         let program: APIProgramSummary
@@ -58,6 +66,8 @@ struct PadProgramsView: View {
                     PadPageTop(title: "Programs", subtitle: subtitle, facts: PadFact.from(strip), notes: notes) {
                         Button { PadLibraryStore.shared.shelf = .programs; go(.library) } label: { Label("Results in Library", systemImage: "books.vertical") }
                             .buttonStyle(PadButtonStyle(kind: .outline))
+                        Button { editing = EditTarget(programId: nil) } label: { Label("New program", systemImage: "plus") }
+                            .buttonStyle(PadButtonStyle(kind: .primary))
                     }
             ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -80,6 +90,14 @@ struct PadProgramsView: View {
         .sheet(item: $open) { p in
             NavigationStack { CoachProgramDetailView(summary: p) { Task { await load() } } }
         }
+        .sheet(item: $editing) { t in
+            PadProgramEditor(programId: t.programId) { _ in Task { await load() } }
+                .environmentObject(store)
+        }
+        .confirmationDialog("Delete this program?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { p in
+            Button("Delete “\(p.name)”", role: .destructive) { delete(p) }
+        } message: { _ in Text("Anyone already on it keeps their sessions.") }
         .sheet(item: $assign) { t in
             AssignProgramSheet(programId: t.program.id, programName: t.program.name, preselected: t.clientId) {
                 Task { await data.refresh(roster: store.roster); await load() }
@@ -173,7 +191,9 @@ struct PadProgramsView: View {
                 LazyVGrid(columns: cols, spacing: 12) { ForEach(0..<4, id: \.self) { _ in PadSkeleton(height: 170) } }
             } else if programs.isEmpty {
                 PadPane(title: "No programs yet") {
-                    PadEmptyLine(text: "Build programs in Coach HQ on the web; they show here to assign and follow.")
+                    PadEmptyLine(text: "Build your first: blocks, days, sets, and how each lift progresses.")
+                    Button { editing = EditTarget(programId: nil) } label: { Label("New program", systemImage: "plus") }
+                        .buttonStyle(PadButtonStyle(kind: .primary, small: true))
                 }
             } else {
                 LazyVGrid(columns: cols, alignment: .leading, spacing: 12) {
@@ -225,7 +245,20 @@ struct PadProgramsView: View {
                     Button("Assign") { assign = AssignTarget(program: p, clientId: nil) }
                         .buttonStyle(PadButtonStyle(kind: .outline, small: true))
                 }
-                Button("Open") { open = p }.buttonStyle(PadButtonStyle(kind: .quiet, small: true))
+                Button("Edit") { editing = EditTarget(programId: p.id) }.buttonStyle(PadButtonStyle(kind: .quiet, small: true))
+                Spacer(minLength: 0)
+                Menu {
+                    Button { editing = EditTarget(programId: p.id) } label: { Label("Edit", systemImage: "pencil") }
+                    Button { open = p } label: { Label("Open the plan", systemImage: "doc.text.magnifyingglass") }
+                    Button { duplicate(p) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                    Button { assign = AssignTarget(program: p, clientId: nil) } label: { Label("Assign", systemImage: "calendar.badge.plus") }
+                    Button(role: .destructive) { deleting = p } label: { Label("Delete", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).foregroundColor(Pad.text)
+                        .frame(width: 36, height: 36)
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Pad.line2, lineWidth: 1))
+                }
+                .accessibilityLabel("\(p.name) actions")
             }
         }
         .padding(14)
@@ -348,6 +381,20 @@ struct PadProgramsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func duplicate(_ p: APIProgramSummary) {
+        Task {
+            do { try await APIClient.shared.duplicateProgram(id: p.id); await load(); PadToasts.shared.show("Duplicated “\(p.name)”") }
+            catch { PadToasts.shared.show("Couldn't duplicate it. Try again.") }
+        }
+    }
+
+    private func delete(_ p: APIProgramSummary) {
+        Task {
+            do { try await APIClient.shared.deleteProgram(id: p.id); await load(); PadToasts.shared.show("Deleted “\(p.name)”") }
+            catch { PadToasts.shared.show((error as? APIClient.APIError)?.message ?? "Couldn't delete it.") }
         }
     }
 

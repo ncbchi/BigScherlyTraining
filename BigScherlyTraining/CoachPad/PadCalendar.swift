@@ -8,6 +8,11 @@ import UniformTypeIdentifiers
 // move it (the client is told; Undo in the toast). Tap one for Open, Move or Comment. Under the week,
 // next week's gaps only, each with a way to fill it. "Copy week forward" repeats this week's
 // one-off workouts into next week (program sessions come from the program).
+// Oct 15, 2026: Month view. A Week | Month switch in the bar (remembered). Month is a Monday-first
+// grid of the whole month, every client's sessions as small chips in the same done / missed / moved /
+// planned styling, three a day then "+N more" (a sheet of that day). Drag a chip to another day to
+// move it (same move and Undo as the week); tap one for the same Open, Move or Comment menu; tap a
+// date to see its week. The bar's facts count the month: planned, done, missed.
 // Synchronized folder: no target step needed.
 
 struct PadCalendarView: View {
@@ -24,6 +29,11 @@ struct PadCalendarView: View {
     @State private var confirmCopy = false
     @State private var copying = false
     @State private var copyOnly: RosterItem?
+    // Month view (Oct 15, 2026)
+    @AppStorage("bst_pad_cal_mode") private var mode: String = "week"     // "week" | "month"
+    @State private var monthStart: Date = Calendar.training.date(from: Calendar.training.dateComponents([.year, .month], from: Date())) ?? Calendar.training.startOfDay(for: Date())
+    @State private var dayList: DayList?
+    @State private var afterDay: (() -> Void)?        // runs once the day sheet has gone (Open, Comment, Move from it)
 
     private var cal: Calendar { Calendar.training }
     private var days: [Date] { (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: weekStart) } }
@@ -45,25 +55,44 @@ struct PadCalendarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+                if isMonth {
+                    PadPageTop(title: monthTitle, facts: PadFact.from(monthStrip)) {
+                        modeSeg
+                        monthSeg
+                        Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
+                    }
+                } else {
                     PadPageTop(title: "Week of \(weekStart.formatted(.dateTime.month(.wide).day()))", subtitle: "One row per client. Drag a session along its row to move it.", facts: PadFact.from(strip), notes: notes) {
+                        modeSeg
                         weekSeg
                         Button { copyOnly = nil; confirmCopy = true } label: { Label("Copy week forward", systemImage: "doc.on.doc") }
                             .buttonStyle(PadButtonStyle(kind: .outline))
                             .disabled(copying)
                         Button { newWorkout() } label: { Label("New workout", systemImage: "plus") }.buttonStyle(PadButtonStyle(kind: .primary))
                     }
+                }
             ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 14) {
-                    PadPane(title: "This week", aside: legendLine) {
-                        if sideBySide { grid } else { ScrollView(.horizontal, showsIndicators: true) { grid.frame(width: 1080) } }
+                    if isMonth {
+                        PadPane(title: monthPaneTitle, aside: "drag a session to another day · tap a date for its week") {
+                            if sideBySide { monthGrid } else { ScrollView(.horizontal, showsIndicators: true) { monthGrid.frame(width: 1080) } }
+                        }
+                    } else {
+                        PadPane(title: "This week", aside: legendLine) {
+                            if sideBySide { grid } else { ScrollView(.horizontal, showsIndicators: true) { grid.frame(width: 1080) } }
+                        }
+                        gapsPane
                     }
-                    gapsPane
                     legend
                 }
                 .padding(20)
             }
         }
+        }
+        .onChange(of: mode) { _, new in
+            // Switching to Month from a week lands on that week's month (its Thursday decides, as ISO weeks do).
+            if new == "month" { monthStart = startOfMonth(cal.date(byAdding: .day, value: 3, to: weekStart) ?? weekStart) }
         }
         .background(Pad.page.ignoresSafeArea())
         .refreshable { store.loadRoster(); await data.refresh(roster: store.roster) }
@@ -74,6 +103,13 @@ struct PadCalendarView: View {
         }
         .sheet(item: $builderFor) { c in
             WorkoutBuilderView(clientId: c.id, clientName: c.name) { Task { await data.refresh(roster: store.roster) } }
+        }
+        .sheet(item: $dayList, onDismiss: {
+            let f = afterDay
+            afterDay = nil
+            f?()
+        }) { d in
+            daySheet(d.day)
         }
         .confirmationDialog(copyTitle, isPresented: $confirmCopy, titleVisibility: .visible) {
             Button(copyButton) { copyForward(only: copyOnly) }
@@ -287,20 +323,7 @@ struct PadCalendarView: View {
         .opacity(moving.contains(s.id) ? 0.5 : 1)
 
         Menu {
-            Button { PadNav.shared.workoutId = s.id; PadOpen.client(s.clientId, .workouts, go: go) } label: {
-                Label("Open \(s.clientName.firstName)'s workouts", systemImage: "person")
-            }
-            if !s.isDone {
-                Menu {
-                    ForEach(days, id: \.self) { d in
-                        Button(d.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) { _ = move(s.id, to: d, clientId: s.clientId) }
-                            .disabled(cal.isDate(d, inSameDayAs: s.day))
-                    }
-                } label: { Label("Move to", systemImage: "arrow.left.arrow.right") }
-            }
-            if s.currentSetId != nil {
-                Button { commentFor = s } label: { Label("Comment on the last set", systemImage: "text.bubble") }
-            }
+            sessionActions(s, moveDays: days, inSheet: false)
         } label: {
             base
         }
@@ -309,6 +332,31 @@ struct PadCalendarView: View {
         .draggable(s.id) { base.frame(width: 130) }
         .disabled(moving.contains(s.id))
         .accessibilityLabel("\(s.clientName), \(s.title), \(st.sub)")
+    }
+
+    /// The tap menu on a session, shared by the week grid, the month grid and the month's day sheet.
+    /// From the day sheet, each action waits until the sheet has gone (so the comment sheet can open
+    /// and the Undo toast is seen).
+    @ViewBuilder
+    private func sessionActions(_ s: PadSession, moveDays: [Date], inSheet: Bool) -> some View {
+        Button { act(inSheet) { PadNav.shared.workoutId = s.id; PadOpen.client(s.clientId, .workouts, go: go) } } label: {
+            Label("Open \(s.clientName.firstName)'s workouts", systemImage: "person")
+        }
+        if !s.isDone {
+            Menu {
+                ForEach(moveDays, id: \.self) { d in
+                    Button(d.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) { act(inSheet) { _ = move(s.id, to: d, clientId: s.clientId) } }
+                        .disabled(cal.isDate(d, inSameDayAs: s.day))
+                }
+            } label: { Label("Move to", systemImage: "arrow.left.arrow.right") }
+        }
+        if s.currentSetId != nil {
+            Button { act(inSheet) { commentFor = s } } label: { Label("Comment on the last set", systemImage: "text.bubble") }
+        }
+    }
+
+    private func act(_ inSheet: Bool, _ f: @escaping () -> Void) {
+        if inSheet { afterDay = f; dayList = nil } else { f() }
     }
 
     private var legendLine: String { "tap for Open, Move or Comment" }
@@ -339,6 +387,12 @@ struct PadCalendarView: View {
         let from: Date          // first empty day
         let note: String
         var id: String { client.id }
+    }
+
+    /// The day whose sessions the month's "+N more" sheet lists.
+    struct DayList: Identifiable {
+        let day: Date
+        var id: Date { day }
     }
 
     private var gapRows: [GapRow] {
@@ -490,5 +544,272 @@ struct PadCalendarView: View {
             let missed = list.count - made
             PadToasts.shared.show(missed == 0 ? "Copied \(made.plural("workout")) into next week" : "Copied \(made); \(missed) didn't go. Try again.")
         }
+    }
+}
+
+// MARK: - Month view (Oct 15, 2026)
+//
+// Same file as the week so it shares the move, the chip styling and the tap menu.
+
+extension PadCalendarView {
+
+    private var isMonth: Bool { mode == "month" }
+    private var monthEnd: Date { cal.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart }
+    private var isThisMonth: Bool { cal.isDate(monthStart, equalTo: Date(), toGranularity: .month) }
+    private var monthTitle: String { monthStart.formatted(.dateTime.month(.wide).year()) }
+    private var monthPaneTitle: String { isThisMonth ? "This month" : monthStart.formatted(.dateTime.month(.wide)) }
+
+    private func startOfMonth(_ d: Date) -> Date {
+        cal.date(from: cal.dateComponents([.year, .month], from: d)) ?? cal.startOfDay(for: d)
+    }
+
+    /// Monday before (or on) the 1st, through the Sunday after the last day: whole weeks only.
+    private var gridDays: [Date] {
+        let start = cal.startOfWeek(for: monthStart)
+        let lead = cal.dateComponents([.day], from: start, to: monthStart).day ?? 0
+        let count = cal.range(of: .day, in: .month, for: monthStart)?.count ?? 30
+        let weeks = (lead + count + 6) / 7
+        return (0..<(weeks * 7)).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    /// The seven days of the week a date sits in (the Move to list from a month chip).
+    private func weekDays(of d: Date) -> [Date] {
+        let start = cal.startOfWeek(for: d)
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    private func shiftMonth(_ n: Int) {
+        withAnimation(.easeOut(duration: 0.15)) { monthStart = cal.date(byAdding: .month, value: n, to: monthStart) ?? monthStart }
+    }
+
+    /// Tap a date: that week, in Week view.
+    private func openWeek(_ d: Date) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            weekStart = cal.startOfWeek(for: d)
+            mode = "week"
+        }
+    }
+
+    // MARK: Bar
+
+    private var modeSeg: some View {
+        PadSeg(options: [(id: "week", label: "Week"), (id: "month", label: "Month")], selection: $mode)
+    }
+
+    private var monthSeg: some View {
+        HStack(spacing: 2) {
+            segButton("chevron.left", "Previous month") { shiftMonth(-1) }
+            Button("Today") { withAnimation(.easeOut(duration: 0.15)) { monthStart = startOfMonth(Date()) } }
+                .font(PadFont.ui(14, .semibold)).foregroundColor(isThisMonth ? Pad.text : Pad.mute)
+                .padding(.horizontal, 14).frame(height: 36)
+                .background(RoundedRectangle(cornerRadius: 8).fill(isThisMonth ? Pad.raised : Color.clear))
+                .hoverEffect(.highlight)
+                .keyboardShortcut("t", modifiers: [])
+            segButton("chevron.right", "Next month") { shiftMonth(1) }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 11).fill(Pad.well))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Pad.line2, lineWidth: 1))
+    }
+
+    /// Planned (still to do, including anyone lifting now), done and missed, in this month only.
+    private var monthStrip: [PadStat] {
+        let m = inRange(monthStart, monthEnd)
+        let planned = m.filter { $0.isPlanned || $0.isLive }.count
+        let done = m.filter { $0.isDone }.count
+        let missed = m.filter { $0.isMissed }
+        return [
+            PadStat(label: "Planned", value: "\(planned)"),
+            PadStat(label: "Done", value: "\(done)"),
+            PadStat(label: "Missed", value: "\(missed.count)", sub: missedNames(missed), warn: !missed.isEmpty),
+        ]
+    }
+
+    // MARK: Grid
+
+    private var monthGrid: some View {
+        let ds = gridDays
+        let first: Date = ds.first ?? monthStart
+        let end: Date = ds.last.flatMap { cal.date(byAdding: .day, value: 1, to: $0) } ?? monthEnd
+        let byDay: [Date: [PadSession]] = Dictionary(grouping: inRange(first, end), by: { cal.startOfDay(for: $0.day) })
+        let weeks: [[Date]] = stride(from: 0, to: ds.count, by: 7).map { Array(ds[$0..<min($0 + 7, ds.count)]) }
+        return VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(Array(ds.prefix(7)), id: \.self) { d in
+                    Text(d.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(PadFont.cond(13, .bold)).foregroundColor(Pad.faint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 2)
+                        .accessibilityHidden(true)
+                }
+            }
+            ForEach(weeks, id: \.self) { w in
+                HStack(alignment: .top, spacing: 6) {
+                    ForEach(w, id: \.self) { d in monthCell(d, byDay[cal.startOfDay(for: d)] ?? []) }
+                }
+                .fixedSize(horizontal: false, vertical: true)       // every cell in a week as tall as the tallest
+            }
+        }
+    }
+
+    private func monthCell(_ d: Date, _ ss: [PadSession]) -> some View {
+        let inMonth = cal.isDate(d, equalTo: monthStart, toGranularity: .month)
+        let today = cal.isDateInToday(d)
+        let k = "month|\(Int(d.timeIntervalSince1970))"
+        let targeted = target == k
+        let sorted: [PadSession] = ss.sorted { ($0.placeMinute, $0.clientName) < ($1.placeMinute, $1.clientName) }
+        let shown: [PadSession] = Array(sorted.prefix(3))
+        let more = sorted.count - shown.count
+        let dayName: String = d.formatted(.dateTime.weekday(.wide).month(.wide).day())
+        let a11y: String = dayName + (today ? ", today" : "") + ", " + (sorted.isEmpty ? "nothing planned" : sorted.count.plural("session"))
+        return VStack(alignment: .leading, spacing: 4) {
+            dayNumber(d, inMonth: inMonth, today: today, label: a11y)
+            ForEach(shown) { s in monthChip(s) }
+            if more > 0 {
+                Button { dayList = DayList(day: d) } label: {
+                    Text("+\(more) more").font(PadFont.cond(12, .bold)).foregroundColor(Pad.mute)
+                        .padding(.horizontal, 7)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+                .accessibilityLabel("\(more) more on \(dayName)")
+                .accessibilityHint("Lists every session that day")
+            }
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity, minHeight: 112, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(inMonth ? (today ? Pad.text.opacity(0.03) : Color.clear) : Pad.well))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(today ? Pad.voltText : Pad.line, lineWidth: today ? 1.5 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5])).foregroundColor(targeted ? Pad.line2 : Color.clear))
+        .opacity(inMonth ? 1 : 0.55)
+        .dropDestination(for: String.self) { ids, _ in
+            target = nil
+            guard let id = ids.first, let s = all.first(where: { $0.id == id }) else { return false }
+            return move(id, to: d, clientId: s.clientId)
+        } isTargeted: { on in
+            if on { target = k } else if target == k { target = nil }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// The date at the top of a cell; today in the accent (a fill, with on-accent text). Tap: that week.
+    private func dayNumber(_ d: Date, inMonth: Bool, today: Bool, label: String) -> some View {
+        let n = cal.component(.day, from: d)
+        return Button { openWeek(d) } label: {
+            HStack(spacing: 4) {
+                Text("\(n)").font(PadFont.ui(14, .bold))
+                    .foregroundColor(today ? Pad.onVolt : (inMonth ? Pad.text : Pad.faint))
+                    .frame(minWidth: 28, minHeight: 28)
+                    .background(Circle().fill(today ? Pad.volt : Color.clear))
+                if n == 1 {
+                    Text(d.formatted(.dateTime.month(.abbreviated))).font(PadFont.cond(12, .bold)).foregroundColor(Pad.faint)
+                }
+                if today {
+                    Text("Today").font(PadFont.cond(12, .bold)).foregroundColor(Pad.voltText)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 2)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(label)
+        .accessibilityHint("Shows that week")
+    }
+
+    /// A compact session: the client's initial in their accent, the title, and the status line,
+    /// styled exactly as in the week (done filled, missed orange, moved blue, planned outlined).
+    private func monthChip(_ s: PadSession) -> some View {
+        let st = style(s)
+        let base = HStack(spacing: 6) {
+            PadAvatar(name: s.clientName, size: 22, id: s.clientId)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(s.title).font(PadFont.cond(12, .bold)).foregroundColor(st.text).lineLimit(1)
+                Text(st.sub).font(PadFont.cond(11, .medium)).foregroundColor(st.text.opacity(0.8)).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(st.fill))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(st.stroke, lineWidth: 1.5))
+        .opacity(moving.contains(s.id) ? 0.5 : 1)
+
+        return Menu {
+            sessionActions(s, moveDays: weekDays(of: s.day), inSheet: false)
+        } label: {
+            base
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .draggable(s.id) { base.frame(width: 150) }
+        .disabled(moving.contains(s.id))
+        .accessibilityLabel("\(s.clientName), \(s.title), \(st.sub)")
+        .accessibilityHint("Open, move or comment. Drag to another day to move it.")
+    }
+
+    // MARK: "+N more": the whole day
+
+    private func daySheet(_ d: Date) -> some View {
+        let next = cal.date(byAdding: .day, value: 1, to: d) ?? d
+        let ss: [PadSession] = inRange(d, next).sorted { ($0.placeMinute, $0.clientName) < ($1.placeMinute, $1.clientName) }
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(d.formatted(.dateTime.weekday(.wide).month(.wide).day())).font(PadFont.display(28)).foregroundColor(Pad.text).lineLimit(1)
+                Spacer()
+                Button("Done") { dayList = nil }
+                    .font(PadFont.ui(15, .semibold)).foregroundColor(Pad.mute)
+                    .frame(minHeight: 44)
+                    .keyboardShortcut(.cancelAction)
+            }
+            PadLab("\(ss.count.plural("session")) · tap one for Open, Move or Comment")
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(ss) { s in dayRow(s) }
+                    if ss.isEmpty { PadEmptyLine(text: "Nothing on this day now.") }
+                }
+            }
+            HStack {
+                Spacer()
+                Button { act(true) { openWeek(d) } } label: { Label("Show this week", systemImage: "calendar") }
+                    .buttonStyle(PadButtonStyle(kind: .outline))
+            }
+        }
+        .padding(24)
+        .background(Pad.surface.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+    }
+
+    private func dayRow(_ s: PadSession) -> some View {
+        let st = style(s)
+        return Menu {
+            sessionActions(s, moveDays: weekDays(of: s.day), inSheet: true)
+        } label: {
+            HStack(spacing: 10) {
+                PadAvatar(name: s.clientName, size: 30, id: s.clientId)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(s.clientName).font(PadFont.ui(14, .semibold)).foregroundColor(Pad.text).lineLimit(1)
+                    Text(s.title).font(PadFont.cond(12)).foregroundColor(Pad.mute).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text(st.sub).font(PadFont.cond(12, .bold)).foregroundColor(st.text).lineLimit(1)
+                    .padding(.horizontal, 8).frame(height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(st.fill))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(st.stroke, lineWidth: 1.5))
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Pad.well))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .disabled(moving.contains(s.id))
+        .accessibilityLabel("\(s.clientName), \(s.title), \(st.sub)")
+        .accessibilityHint("Open, move or comment")
     }
 }

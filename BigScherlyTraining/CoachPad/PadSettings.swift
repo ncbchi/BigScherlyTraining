@@ -11,11 +11,12 @@ import Combine
 // Synchronized folder: no target step needed.
 
 enum PadSettingsPane: String, CaseIterable, Identifiable {
-    case replies, forms, risk, alerts, units, theme, layout, account, app
+    case replies, welcome, forms, risk, alerts, units, theme, layout, account, app
     var id: String { rawValue }
     var title: String {
         switch self {
         case .replies: return "Saved replies"
+        case .welcome: return "Welcome message"
         case .forms: return "Check-in forms"
         case .risk: return "Flight risk & renewals"
         case .alerts: return "Client alerts"
@@ -29,6 +30,7 @@ enum PadSettingsPane: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .replies: return "text.bubble"
+        case .welcome: return "hand.wave"
         case .forms: return "list.bullet.clipboard"
         case .risk: return "exclamationmark.triangle"
         case .alerts: return "bell.badge"
@@ -40,7 +42,7 @@ enum PadSettingsPane: String, CaseIterable, Identifiable {
         }
     }
     static let groups: [(name: String, items: [PadSettingsPane])] = [
-        ("Coaching", [.replies, .forms, .risk, .alerts]),
+        ("Coaching", [.replies, .welcome, .forms, .risk, .alerts]),
         ("Planning", [.units]),
         ("Look", [.theme, .layout]),
         ("You", [.account, .app]),
@@ -130,6 +132,12 @@ struct PadSettingsView: View {
     private var detail: some View {
         switch pane {
         case .replies: PadSavedRepliesPane()
+        case .welcome:
+            ScrollView {
+                PadPane(title: "Welcome message", aside: "your first message to each new client") { WelcomeMessageEditor() }
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .padding(20)
+            }
         case .forms: ScrollView { PadFormsPane().padding(20) }
         case .risk: ScrollView { PadRiskPane().padding(20) }
         case .alerts: ScrollView { PadAlertsPane().padding(20) }

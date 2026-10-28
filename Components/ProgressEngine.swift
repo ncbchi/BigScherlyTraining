@@ -86,7 +86,8 @@ enum ProgressEngine {
                        trainerTagged: Set<String> = [],
                        minGainLb: Double = 2.5,
                        cooldownDays: Int = 7,
-                       sanityJump: Double = 1.20) -> [PersonalRecord] {
+                       sanityJump: Double = 1.20,
+                       baseline: [String: (date: Date, e1RM: Double)] = [:]) -> [PersonalRecord] {
         guard workout.completed else { return [] }
         let cal = Calendar.current
         var found: [PersonalRecord] = []
@@ -101,7 +102,9 @@ enum ProgressEngine {
             }
             guard let top = candidates.max(by: { $0.e < $1.e }) else { continue }
 
-            let prior = bestOneRepMax(for: ex.name, workouts: allWorkouts, excludingWorkout: workout.id)
+            var prior = bestOneRepMax(for: ex.name, workouts: allWorkouts, excludingWorkout: workout.id)
+            // The client's starting point (Oct 26, 2026): from the day it was entered, a PR has to beat it.
+            if let b = baseline[ex.name], workout.date >= b.date { prior = max(prior, b.e1RM) }
 
             // Rule 2 — must be a meaningful improvement.
             guard top.e > prior + minGainLb else { continue }
@@ -124,11 +127,12 @@ enum ProgressEngine {
 
     /// All PRs across the client's history, honouring the same throttle. Used to
     /// backfill the trophy case the first time, and to keep it in sync.
-    static func allPRs(workouts: [Workout], trainerTagged: Set<String> = []) -> [PersonalRecord] {
+    static func allPRs(workouts: [Workout], trainerTagged: Set<String> = [],
+                       baseline: [String: (date: Date, e1RM: Double)] = [:]) -> [PersonalRecord] {
         var prs: [PersonalRecord] = []
         for w in workouts.filter({ $0.completed }).sorted(by: { $0.date < $1.date }) {
             prs.append(contentsOf: newPRs(in: w, allWorkouts: workouts,
-                                          existing: prs, trainerTagged: trainerTagged))
+                                          existing: prs, trainerTagged: trainerTagged, baseline: baseline))
         }
         return prs
     }

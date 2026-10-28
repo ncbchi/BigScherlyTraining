@@ -469,7 +469,12 @@ struct PadLibraryPrograms: View {
                 if !lib.loaded {
                     ForEach(0..<4, id: \.self) { _ in PadSkeleton(height: 64).padding(12) }
                 } else if list.isEmpty {
-                    PadEmptyLine(text: "No programs yet. Build them in Coach HQ on the web; they show here with their results.").padding(14)
+                    VStack(alignment: .leading, spacing: 8) {
+                        PadEmptyLine(text: "No programs yet. Build your first; it shows here with its results.")
+                        Button { actions.sheet(.programEditor(nil)) } label: { Label("New program", systemImage: "plus") }
+                            .buttonStyle(PadButtonStyle(kind: .primary, small: true))
+                    }
+                    .padding(14)
                 } else {
                     ForEach(list) { p in row(p) }
                 }
@@ -547,6 +552,8 @@ struct PadLibraryProgramPage: View {
             PadLab("\(program.weeks) weeks · \(program.daysPerWeek) days a week" + (deloadText.isEmpty ? "" : " · " + deloadText), size: 13).lineLimit(1)
             Spacer(minLength: 6)
             PadIconButton(systemName: "plus.square.on.square", label: "Duplicate", small: true) { duplicate() }
+            Button { actions.sheet(.programEditor(program.id)) } label: { Label("Edit", systemImage: "pencil") }
+                .buttonStyle(PadButtonStyle(kind: .outline, small: true))
             Button { actions.sheet(.programDetail(program)) } label: { Label("Open", systemImage: "doc.text.magnifyingglass") }
                 .buttonStyle(PadButtonStyle(kind: .outline, small: true))
             PadLibraryGiveMenu(item: .program(program.id))

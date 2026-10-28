@@ -46,6 +46,14 @@ final class SetMotionStore: ObservableObject {
         if sync { ServerSync.shared.mark(.motion(workoutId: motion.workoutId)) }
     }
 
+    /// Workouts tab ▸ Reset (Oct 27, 2026): a workout's sets are cleared, so their Watch data goes too.
+    /// The server drops its copy in the same reset.
+    func forget(workoutId: String) {
+        let before = bySet.count
+        bySet = bySet.filter { $0.value.workoutId != workoutId }
+        if bySet.count != before { save() }
+    }
+
     /// Wipe on logout so the next person on this phone never sees it.
     func reset() {
         bySet = [:]

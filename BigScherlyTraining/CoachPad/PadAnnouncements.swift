@@ -45,6 +45,8 @@ struct PadAnnouncementsView: View {
     /// Server 2.3.0: groups get real announcements, and reads are kept.
     @State private var v23 = false
     @State private var nudging: Nudge?
+    /// Send a push notification with it (server 2.7.1, Oct 15, 2026). Off = Home and Announcements only.
+    @State private var push = true
 
     struct Person: Identifiable {
         let id: String
@@ -263,6 +265,13 @@ struct PadAnnouncementsView: View {
             }
             TextField(asMessages ? "Title (optional, goes first in bold)" : "Title", text: $title).padInput()
             TextEditor(text: $text).scrollContentBackground(.hidden).frame(minHeight: 160).padInput(multiline: true)
+            if !asMessages {
+                Toggle(isOn: $push) { Text("Send a push notification").font(PadFont.ui(15)).foregroundColor(Pad.text) }
+                    .tint(Pad.volt)
+                if !push {
+                    PadLab("Off: it shows on their Home and in Announcements without a notification.", size: 12)
+                }
+            }
             if let failed { Text(failed).font(PadFont.ui(13)).foregroundColor(Pad.orange) }
             HStack(spacing: 10) {
                 Toggle("", isOn: $schedule).labelsHidden().tint(Pad.volt).disabled(asMessages)
@@ -408,6 +417,7 @@ struct PadAnnouncementsView: View {
         } else {
             audience = .everyone
         }
+        push = true
         PadToasts.shared.show("Copied into New announcement")
     }
 
@@ -459,6 +469,7 @@ struct PadAnnouncementsView: View {
         let at: Date? = schedule ? publishAt : nil
         let ids: [String]? = isGroup ? members(audience).map { $0.id } : nil
         let groupLabel: String? = isGroup ? audience.name : nil
+        let sendPush = push
         Task {
             do {
                 if ids != nil {
@@ -469,14 +480,14 @@ struct PadAnnouncementsView: View {
                         failed = "Your server isn't on 2.3.0, so a group can't get an announcement. It can go as messages instead."
                         return
                     }
-                    try await APIClient.shared.createAnnouncement(title: t, body: b, publishAt: at, clientIds: ids, audienceLabel: groupLabel)
+                    try await APIClient.shared.createAnnouncement(title: t, body: b, publishAt: at, clientIds: ids, audienceLabel: groupLabel, push: sendPush)
                 } else {
-                    try await APIClient.shared.createAnnouncement(title: t, body: b, publishAt: at)
+                    try await APIClient.shared.createAnnouncement(title: t, body: b, publishAt: at, push: sendPush)
                 }
                 sending = false
                 let whom: String = ids.map { $0.count == 1 ? "1 person's Home" : "\($0.count) people's Homes" } ?? "everyone's Home"
                 PadToasts.shared.show(at == nil ? "Posted to \(whom)" : "Scheduled for \(Self.when(at ?? Date()))")
-                title = ""; text = ""; schedule = false
+                title = ""; text = ""; schedule = false; push = true
                 await load()
             } catch {
                 sending = false

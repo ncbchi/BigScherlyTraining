@@ -5,6 +5,11 @@ import Foundation
 // Milestones derived from what the client actually did — completed workouts, logged
 // sets, and (privately) supplement adherence. Nothing is awarded for merely opening the app.
 //
+// FIRST WINS (Oct 26, 2026, Nick's call): First Session, Checked In and Wired Up, for the new
+// user Home. Wired Up (Apple Watch paired + Apple Health connected) is the one exception to the
+// rule above: it's setup, not training. It's still earned once, kept on this phone per account
+// (WiredUp in NewUserHome.swift), and synced like every other award.
+//
 // PRIVACY RULE — supplements never surface in an award's title, blurb, stats, or share
 // card. Adherence can gate an award internally (Perfect Week requires it), but the
 // client's protocol is nobody else's business: someone sharing a win should never be
@@ -32,6 +37,10 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
     // Effort
     case fullSend
     case comeback
+    // First wins (Oct 26, 2026)
+    case firstSession
+    case checkedIn
+    case wiredUp
 
     var id: String { rawValue }
 
@@ -54,6 +63,9 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         case .thousandPoundClub:  return "1,000 lb Club"
         case .fullSend:           return "Full Send"
         case .comeback:           return "Comeback"
+        case .firstSession:       return "First Session"
+        case .checkedIn:          return "Checked In"
+        case .wiredUp:            return "Wired Up"
         }
     }
 
@@ -77,6 +89,9 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         case .thousandPoundClub:  return "Squat, bench and deadlift now total over 1,000 lb. Four digits. Welcome to the club."
         case .fullSend:           return "Every prescribed set hit at or above target. No rep left behind — that's how it's done."
         case .comeback:           return "You came back — and that's the hardest set of all. So proud of you for showing up again."
+        case .firstSession:       return "Your first session is in the books. Everything from here builds on today."
+        case .checkedIn:          return "Your first check-in is with your coach. Now they can see the whole picture."
+        case .wiredUp:            return "Watch paired, Apple Health connected. Every rep and every heartbeat gets recorded from here on."
         }
     }
 
@@ -100,6 +115,9 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         case .thousandPoundClub:  return "Welcome to the club!"
         case .fullSend:           return "Full send!"
         case .comeback:           return "Welcome back!"
+        case .firstSession:       return "Day one, done!"
+        case .checkedIn:          return "Checked in!"
+        case .wiredUp:            return "All wired up!"
         }
     }
 
@@ -123,6 +141,9 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         case .thousandPoundClub:  return "Get your squat, bench and deadlift to total 1,000 lb (estimated 1RMs)."
         case .fullSend:           return "Hit every prescribed set at or above target in one workout."
         case .comeback:           return "Come back and train after 14+ days away. It counts — big time."
+        case .firstSession:       return "Finish your first workout."
+        case .checkedIn:          return "Send your coach your first check-in."
+        case .wiredUp:            return "Pair your Apple Watch and connect Apple Health."
         }
     }
 
@@ -141,6 +162,9 @@ enum AwardKind: String, Codable, CaseIterable, Identifiable {
         case .thousandPoundClub:                     return "medal.fill"
         case .fullSend:                              return "bolt.fill"
         case .comeback:                              return "arrow.uturn.up"
+        case .firstSession:                          return "play.fill"
+        case .checkedIn:                             return "list.clipboard"
+        case .wiredUp:                               return "applewatch"
         }
     }
 

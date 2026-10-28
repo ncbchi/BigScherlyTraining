@@ -28,8 +28,10 @@ struct SettingsView: View {
     @AppStorage(SetupEngine.remindKey) private var setupRemind = true
     @AppStorage(SetupEngine.cameraKey) private var setupCamera = true
     @ObservedObject private var push = PushCenter.shared
+    @ObservedObject private var tour = QuickStartTour.shared
     @State private var showNotifications = false
     @State private var showSavedReplies = false
+    @State private var showWelcome = false
     @State private var showCheckInForm = false
     @State private var showLockCard = false
     @State private var showCaptures = false
@@ -118,6 +120,7 @@ struct SettingsView: View {
                 preferences
                 workoutPrefs
                 watchSetup
+                tools
                 navigation
                 statsDefaults
                 about
@@ -148,6 +151,7 @@ struct SettingsView: View {
         .sheet(isPresented: $editingMenu) { MenuOrderEditor() }
         .sheet(isPresented: $showNotifications) { NotificationSettingsView().environmentObject(store) }
         .sheet(isPresented: $showSavedReplies) { SavedRepliesEditor().environmentObject(store) }
+        .sheet(isPresented: $showWelcome) { WelcomeMessageSheet() }
         .sheet(isPresented: $showCheckInForm) { CheckInFormsLibrary() }
         .sheet(isPresented: $showLockCard) { LockCardSettingsView() }
         .sheet(isPresented: $showCaptures) { MotionCapturesView().presentationBackground(Brand.bg) }
@@ -185,6 +189,9 @@ struct SettingsView: View {
             rowDivider
             coachRow("Saved replies", "\(store.savedReplies.count) one-tap phrases for chat and check-ins",
                      icon: "text.bubble.fill") { showSavedReplies = true }
+            rowDivider
+            coachRow("Welcome message", "Your first message to each new client",
+                     icon: "hand.wave.fill") { showWelcome = true }
             rowDivider
             coachRow("Check-in forms", "Your default form, plus forms for specific clients",
                      icon: "list.bullet.clipboard.fill") { showCheckInForm = true }
@@ -533,6 +540,43 @@ struct SettingsView: View {
 
     private static func rangeText(_ m: Double) -> String {
         StatsUnits.isKg ? "\(Int((m * 100).rounded())) cm" : "\(Int((m * 39.37).rounded())) in"
+    }
+
+    // MARK: Tools — the quick start tour and the plate calculator (Oct 15, 2026)
+
+    private var tools: some View {
+        let _ = tour.revision
+        return section("Tools") {
+            Button { tour.startFromSettings() } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "map").foregroundColor(Brand.voltText).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Quick start tour").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text(tour.settingsSubtitle).font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                    }
+                    Spacer()
+                    Text(tour.canResume ? "Resume" : "Start").font(BrandFont.body(13, .heavy)).foregroundColor(Brand.voltText)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            rowDivider
+            Button { PlateCalc.shared.open() } label: {
+                HStack(spacing: 12) {
+                    PlateMenuGlyph(bar: Brand.voltText).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Plate calculator").font(BrandFont.body(15)).foregroundColor(Brand.text)
+                        Text("Load the bar, or convert lb and kg").font(BrandFont.body(11)).foregroundColor(Brand.mute)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 13)).foregroundColor(Brand.mute)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: Workouts

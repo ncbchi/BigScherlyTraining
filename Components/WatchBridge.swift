@@ -68,7 +68,7 @@ final class WatchBridge: NSObject, ObservableObject {
     /// The Watch app's build, as it reports it (nil = an older Watch app that doesn't report one).
     @Published private(set) var watchBuild: String?
     /// The Watch build this phone build was made with — a mismatch means the Watch missed an update.
-    static let expectedWatchBuild = "2026-10-08.3"
+    static let expectedWatchBuild = "2026-10-27.1"
     @Published private(set) var lastDetection: LiveDetection? = nil
     @Published private(set) var lastLiveUpdate: Date? = nil
     /// v1.1: when the Watch counted the first rep of a set (drives the Live Activity's "lifting" state).
@@ -365,6 +365,11 @@ extension WatchBridge: WCSessionDelegate {
         }
         if message["dbgStopped"] as? Bool == true {
             Task { @MainActor in PhoneDebugRecorder.shared.watchStopped() }
+            return
+        }
+        if let t = message["dbgMark"] as? Double {
+            let session = message["dbgSession"] as? String
+            Task { @MainActor in PhoneDebugRecorder.shared.watchMarked(t: t, session: session) }
             return
         }
         if message["dbgDone"] as? Bool == true {
